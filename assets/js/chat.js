@@ -1,4 +1,28 @@
+const renderedMessages = new Set();
+
+function getMessageKey(message) {
+  return [
+    message.sender_id || "",
+    message.sender_name || "",
+    message.text || "",
+    message.created_at || ""
+  ].join("|");
+}
+
+function renderMessageItem(message, currentUserId) {
+  const own = String(message.sender_id) === String(currentUserId);
+  return `
+    <article class="message ${own ? "own" : ""}">
+      ${!own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
+      <p class="message-text">${escapeHtml(message.text || "")}</p>
+      <span class="message-time">${escapeHtml(formatTime(message.created_at))}</span>
+    </article>
+  `;
+}
+
 function renderMessages(container, messages, currentUserId) {
+  renderedMessages.clear();
+
   if (!messages.length) {
     container.innerHTML = '<div class="empty-state">Сообщений пока нет</div>';
     return;
@@ -6,17 +30,27 @@ function renderMessages(container, messages, currentUserId) {
 
   container.innerHTML = messages
     .map((message) => {
-      const own = String(message.sender_id) === String(currentUserId);
-      return `
-        <article class="message ${own ? "own" : ""}">
-          ${!own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
-          <p class="message-text">${escapeHtml(message.text || "")}</p>
-          <span class="message-time">${escapeHtml(formatTime(message.created_at))}</span>
-        </article>
-      `;
+      renderedMessages.add(getMessageKey(message));
+      return renderMessageItem(message, currentUserId);
     })
     .join("");
 
+  container.scrollTop = container.scrollHeight;
+}
+
+function appendMessage(container, message, currentUserId) {
+  const key = getMessageKey(message);
+  if (renderedMessages.has(key)) {
+    return;
+  }
+
+  renderedMessages.add(key);
+
+  if (container.querySelector(".empty-state")) {
+    container.innerHTML = "";
+  }
+
+  container.insertAdjacentHTML("beforeend", renderMessageItem(message, currentUserId));
   container.scrollTop = container.scrollHeight;
 }
 
@@ -44,6 +78,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const messagesNode = document.getElementById("messages");
   const composer = document.getElementById("messageForm");
   const status = document.getElementById("messageStatus");
+  let socket = null;
 
   if (!messagesNode || !composer) {
     return;
@@ -92,12 +127,42 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderMessages(messagesNode, data.messages || [], currentUser.id);
   }
 
+  function connectRealtime() {
+    if (typeof io !== "function" || !chatId) {
+      return;
+    }
+
+    const joinPayload = {
+      type: chatType === "group" ? "group" : "direct",
+      id: chatId
+    };
+
+    if (!socket) {
+      socket = io(API.baseUrl, {
+        auth: {
+          token: getToken()
+        }
+      });
+
+      socket.on("connect", () => {
+        socket.emit("join_chat", joinPayload);
+      });
+
+      socket.on("new_message", (message) => {
+        appendMessage(messagesNode, message, currentUser.id);
+      });
+    }
+
+    socket.emit("join_chat", joinPayload);
+  }
+
   try {
     await ensureDirectChat();
     if (!chatId) {
       throw new Error("Чат не найден");
     }
     await loadThread();
+    connectRealtime();
   } catch (error) {
     messagesNode.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
   }
@@ -118,7 +183,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
       input.value = "";
       status.textContent = "";
-      await loadThread();
     } catch (error) {
       status.textContent = error.message;
       status.className = "status error";

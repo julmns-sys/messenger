@@ -1,13 +1,16 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit, join_room
 from werkzeug.security import generate_password_hash, check_password_hash
 from db import get_db, init_db
 import secrets
 
 app = Flask(__name__, static_folder="assets")
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 tokens = {}
+socket_sessions = {}
 
 
 def current_user_id():
@@ -17,6 +20,85 @@ def current_user_id():
 
     token = auth.replace("Bearer ", "")
     return tokens.get(token)
+
+
+def user_id_from_token(token):
+    if not token:
+        return None
+    return tokens.get(token)
+
+
+def can_access_direct_chat(conn, user_id, chat_id):
+    if not user_id:
+        return False
+
+    chat = conn.execute("""
+        SELECT 1
+        FROM chats
+        WHERE id = ? AND (user1_id = ? OR user2_id = ?)
+    """, (chat_id, user_id, user_id)).fetchone()
+    return chat is not None
+
+
+def can_access_group(conn, user_id, group_id):
+    if not user_id:
+        return False
+
+    member = conn.execute("""
+        SELECT 1
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+    return member is not None
+
+
+@socketio.on("connect")
+def handle_connect(auth):
+    token = None
+    if isinstance(auth, dict):
+        token = auth.get("token")
+
+    socket_sessions[request.sid] = user_id_from_token(token)
+
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    socket_sessions.pop(request.sid, None)
+
+
+@socketio.on("join_chat")
+def handle_join_chat(data):
+    user_id = socket_sessions.get(request.sid)
+    if not user_id:
+        emit("join_error", {"message": "Не авторизован"})
+        return
+
+    chat_type = (data or {}).get("type")
+    chat_id = (data or {}).get("id")
+
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        emit("join_error", {"message": "Некорректный chat id"})
+        return
+
+    conn = get_db()
+
+    if chat_type == "group":
+        allowed = can_access_group(conn, user_id, chat_id)
+        room = f"group_{chat_id}"
+    else:
+        allowed = can_access_direct_chat(conn, user_id, chat_id)
+        room = f"direct_{chat_id}"
+
+    conn.close()
+
+    if not allowed:
+        emit("join_error", {"message": "Нет доступа к чату"})
+        return
+
+    join_room(room)
+    emit("join_ok", {"room": room})
 
 
 @app.route("/")
@@ -347,11 +429,7 @@ def create_chat_message(chat_id):
         return jsonify({"message": "Текст сообщения обязателен"}), 400
 
     conn = get_db()
-    chat = conn.execute("""
-        SELECT id
-        FROM chats
-        WHERE id = ? AND (user1_id = ? OR user2_id = ?)
-    """, (chat_id, user_id, user_id)).fetchone()
+    chat = can_access_direct_chat(conn, user_id, chat_id)
 
     if not chat:
         conn.close()
@@ -376,12 +454,16 @@ def create_chat_message(chat_id):
     """, (cur.lastrowid,)).fetchone()
     conn.close()
 
-    return jsonify({
+    message_data = {
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
         "created_at": message["created_at"]
-    }), 201
+    }
+
+    socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
+
+    return jsonify(message_data), 201
 
 
 @app.post("/groups")
@@ -438,11 +520,7 @@ def get_group(group_id):
         return jsonify({"message": "Не авторизован"}), 401
 
     conn = get_db()
-    member = conn.execute("""
-        SELECT 1
-        FROM group_members
-        WHERE group_id = ? AND user_id = ?
-    """, (group_id, user_id)).fetchone()
+    member = can_access_group(conn, user_id, group_id)
 
     if not member:
         conn.close()
@@ -497,11 +575,7 @@ def create_group_message(group_id):
         return jsonify({"message": "Не авторизован"}), 401
 
     conn = get_db()
-    member = conn.execute("""
-        SELECT 1
-        FROM group_members
-        WHERE group_id = ? AND user_id = ?
-    """, (group_id, user_id)).fetchone()
+    member = can_access_group(conn, user_id, group_id)
 
     if not member:
         conn.close()
@@ -514,16 +588,35 @@ def create_group_message(group_id):
         conn.close()
         return jsonify({"message": "Текст сообщения обязателен"}), 400
 
-    conn.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         INSERT INTO group_messages (group_id, sender_id, text)
         VALUES (?, ?, ?)
     """, (group_id, user_id, text))
     conn.commit()
+
+    message = conn.execute("""
+        SELECT
+            gm.sender_id,
+            u.name AS sender_name,
+            gm.text,
+            gm.created_at
+        FROM group_messages gm
+        JOIN users u ON u.id = gm.sender_id
+        WHERE gm.id = ?
+    """, (cur.lastrowid,)).fetchone()
     conn.close()
+
+    socketio.emit("new_message", {
+        "sender_id": message["sender_id"],
+        "sender_name": message["sender_name"],
+        "text": message["text"],
+        "created_at": message["created_at"]
+    }, room=f"group_{group_id}")
 
     return jsonify({"message": "ok"})
 
 
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    socketio.run(app, host="0.0.0.0", port=8000, debug=True)
