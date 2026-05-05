@@ -78,9 +78,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const messagesNode = document.getElementById("messages");
   const composer = document.getElementById("messageForm");
   const status = document.getElementById("messageStatus");
+  const input = document.getElementById("messageInput");
   let socket = null;
 
-  if (!messagesNode || !composer) {
+  if (!messagesNode || !composer || !input) {
     return;
   }
 
@@ -167,9 +168,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     messagesNode.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
   }
 
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    if (!input.value.trim()) {
+      event.preventDefault();
+      return;
+    }
+
+    event.preventDefault();
+    composer.requestSubmit();
+  });
+
   composer.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const input = document.getElementById("messageInput");
     const text = input.value.trim();
     if (!text) return;
 
