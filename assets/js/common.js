@@ -37,12 +37,20 @@ function renderChats(list, chats) {
     return;
   }
 
+  const currentPath = window.location.pathname.split("/").pop() || "index.html";
+  const currentId = new URLSearchParams(window.location.search).get("id");
+
   list.innerHTML = chats
     .map((chat) => {
       const href = chat.type === "group" ? `group_chat.html?id=${chat.id}` : `chat.html?id=${chat.id}`;
       const preview = chat.last_message?.text || "Нет сообщений";
       const name = chat.title || chat.username || chat.name || "Чат";
-      const active = String(chat.id) === new URLSearchParams(window.location.search).get("id");
+      const isGroup = chat.type === "group";
+      const active = currentPath === "group_chat.html"
+        ? isGroup && String(chat.id) === currentId
+        : currentPath === "chat.html"
+          ? !isGroup && String(chat.id) === currentId
+          : false;
 
       return `
         <a class="chat-item ${active ? "active" : ""}" href="${href}">
