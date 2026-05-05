@@ -131,7 +131,7 @@ def get_chats():
         return jsonify({"message": "Не авторизован"}), 401
 
     conn = get_db()
-    chats = conn.execute("""
+    direct_chats = conn.execute("""
         SELECT
             c.id,
             u.username,
@@ -157,11 +157,33 @@ def get_chats():
                 ELSE c.user1_id
             END
         WHERE c.user1_id = ? OR c.user2_id = ?
-        ORDER BY updated_at DESC, c.id DESC
     """, (user_id, user_id, user_id)).fetchall()
+
+    group_chats = conn.execute("""
+        SELECT
+            g.id,
+            g.title,
+            (
+                SELECT gm.text
+                FROM group_messages gm
+                WHERE gm.group_id = g.id
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS last_message_text,
+            (
+                SELECT gm.created_at
+                FROM group_messages gm
+                WHERE gm.group_id = g.id
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS updated_at
+        FROM groups g
+        JOIN group_members gmbr ON gmbr.group_id = g.id
+        WHERE gmbr.user_id = ?
+    """, (user_id,)).fetchall()
     conn.close()
 
-    return jsonify([
+    chats = [
         {
             "id": chat["id"],
             "type": "direct",
@@ -170,8 +192,31 @@ def get_chats():
             "last_message": {"text": chat["last_message_text"]} if chat["last_message_text"] is not None else None,
             "updated_at": chat["updated_at"]
         }
-        for chat in chats
+        for chat in direct_chats
+    ]
+
+    chats.extend([
+        {
+            "id": group["id"],
+            "type": "group",
+            "username": None,
+            "title": group["title"],
+            "last_message": {"text": group["last_message_text"]} if group["last_message_text"] is not None else None,
+            "updated_at": group["updated_at"]
+        }
+        for group in group_chats
     ])
+
+    chats.sort(
+        key=lambda chat: (
+            chat["updated_at"] is not None,
+            chat["updated_at"] or "",
+            chat["id"]
+        ),
+        reverse=True
+    )
+
+    return jsonify(chats)
 
 
 @app.post("/chats")
@@ -337,6 +382,146 @@ def create_chat_message(chat_id):
         "text": message["text"],
         "created_at": message["created_at"]
     }), 201
+
+
+@app.post("/groups")
+def create_group():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    title = data.get("title", "").strip()
+    description = data.get("description", "").strip()
+    member_ids = data.get("member_ids", [])
+
+    if not title:
+        return jsonify({"message": "Название группы обязательно"}), 400
+
+    if not isinstance(member_ids, list):
+        return jsonify({"message": "member_ids должен быть списком"}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO groups (title, description, owner_id)
+        VALUES (?, ?, ?)
+    """, (title, description, user_id))
+    group_id = cur.lastrowid
+
+    cur.execute("""
+        INSERT OR IGNORE INTO group_members (group_id, user_id)
+        VALUES (?, ?)
+    """, (group_id, user_id))
+
+    for member_id in member_ids:
+        cur.execute("""
+            INSERT OR IGNORE INTO group_members (group_id, user_id)
+            VALUES (?, ?)
+        """, (group_id, member_id))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "id": group_id,
+        "title": title,
+        "description": description
+    }), 201
+
+
+@app.get("/groups/<int:group_id>")
+def get_group(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    member = conn.execute("""
+        SELECT 1
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+
+    if not member:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    group = conn.execute("""
+        SELECT id, title
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+
+    members_count_row = conn.execute("""
+        SELECT COUNT(*) AS members_count
+        FROM group_members
+        WHERE group_id = ?
+    """, (group_id,)).fetchone()
+
+    messages = conn.execute("""
+        SELECT
+            gm.sender_id,
+            u.name AS sender_name,
+            gm.text,
+            gm.created_at
+        FROM group_messages gm
+        JOIN users u ON u.id = gm.sender_id
+        WHERE gm.group_id = ?
+        ORDER BY gm.created_at ASC, gm.id ASC
+    """, (group_id,)).fetchall()
+    conn.close()
+
+    return jsonify({
+        "id": group["id"],
+        "title": group["title"],
+        "name": group["title"],
+        "members_count": members_count_row["members_count"],
+        "messages": [
+            {
+                "sender_id": message["sender_id"],
+                "sender_name": message["sender_name"],
+                "text": message["text"],
+                "created_at": message["created_at"]
+            }
+            for message in messages
+        ]
+    })
+
+
+@app.post("/groups/<int:group_id>/messages")
+def create_group_message(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    member = conn.execute("""
+        SELECT 1
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+
+    if not member:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    data = request.json or {}
+    text = data.get("text", "").strip()
+
+    if not text:
+        conn.close()
+        return jsonify({"message": "Текст сообщения обязателен"}), 400
+
+    conn.execute("""
+        INSERT INTO group_messages (group_id, sender_id, text)
+        VALUES (?, ?, ?)
+    """, (group_id, user_id, text))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "ok"})
 
 
 if __name__ == "__main__":
