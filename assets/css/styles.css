@@ -209,6 +209,10 @@ textarea {
   justify-content: space-between;
 }
 
+.content-header {
+  justify-content: space-between;
+}
+
 .brand {
   font-size: 22px;
   font-weight: 700;
@@ -407,8 +411,10 @@ textarea {
 }
 
 .composer .textarea {
+  flex: 1;
   min-height: 54px;
   max-height: 180px;
+  resize: none;
 }
 
 .send-button {
@@ -486,17 +492,85 @@ textarea {
   display: none;
 }
 
+.thread-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 12px;
+}
+
+.thread-header-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  text-align: left;
+}
+
+.thread-header-main .chat-name,
+.thread-header-main .muted {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-header-main .chat-name {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.thread-header-main .muted {
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--text-soft);
+}
+
+.thread-header-side {
+  flex: 0 0 40px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.thread-back {
+  display: none;
+}
+
+.header-avatar {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  flex: 0 0 44px;
+  border-radius: 50%;
+  aspect-ratio: 1 / 1;
+  font-size: 14px;
+}
+
+.thread-status {
+  margin: 0;
+  padding: 0 20px 14px;
+}
+
 @media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;
+    max-width: none;
+    min-height: 100dvh;
+    box-shadow: none;
+    background: transparent;
+    backdrop-filter: none;
   }
 
-  .sidebar {
-    display: none;
+  body {
+    background: var(--surface);
   }
 
   .content {
-    min-height: 100vh;
+    min-height: 100dvh;
   }
 
   .content-header {
@@ -513,6 +587,105 @@ textarea {
 
   .mobile-only {
     display: inline-flex;
+  }
+
+  .desktop-only {
+    display: none;
+  }
+
+  .chat-list {
+    padding: 8px 10px 14px;
+  }
+
+  .sidebar-header,
+  .content-header {
+    padding: 14px 16px;
+  }
+
+  .sidebar-search {
+    padding: 12px 16px;
+  }
+
+  .chats-page .app {
+    display: block;
+  }
+
+  .chats-page .sidebar {
+    display: flex;
+    min-height: 100dvh;
+    border-right: 0;
+    background: var(--surface);
+  }
+
+  .chats-page .content {
+    display: none;
+  }
+
+  .thread-page .sidebar {
+    display: none;
+  }
+
+  .thread-page .content {
+    background: var(--surface);
+  }
+
+  .thread-page .content-body {
+    min-height: calc(100dvh - 69px);
+  }
+
+  .thread-page .content-header {
+    background: rgba(255, 255, 255, 0.96);
+  }
+
+  .thread-page .thread-header-main {
+    text-align: center;
+  }
+
+  .thread-page .thread-header {
+    align-items: center;
+    gap: 10px;
+  }
+
+  .thread-page .thread-header-side {
+    flex: 0 0 44px;
+  }
+
+  .thread-page .thread-back {
+    display: inline-flex;
+  }
+
+  .thread-page .messages {
+    padding: 16px 14px 120px;
+  }
+
+  .thread-page .composer-wrap {
+    position: sticky;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border);
+  }
+
+  .thread-page .composer {
+    gap: 10px;
+    padding: 12px 14px 12px;
+    border-top: 0;
+  }
+
+  .thread-page .composer .textarea {
+    min-height: 46px;
+    max-height: 110px;
+    padding: 12px 14px;
+  }
+
+  .thread-page .send-button {
+    min-width: 48px;
+    height: 48px;
+    border-radius: 16px;
+  }
+
+  .thread-page .thread-status {
+    padding: 0 14px 12px;
   }
 }
 
@@ -531,16 +704,30 @@ textarea {
     margin: 18px;
   }
 
-  .messages {
-    padding: 16px 14px;
-  }
-
-  .composer {
-    gap: 10px;
-    padding: 12px 14px 16px;
-  }
-
   .message {
     max-width: 88%;
+  }
+
+  .brand {
+    font-size: 20px;
+  }
+
+  .chat-item,
+  .result-item,
+  .member-item {
+    padding: 10px 8px;
+    border-radius: 14px;
+  }
+
+  .thread-header {
+    gap: 10px;
+  }
+
+  .thread-header-main .chat-name {
+    font-size: 16px;
+  }
+
+  .thread-header-main .muted {
+    font-size: 13px;
   }
 }

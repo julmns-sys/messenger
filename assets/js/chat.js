@@ -23,15 +23,17 @@ function renderMessages(container, messages, currentUserId) {
 function setChatTitle(title, subtitle = "") {
   const titleNode = document.getElementById("chatTitle");
   const subtitleNode = document.getElementById("chatSubtitle");
+  const avatarNode = document.getElementById("chatAvatar");
   if (titleNode) titleNode.textContent = title;
   if (subtitleNode) subtitleNode.textContent = subtitle;
+  if (avatarNode) avatarNode.textContent = initials(title || "Чат");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   requireAuth();
   bindLogout();
   fillUserBadge();
-  await loadChats();
+  const chats = await loadChats();
 
   const params = new URLSearchParams(window.location.search);
   let chatId = params.get("id");
@@ -78,7 +80,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function loadThread() {
     const path = chatType === "group" ? `/groups/${chatId}` : `/chats/${chatId}`;
     const data = await apiFetch(path);
-    const title = data.title || data.name || data.username || "Чат";
+    const currentChat = Array.isArray(chats)
+      ? chats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === chatType)
+      : null;
+    const title = currentChat?.title || data.title || data.name || data.username || "Чат";
     const subtitle = chatType === "group"
       ? `${(data.members_count || data.members?.length || 0)} участников`
       : data.username ? `@${data.username}` : "в сети";

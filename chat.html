@@ -6,7 +6,7 @@
     <title>Chat | Messenger</title>
     <link rel="stylesheet" href="assets/css/styles.css">
   </head>
-  <body class="page-shell" data-chat-type="direct">
+  <body class="page-shell thread-page" data-chat-type="direct">
     <main class="app">
       <aside class="sidebar">
         <div class="sidebar-header">
@@ -28,21 +28,28 @@
 
       <section class="content">
         <header class="content-header">
-          <div class="header-actions mobile-only">
-            <a class="icon-button" href="index.html" aria-label="Back">←</a>
-          </div>
-          <div>
-            <h1 class="chat-name" id="chatTitle">Чат</h1>
-            <p class="muted" id="chatSubtitle">Загрузка...</p>
+          <div class="thread-header">
+            <div class="thread-header-side">
+              <a class="icon-button thread-back" href="index.html" aria-label="Back">←</a>
+            </div>
+            <div class="thread-header-main">
+              <h1 class="chat-name" id="chatTitle">Чат</h1>
+              <p class="muted" id="chatSubtitle">Загрузка...</p>
+            </div>
+            <div class="thread-header-side">
+              <div class="avatar header-avatar" id="chatAvatar">?</div>
+            </div>
           </div>
         </header>
         <div class="content-body">
           <div class="messages" id="messages"></div>
-          <form class="composer" id="messageForm">
-            <textarea class="textarea" id="messageInput" placeholder="Напишите сообщение..." required></textarea>
-            <button class="send-button" type="submit">➤</button>
-          </form>
-          <div id="messageStatus" class="status" style="padding: 0 20px 18px;"></div>
+          <div class="composer-wrap">
+            <form class="composer" id="messageForm">
+              <textarea class="textarea" id="messageInput" placeholder="Напишите сообщение..." required></textarea>
+              <button class="send-button" type="submit">➤</button>
+            </form>
+            <div id="messageStatus" class="status thread-status"></div>
+          </div>
         </div>
       </section>
     </main>
