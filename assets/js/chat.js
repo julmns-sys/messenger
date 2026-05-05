@@ -1,4 +1,5 @@
 const renderedMessages = new Set();
+const BOTTOM_THRESHOLD = 24;
 
 function getMessageKey(message) {
   return [
@@ -41,7 +42,7 @@ function renderMessages(container, messages, currentUserId) {
 function appendMessage(container, message, currentUserId) {
   const key = getMessageKey(message);
   if (renderedMessages.has(key)) {
-    return;
+    return false;
   }
 
   renderedMessages.add(key);
@@ -51,7 +52,20 @@ function appendMessage(container, message, currentUserId) {
   }
 
   container.insertAdjacentHTML("beforeend", renderMessageItem(message, currentUserId));
+  return true;
+}
+
+function isNearBottom(container) {
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= BOTTOM_THRESHOLD;
+}
+
+function scrollMessagesToBottom(container) {
   container.scrollTop = container.scrollHeight;
+}
+
+function updateScrollDownButton(container, button) {
+  if (!button) return;
+  button.classList.toggle("visible", !isNearBottom(container));
 }
 
 function setChatTitle(title, subtitle = "") {
@@ -79,6 +93,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const composer = document.getElementById("messageForm");
   const status = document.getElementById("messageStatus");
   const input = document.getElementById("messageInput");
+  const scrollDownButton = document.getElementById("scrollDownButton");
   let socket = null;
 
   if (!messagesNode || !composer || !input) {
@@ -126,6 +141,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     setChatTitle(title, subtitle);
     renderMessages(messagesNode, data.messages || [], currentUser.id);
+    scrollMessagesToBottom(messagesNode);
+    updateScrollDownButton(messagesNode, scrollDownButton);
   }
 
   function connectRealtime() {
@@ -150,7 +167,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
 
       socket.on("new_message", (message) => {
-        appendMessage(messagesNode, message, currentUser.id);
+        const shouldStickToBottom = isNearBottom(messagesNode);
+        const appended = appendMessage(messagesNode, message, currentUser.id);
+
+        if (!appended) {
+          return;
+        }
+
+        if (shouldStickToBottom) {
+          scrollMessagesToBottom(messagesNode);
+        }
+
+        updateScrollDownButton(messagesNode, scrollDownButton);
       });
     }
 
@@ -181,6 +209,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     event.preventDefault();
     composer.requestSubmit();
   });
+
+  messagesNode.addEventListener("scroll", () => {
+    updateScrollDownButton(messagesNode, scrollDownButton);
+  });
+
+  if (scrollDownButton) {
+    scrollDownButton.addEventListener("click", () => {
+      scrollMessagesToBottom(messagesNode);
+      updateScrollDownButton(messagesNode, scrollDownButton);
+    });
+  }
 
   composer.addEventListener("submit", async (event) => {
     event.preventDefault();

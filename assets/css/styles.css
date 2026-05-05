@@ -335,14 +335,19 @@ textarea {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .content-body {
   flex: 1;
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  position: relative;
   background:
     linear-gradient(180deg, rgba(248, 250, 252, 0.86), rgba(242, 246, 250, 0.92)),
     radial-gradient(circle at center, rgba(51, 144, 236, 0.05), transparent 40%);
@@ -360,7 +365,10 @@ textarea {
 
 .messages {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: 24px 20px;
   display: flex;
   flex-direction: column;
@@ -555,6 +563,41 @@ textarea {
   padding: 0 20px 14px;
 }
 
+.composer-wrap {
+  flex: 0 0 auto;
+}
+
+.scroll-down-button {
+  position: absolute;
+  right: 22px;
+  bottom: 96px;
+  z-index: 4;
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(51, 144, 236, 0.96);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(51, 144, 236, 0.28);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.2s ease;
+}
+
+.scroll-down-button:hover {
+  background: var(--accent-dark);
+}
+
+.scroll-down-button.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
 @media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;
@@ -570,6 +613,7 @@ textarea {
   }
 
   .content {
+    height: 100dvh;
     min-height: 100dvh;
   }
 
@@ -631,6 +675,7 @@ textarea {
 
   .thread-page .content-body {
     min-height: calc(100dvh - 69px);
+    height: calc(100dvh - 69px);
   }
 
   .thread-page .content-header {
@@ -686,6 +731,13 @@ textarea {
 
   .thread-page .thread-status {
     padding: 0 14px 12px;
+  }
+
+  .thread-page .scroll-down-button {
+    right: 16px;
+    bottom: 88px;
+    width: 44px;
+    height: 44px;
   }
 }
 
