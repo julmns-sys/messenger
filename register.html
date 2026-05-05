@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register | Messenger</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+  </head>
+  <body class="auth-page">
+    <main class="auth-card">
+      <h1>Регистрация</h1>
+      <p>Создайте аккаунт и откройте список личных и групповых чатов.</p>
+      <form data-auth="register">
+        <div class="form-group">
+          <label class="label" for="name">Имя</label>
+          <input class="input" id="name" name="name" type="text" placeholder="Ваше имя" required>
+        </div>
+        <div class="form-group">
+          <label class="label" for="username">Username</label>
+          <input class="input" id="username" name="username" type="text" placeholder="@username" required>
+        </div>
+        <div class="form-group">
+          <label class="label" for="email">Email</label>
+          <input class="input" id="email" name="email" type="email" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label class="label" for="password">Пароль</label>
+          <input class="input" id="password" name="password" type="password" placeholder="Минимум 6 символов" required>
+        </div>
+        <button class="button" type="submit">Создать аккаунт</button>
+        <div id="status" class="status"></div>
+      </form>
+      <p class="auth-footer">Уже есть аккаунт? <a href="login.html">Войти</a></p>
+    </main>
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/auth.js"></script>
+  </body>
+</html>

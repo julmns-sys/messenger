@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Group | Messenger</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+  </head>
+  <body class="page-shell">
+    <main class="app">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div>
+            <div class="brand">Messenger</div>
+            <div class="muted" id="currentUserBadge"></div>
+          </div>
+          <div class="sidebar-actions">
+            <a class="icon-button" href="index.html" aria-label="Chats">←</a>
+            <button class="icon-button" id="logoutButton" type="button" aria-label="Logout">×</button>
+          </div>
+        </div>
+        <div class="sidebar-search">
+          <input class="search-input" type="text" placeholder="Ваши чаты" disabled>
+        </div>
+        <div class="chat-list" id="chatList"></div>
+      </aside>
+
+      <section class="content">
+        <div class="page-header">
+          <h1 class="page-title">Создание группы</h1>
+          <p class="page-subtitle">Задайте название, найдите пользователей и соберите группу.</p>
+        </div>
+        <div class="panel stack">
+          <form id="createGroupForm" class="stack">
+            <div class="form-group">
+              <label class="label" for="groupTitle">Название группы</label>
+              <input class="input" id="groupTitle" type="text" placeholder="Например, Product Team" required>
+            </div>
+            <div class="form-group">
+              <label class="label" for="groupDescription">Описание</label>
+              <textarea class="textarea" id="groupDescription" placeholder="Коротко о группе"></textarea>
+            </div>
+            <div class="form-group">
+              <label class="label">Участники</label>
+              <div class="chips" id="selectedMembers"></div>
+            </div>
+            <button class="button" type="submit">Создать группу</button>
+            <div id="groupStatus" class="status"></div>
+          </form>
+        </div>
+
+        <div class="panel stack">
+          <form id="memberSearchForm" class="inline-actions">
+            <input class="search-input" id="memberSearchInput" type="text" placeholder="@username" required>
+            <button class="button" style="width: auto;" type="submit">Добавить участника</button>
+          </form>
+          <div class="member-list" id="memberSearchResults">
+            <div class="empty-state">Найдите пользователей для добавления</div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/common.js"></script>
+    <script src="assets/js/create-group.js"></script>
+  </body>
+</html>

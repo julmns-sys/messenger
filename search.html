@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search | Messenger</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+  </head>
+  <body class="page-shell">
+    <main class="app">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div>
+            <div class="brand">Messenger</div>
+            <div class="muted" id="currentUserBadge"></div>
+          </div>
+          <div class="sidebar-actions">
+            <a class="icon-button" href="index.html" aria-label="Chats">←</a>
+            <button class="icon-button" id="logoutButton" type="button" aria-label="Logout">×</button>
+          </div>
+        </div>
+        <div class="sidebar-search">
+          <input class="search-input" type="text" placeholder="Ваши чаты" disabled>
+        </div>
+        <div class="chat-list" id="chatList"></div>
+      </aside>
+
+      <section class="content">
+        <div class="page-header">
+          <h1 class="page-title">Поиск пользователей</h1>
+          <p class="page-subtitle">Ищите пользователя по username в формате `@username`.</p>
+        </div>
+        <div class="panel stack">
+          <form id="searchForm" class="inline-actions">
+            <input class="search-input" id="searchInput" type="text" placeholder="@username" required>
+            <button class="button" style="width: auto;" type="submit">Найти</button>
+          </form>
+          <div id="searchStatus" class="status"></div>
+          <div class="result-list" id="resultList">
+            <div class="empty-state">Введите username для поиска</div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="assets/js/api.js"></script>
+    <script src="assets/js/common.js"></script>
+    <script src="assets/js/search.js"></script>
+  </body>
+</html>
