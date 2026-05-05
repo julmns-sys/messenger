@@ -1,3 +1,7 @@
+const chatState = {
+  allChats: []
+};
+
 function bindLogout(buttonId = "logoutButton") {
   const logoutButton = document.getElementById(buttonId);
   if (!logoutButton) return;
@@ -23,17 +27,55 @@ async function loadChats(listId = "chatList") {
 
   try {
     const chats = await apiFetch("/chats");
-    renderChats(list, Array.isArray(chats) ? chats : chats.items || []);
-    return chats;
+    const normalizedChats = Array.isArray(chats) ? chats : chats.items || [];
+    chatState.allChats = normalizedChats;
+    bindChatSearch(listId);
+    renderChats(list, normalizedChats);
+    return normalizedChats;
   } catch (error) {
     list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    chatState.allChats = [];
     return [];
   }
 }
 
+function filterChats(query) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return chatState.allChats;
+  }
+
+  return chatState.allChats.filter((chat) => {
+    const haystack = [
+      chat.title,
+      chat.username,
+      chat.last_message?.text
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(normalizedQuery);
+  });
+}
+
+function bindChatSearch(listId = "chatList") {
+  const list = document.getElementById(listId);
+  const input = document.querySelector(".sidebar-search .search-input");
+  if (!list || !input || input.dataset.chatSearchBound === "true") {
+    return;
+  }
+
+  input.dataset.chatSearchBound = "true";
+  input.addEventListener("input", () => {
+    renderChats(list, filterChats(input.value));
+  });
+}
+
 function renderChats(list, chats) {
   if (!chats.length) {
-    list.innerHTML = '<div class="empty-state">Чатов пока нет</div>';
+    const hasQuery = Boolean(document.querySelector(".sidebar-search .search-input")?.value.trim());
+    list.innerHTML = `<div class="empty-state">${hasQuery ? "Ничего не найдено" : "Чатов пока нет"}</div>`;
     return;
   }
 

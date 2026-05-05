@@ -298,6 +298,18 @@ textarea {
   flex: 1;
 }
 
+.result-item {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.result-item .button {
+  width: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 10px 16px;
+}
+
 .chat-topline,
 .result-topline {
   display: flex;
@@ -769,6 +781,19 @@ textarea {
   .member-item {
     padding: 10px 8px;
     border-radius: 14px;
+  }
+
+  .result-item {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .result-item .result-meta {
+    min-width: 0;
+  }
+
+  .result-item .button {
+    margin-left: 54px;
   }
 
   .thread-header {
