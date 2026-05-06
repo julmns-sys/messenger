@@ -81,7 +81,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   requireAuth();
   bindLogout();
   fillUserBadge();
-  const chats = await loadChats();
+  await loadChats();
+  startChatsAutoRefresh();
 
   const params = new URLSearchParams(window.location.search);
   let chatId = params.get("id");
@@ -95,13 +96,33 @@ document.addEventListener("DOMContentLoaded", async () => {
   const input = document.getElementById("messageInput");
   const scrollDownButton = document.getElementById("scrollDownButton");
   let socket = null;
+  let selectedUser = null;
 
   if (!messagesNode || !composer || !input) {
     return;
   }
 
-  async function ensureDirectChat() {
-    if (chatId || chatType === "group" || !userId) return;
+  async function loadSelectedUser() {
+    if (chatId || chatType === "group" || !userId) {
+      return null;
+    }
+
+    selectedUser = await apiFetch(`/users/${encodeURIComponent(userId)}`);
+    return selectedUser;
+  }
+
+  function renderPendingDirectChat(user) {
+    const title = user?.name || user?.username || "Чат";
+    const subtitle = user?.username ? `@${user.username}` : "";
+    setChatTitle(title, subtitle);
+    renderMessages(messagesNode, [], currentUser.id);
+    updateScrollDownButton(messagesNode, scrollDownButton);
+  }
+
+  async function createDirectChatOnFirstMessage() {
+    if (chatId || chatType === "group" || !userId) {
+      return chatId;
+    }
 
     const attempts = [
       { path: "/chats", body: { user_id: userId } },
@@ -115,24 +136,27 @@ document.addEventListener("DOMContentLoaded", async () => {
           method: "POST",
           body: JSON.stringify(attempt.body)
         });
-        chatId = String(data.id || data.chat_id || "");
-        if (chatId) {
-          window.history.replaceState({}, "", `chat.html?id=${encodeURIComponent(chatId)}`);
-          return;
+        const createdChatId = String(data.id || data.chat_id || "");
+        if (!createdChatId) {
+          continue;
         }
+
+        chatId = createdChatId;
+        window.history.replaceState({}, "", `chat.html?id=${encodeURIComponent(chatId)}`);
+        return chatId;
       } catch {
         continue;
       }
     }
 
-    throw new Error("Не удалось открыть личный чат");
+    throw new Error("Не удалось создать личный чат");
   }
 
   async function loadThread() {
     const path = chatType === "group" ? `/groups/${chatId}` : `/chats/${chatId}`;
     const data = await apiFetch(path);
-    const currentChat = Array.isArray(chats)
-      ? chats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === chatType)
+    const currentChat = Array.isArray(chatState.allChats)
+      ? chatState.allChats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === chatType)
       : null;
     const title = currentChat?.title || data.title || data.name || data.username || "Чат";
     const subtitle = chatType === "group"
@@ -186,12 +210,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   try {
-    await ensureDirectChat();
-    if (!chatId) {
+    if (chatId) {
+      await loadThread();
+      connectRealtime();
+    } else if (chatType !== "group" && userId) {
+      const user = await loadSelectedUser();
+      renderPendingDirectChat(user);
+    } else {
       throw new Error("Чат не найден");
     }
-    await loadThread();
-    connectRealtime();
   } catch (error) {
     messagesNode.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
   }
@@ -227,13 +254,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!text) return;
 
     status.textContent = "Отправка...";
+    status.className = "status thread-status";
 
     try {
+      const hadChatId = Boolean(chatId);
+      if (!hadChatId && chatType !== "group") {
+        await createDirectChatOnFirstMessage();
+      }
+
       const path = chatType === "group" ? `/groups/${chatId}/messages` : `/chats/${chatId}/messages`;
       await apiFetch(path, {
         method: "POST",
         body: JSON.stringify({ text })
       });
+
+      if (!hadChatId && chatType !== "group") {
+        await loadChats("chatList", { showLoading: false });
+        await loadThread();
+        connectRealtime();
+      }
+
       input.value = "";
       status.textContent = "";
     } catch (error) {

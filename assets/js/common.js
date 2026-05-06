@@ -1,5 +1,7 @@
 const chatState = {
-  allChats: []
+  allChats: [],
+  refreshIntervalId: null,
+  refreshListId: null
 };
 
 function bindLogout(buttonId = "logoutButton") {
@@ -19,23 +21,34 @@ function fillUserBadge(targetId = "currentUserBadge") {
   target.textContent = user.username ? `@${user.username}` : user.name || "User";
 }
 
-async function loadChats(listId = "chatList") {
+function getChatSearchQuery() {
+  return document.querySelector(".sidebar-search .search-input")?.value.trim() || "";
+}
+
+async function loadChats(listId = "chatList", options = {}) {
+  const { showLoading = true } = options;
   const list = document.getElementById(listId);
   if (!list) return [];
 
-  list.innerHTML = '<div class="empty-state">Загрузка чатов...</div>';
+  if (showLoading) {
+    list.innerHTML = '<div class="empty-state">Загрузка чатов...</div>';
+  }
 
   try {
     const chats = await apiFetch("/chats");
     const normalizedChats = Array.isArray(chats) ? chats : chats.items || [];
     chatState.allChats = normalizedChats;
     bindChatSearch(listId);
-    renderChats(list, normalizedChats);
+    renderChats(list, filterChats(getChatSearchQuery()));
     return normalizedChats;
   } catch (error) {
-    list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
-    chatState.allChats = [];
-    return [];
+    if (showLoading) {
+      list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+      chatState.allChats = [];
+      return [];
+    }
+
+    return chatState.allChats;
   }
 }
 
@@ -71,6 +84,33 @@ function bindChatSearch(listId = "chatList") {
     renderChats(list, filterChats(input.value));
   });
 }
+
+function stopChatsAutoRefresh() {
+  if (chatState.refreshIntervalId) {
+    clearInterval(chatState.refreshIntervalId);
+    chatState.refreshIntervalId = null;
+  }
+
+  chatState.refreshListId = null;
+}
+
+function startChatsAutoRefresh(listId = "chatList", intervalMs = 2000) {
+  const list = document.getElementById(listId);
+  if (!list) return;
+
+  if (chatState.refreshIntervalId && chatState.refreshListId === listId) {
+    return;
+  }
+
+  stopChatsAutoRefresh();
+  chatState.refreshListId = listId;
+  chatState.refreshIntervalId = window.setInterval(() => {
+    loadChats(listId, { showLoading: false });
+  }, intervalMs);
+}
+
+window.addEventListener("pagehide", stopChatsAutoRefresh);
+window.addEventListener("beforeunload", stopChatsAutoRefresh);
 
 function renderChats(list, chats) {
   if (!chats.length) {

@@ -196,14 +196,47 @@ def search_users():
 
     conn = get_db()
     users = conn.execute("""
-        SELECT id, name, username
-        FROM users
-        WHERE username LIKE ? AND id != ?
+        SELECT
+            u.id,
+            u.name,
+            u.username,
+            c.id AS chat_id
+        FROM users u
+        LEFT JOIN chats c
+            ON (
+                ((c.user1_id = ? AND c.user2_id = u.id) OR (c.user2_id = ? AND c.user1_id = u.id))
+                AND EXISTS (
+                    SELECT 1
+                    FROM messages m
+                    WHERE m.chat_id = c.id
+                )
+            )
+        WHERE u.username LIKE ? AND u.id != ?
         LIMIT 20
-    """, (f"%{username}%", user_id)).fetchall()
+    """, (user_id, user_id, f"%{username}%", user_id)).fetchall()
     conn.close()
 
     return jsonify([dict(u) for u in users])
+
+
+@app.get("/users/<int:target_user_id>")
+def get_user(target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    user = conn.execute("""
+        SELECT id, name, username
+        FROM users
+        WHERE id = ? AND id != ?
+    """, (target_user_id, user_id)).fetchone()
+    conn.close()
+
+    if not user:
+        return jsonify({"message": "Пользователь не найден"}), 404
+
+    return jsonify(dict(user))
 
 
 @app.get("/chats")
@@ -238,7 +271,12 @@ def get_chats():
                 WHEN c.user1_id = ? THEN c.user2_id
                 ELSE c.user1_id
             END
-        WHERE c.user1_id = ? OR c.user2_id = ?
+        WHERE (c.user1_id = ? OR c.user2_id = ?)
+          AND EXISTS (
+              SELECT 1
+              FROM messages m
+              WHERE m.chat_id = c.id
+          )
     """, (user_id, user_id, user_id)).fetchall()
 
     group_chats = conn.execute("""

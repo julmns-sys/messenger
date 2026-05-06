@@ -3,4 +3,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindLogout();
   fillUserBadge();
   await loadChats();
+  startChatsAutoRefresh();
 });
