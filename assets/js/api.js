@@ -1,5 +1,5 @@
 const API = {
-  baseUrl: localStorage.getItem("messenger_api_base") || "http://localhost:8000",
+  baseUrl: localStorage.getItem("messenger_api_base") || window.location.origin,
   tokenKey: "messenger_token",
   userKey: "messenger_user"
 };
