@@ -2,6 +2,10 @@ const renderedMessages = new Set();
 const BOTTOM_THRESHOLD = 24;
 
 function getMessageKey(message) {
+  if (message.id != null) {
+    return `id:${message.id}`;
+  }
+
   return [
     message.sender_id || "",
     message.sender_name || "",
@@ -10,18 +14,53 @@ function getMessageKey(message) {
   ].join("|");
 }
 
-function renderMessageItem(message, currentUserId) {
+function renderReadIndicator(message, own, chatType) {
+  if (!own || chatType !== "direct") {
+    return "";
+  }
+
+  return `
+    <span
+      class="message-read-indicator ${message.is_read ? "read" : "unread"}"
+      aria-label="${message.is_read ? "Прочитано" : "Не прочитано"}"
+      title="${message.is_read ? "Прочитано" : "Не прочитано"}"
+    >
+      <span></span>
+      <span></span>
+    </span>
+  `;
+}
+
+function renderMessageItem(message, currentUserId, chatType) {
   const own = String(message.sender_id) === String(currentUserId);
   return `
-    <article class="message ${own ? "own" : ""}">
+    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""}>
       ${!own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
       <p class="message-text">${escapeHtml(message.text || "")}</p>
-      <span class="message-time">${escapeHtml(formatTime(message.created_at))}</span>
+      <div class="message-meta">
+        <span class="message-time">${escapeHtml(formatTime(message.created_at))}</span>
+        ${renderReadIndicator(message, own, chatType)}
+      </div>
     </article>
   `;
 }
 
-function renderMessages(container, messages, currentUserId) {
+function renderPendingMessageItem(text) {
+  return `
+    <article class="message own pending" data-pending-message="true">
+      <p class="message-text">${escapeHtml(text || "")}</p>
+      <div class="message-meta">
+        <span class="message-status-indicator" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+      </div>
+    </article>
+  `;
+}
+
+function renderMessages(container, messages, currentUserId, chatType) {
   renderedMessages.clear();
 
   if (!messages.length) {
@@ -32,14 +71,14 @@ function renderMessages(container, messages, currentUserId) {
   container.innerHTML = messages
     .map((message) => {
       renderedMessages.add(getMessageKey(message));
-      return renderMessageItem(message, currentUserId);
+      return renderMessageItem(message, currentUserId, chatType);
     })
     .join("");
 
   container.scrollTop = container.scrollHeight;
 }
 
-function appendMessage(container, message, currentUserId) {
+function appendMessage(container, message, currentUserId, chatType) {
   const key = getMessageKey(message);
   if (renderedMessages.has(key)) {
     return false;
@@ -51,7 +90,7 @@ function appendMessage(container, message, currentUserId) {
     container.innerHTML = "";
   }
 
-  container.insertAdjacentHTML("beforeend", renderMessageItem(message, currentUserId));
+  container.insertAdjacentHTML("beforeend", renderMessageItem(message, currentUserId, chatType));
   return true;
 }
 
@@ -61,6 +100,42 @@ function isNearBottom(container) {
 
 function scrollMessagesToBottom(container) {
   container.scrollTop = container.scrollHeight;
+}
+
+function appendPendingMessage(container, text) {
+  if (container.querySelector(".empty-state")) {
+    container.innerHTML = "";
+  }
+
+  container.insertAdjacentHTML("beforeend", renderPendingMessageItem(text));
+  return container.lastElementChild;
+}
+
+function removePendingMessage(node) {
+  if (node?.parentNode) {
+    node.parentNode.removeChild(node);
+  }
+}
+
+function markOwnMessagesAsRead(container, uptoMessageId) {
+  if (!uptoMessageId) return;
+
+  container.querySelectorAll(".message.own[data-message-id]").forEach((node) => {
+    const messageId = Number(node.dataset.messageId || "0");
+    if (!messageId || messageId > uptoMessageId) {
+      return;
+    }
+
+    const indicator = node.querySelector(".message-read-indicator");
+    if (!indicator) {
+      return;
+    }
+
+    indicator.classList.remove("unread");
+    indicator.classList.add("read");
+    indicator.setAttribute("aria-label", "Прочитано");
+    indicator.setAttribute("title", "Прочитано");
+  });
 }
 
 function updateScrollDownButton(container, button) {
@@ -95,8 +170,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const status = document.getElementById("messageStatus");
   const input = document.getElementById("messageInput");
   const scrollDownButton = document.getElementById("scrollDownButton");
+  const sendButton = composer.querySelector('button[type="submit"]');
   let socket = null;
   let selectedUser = null;
+  let pendingMessageState = null;
+  let isSendingMessage = false;
+  let isMarkingRead = false;
 
   if (!messagesNode || !composer || !input) {
     return;
@@ -115,8 +194,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     const title = user?.name || user?.username || "Чат";
     const subtitle = user?.username ? `@${user.username}` : "";
     setChatTitle(title, subtitle);
-    renderMessages(messagesNode, [], currentUser.id);
+    renderMessages(messagesNode, [], currentUser.id, chatType);
     updateScrollDownButton(messagesNode, scrollDownButton);
+  }
+
+  async function markCurrentDirectChatAsRead() {
+    if (chatType !== "direct" || !chatId || isMarkingRead) {
+      return;
+    }
+
+    isMarkingRead = true;
+    try {
+      const result = await apiFetch(`/chats/${chatId}/read`, {
+        method: "POST"
+      });
+      if (result?.upto_message_id) {
+        markOwnMessagesAsRead(messagesNode, Number(result.upto_message_id));
+      }
+    } catch {
+      // Ignore transient read receipt errors.
+    } finally {
+      isMarkingRead = false;
+    }
   }
 
   async function createDirectChatOnFirstMessage() {
@@ -164,7 +263,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       : data.username ? `@${data.username}` : "в сети";
 
     setChatTitle(title, subtitle);
-    renderMessages(messagesNode, data.messages || [], currentUser.id);
+    renderMessages(messagesNode, data.messages || [], currentUser.id, chatType);
     scrollMessagesToBottom(messagesNode);
     updateScrollDownButton(messagesNode, scrollDownButton);
   }
@@ -192,7 +291,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       socket.on("new_message", (message) => {
         const shouldStickToBottom = isNearBottom(messagesNode);
-        const appended = appendMessage(messagesNode, message, currentUser.id);
+        if (
+          pendingMessageState &&
+          String(message.sender_id) === String(currentUser.id) &&
+          String(message.text || "") === String(pendingMessageState.text || "")
+        ) {
+          removePendingMessage(pendingMessageState.node);
+          pendingMessageState = null;
+        }
+
+        const appended = appendMessage(messagesNode, message, currentUser.id, chatType);
 
         if (!appended) {
           return;
@@ -202,7 +310,23 @@ document.addEventListener("DOMContentLoaded", async () => {
           scrollMessagesToBottom(messagesNode);
         }
 
+        if (chatType === "direct" && String(message.sender_id) !== String(currentUser.id)) {
+          markCurrentDirectChatAsRead();
+        }
+
         updateScrollDownButton(messagesNode, scrollDownButton);
+      });
+
+      socket.on("message_read", (data) => {
+        if (
+          chatType !== "direct" ||
+          String(data?.chat_id) !== String(chatId) ||
+          String(data?.reader_id) === String(currentUser.id)
+        ) {
+          return;
+        }
+
+        markOwnMessagesAsRead(messagesNode, Number(data?.upto_message_id || 0));
       });
     }
 
@@ -212,6 +336,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     if (chatId) {
       await loadThread();
+      await markCurrentDirectChatAsRead();
       connectRealtime();
     } else if (chatType !== "group" && userId) {
       const user = await loadSelectedUser();
@@ -250,10 +375,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   composer.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (isSendingMessage) return;
+
     const text = input.value.trim();
     if (!text) return;
 
-    status.textContent = "Отправка...";
+    isSendingMessage = true;
+    const shouldStickToBottom = isNearBottom(messagesNode);
+    const pendingMessageNode = appendPendingMessage(messagesNode, text);
+    pendingMessageState = { text, node: pendingMessageNode };
+    input.value = "";
+    input.disabled = true;
+    if (sendButton) {
+      sendButton.disabled = true;
+    }
+    if (shouldStickToBottom) {
+      scrollMessagesToBottom(messagesNode);
+    }
+    updateScrollDownButton(messagesNode, scrollDownButton);
+
+    status.textContent = "";
     status.className = "status thread-status";
 
     try {
@@ -263,22 +404,40 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const path = chatType === "group" ? `/groups/${chatId}/messages` : `/chats/${chatId}/messages`;
-      await apiFetch(path, {
+      const sentMessage = await apiFetch(path, {
         method: "POST",
         body: JSON.stringify({ text })
       });
 
+      removePendingMessage(pendingMessageNode);
+      pendingMessageState = null;
+      appendMessage(messagesNode, sentMessage, currentUser.id, chatType);
+      if (shouldStickToBottom) {
+        scrollMessagesToBottom(messagesNode);
+      }
+
       if (!hadChatId && chatType !== "group") {
         await loadChats("chatList", { showLoading: false });
         await loadThread();
+        await markCurrentDirectChatAsRead();
         connectRealtime();
       }
-
-      input.value = "";
       status.textContent = "";
     } catch (error) {
       status.textContent = error.message;
       status.className = "status error";
+    } finally {
+      if (pendingMessageState?.node === pendingMessageNode) {
+        removePendingMessage(pendingMessageNode);
+        pendingMessageState = null;
+      }
+      input.disabled = false;
+      if (sendButton) {
+        sendButton.disabled = false;
+      }
+      input.focus();
+      isSendingMessage = false;
+      updateScrollDownButton(messagesNode, scrollDownButton);
     }
   });
 });

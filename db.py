@@ -44,6 +44,13 @@ def init_db():
     )
     """)
 
+    message_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+    }
+    if "read_at" not in message_columns:
+        cur.execute("ALTER TABLE messages ADD COLUMN read_at TIMESTAMP")
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

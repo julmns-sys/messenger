@@ -52,6 +52,42 @@ def can_access_group(conn, user_id, group_id):
     return member is not None
 
 
+def serialize_direct_message(message):
+    return {
+        "id": message["id"],
+        "sender_id": message["sender_id"],
+        "sender_name": message["sender_name"],
+        "text": message["text"],
+        "created_at": message["created_at"],
+        "is_read": bool(message["read_at"])
+    }
+
+
+def mark_direct_chat_as_read(conn, chat_id, reader_id):
+    unread_row = conn.execute("""
+        SELECT MAX(id) AS upto_message_id
+        FROM messages
+        WHERE chat_id = ?
+          AND sender_id != ?
+          AND read_at IS NULL
+    """, (chat_id, reader_id)).fetchone()
+
+    upto_message_id = unread_row["upto_message_id"] if unread_row else None
+    if not upto_message_id:
+        return None
+
+    conn.execute("""
+        UPDATE messages
+        SET read_at = CURRENT_TIMESTAMP
+        WHERE chat_id = ?
+          AND sender_id != ?
+          AND read_at IS NULL
+    """, (chat_id, reader_id))
+    conn.commit()
+
+    return upto_message_id
+
+
 @socketio.on("connect")
 def handle_connect(auth):
     token = None
@@ -425,12 +461,16 @@ def get_chat(chat_id):
         conn.close()
         return jsonify({"message": "Чат не найден"}), 404
 
+    read_upto_message_id = mark_direct_chat_as_read(conn, chat_id, user_id)
+
     messages = conn.execute("""
         SELECT
+            m.id,
             m.sender_id,
             u.name AS sender_name,
             m.text,
-            m.created_at
+            m.created_at,
+            m.read_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
         WHERE m.chat_id = ?
@@ -438,17 +478,19 @@ def get_chat(chat_id):
     """, (chat_id,)).fetchall()
     conn.close()
 
+    if read_upto_message_id:
+        socketio.emit("message_read", {
+            "chat_id": chat_id,
+            "reader_id": user_id,
+            "upto_message_id": read_upto_message_id
+        }, room=f"direct_{chat_id}")
+
     return jsonify({
         "id": chat["id"],
         "title": chat["username"],
         "username": chat["username"],
         "messages": [
-            {
-                "sender_id": message["sender_id"],
-                "sender_name": message["sender_name"],
-                "text": message["text"],
-                "created_at": message["created_at"]
-            }
+            serialize_direct_message(message)
             for message in messages
         ]
     })
@@ -482,26 +524,51 @@ def create_chat_message(chat_id):
 
     message = conn.execute("""
         SELECT
+            m.id,
             m.sender_id,
             u.name AS sender_name,
             m.text,
-            m.created_at
+            m.created_at,
+            m.read_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
         WHERE m.id = ?
     """, (cur.lastrowid,)).fetchone()
     conn.close()
 
-    message_data = {
-        "sender_id": message["sender_id"],
-        "sender_name": message["sender_name"],
-        "text": message["text"],
-        "created_at": message["created_at"]
-    }
+    message_data = serialize_direct_message(message)
 
     socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
 
     return jsonify(message_data), 201
+
+
+@app.post("/chats/<int:chat_id>/read")
+def mark_chat_read(chat_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    chat = can_access_direct_chat(conn, user_id, chat_id)
+    if not chat:
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    read_upto_message_id = mark_direct_chat_as_read(conn, chat_id, user_id)
+    conn.close()
+
+    if read_upto_message_id:
+        socketio.emit("message_read", {
+            "chat_id": chat_id,
+            "reader_id": user_id,
+            "upto_message_id": read_upto_message_id
+        }, room=f"direct_{chat_id}")
+
+    return jsonify({
+        "ok": True,
+        "upto_message_id": read_upto_message_id
+    })
 
 
 @app.post("/groups")
@@ -635,6 +702,7 @@ def create_group_message(group_id):
 
     message = conn.execute("""
         SELECT
+            gm.id,
             gm.sender_id,
             u.name AS sender_name,
             gm.text,
@@ -646,13 +714,20 @@ def create_group_message(group_id):
     conn.close()
 
     socketio.emit("new_message", {
+        "id": message["id"],
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
         "created_at": message["created_at"]
     }, room=f"group_{group_id}")
 
-    return jsonify({"message": "ok"})
+    return jsonify({
+        "id": message["id"],
+        "sender_id": message["sender_id"],
+        "sender_name": message["sender_name"],
+        "text": message["text"],
+        "created_at": message["created_at"]
+    }), 201
 
 
 if __name__ == "__main__":
