@@ -59,7 +59,19 @@ def serialize_direct_message(message):
         "sender_name": message["sender_name"],
         "text": message["text"],
         "created_at": message["created_at"],
-        "is_read": bool(message["read_at"])
+        "is_read": bool(message["read_at"]),
+        "is_edited": bool(message["edited_at"])
+    }
+
+
+def serialize_group_message(message):
+    return {
+        "id": message["id"],
+        "sender_id": message["sender_id"],
+        "sender_name": message["sender_name"],
+        "text": message["text"],
+        "created_at": message["created_at"],
+        "is_edited": bool(message["edited_at"])
     }
 
 
@@ -86,6 +98,39 @@ def mark_direct_chat_as_read(conn, chat_id, reader_id):
     conn.commit()
 
     return upto_message_id
+
+
+def get_direct_message_for_chat(conn, chat_id, message_id):
+    return conn.execute("""
+        SELECT
+            m.id,
+            m.chat_id,
+            m.sender_id,
+            u.name AS sender_name,
+            m.text,
+            m.created_at,
+            m.read_at,
+            m.edited_at
+        FROM messages m
+        JOIN users u ON u.id = m.sender_id
+        WHERE m.id = ? AND m.chat_id = ?
+    """, (message_id, chat_id)).fetchone()
+
+
+def get_group_message_for_group(conn, group_id, message_id):
+    return conn.execute("""
+        SELECT
+            gm.id,
+            gm.group_id,
+            gm.sender_id,
+            u.name AS sender_name,
+            gm.text,
+            gm.created_at,
+            gm.edited_at
+        FROM group_messages gm
+        JOIN users u ON u.id = gm.sender_id
+        WHERE gm.id = ? AND gm.group_id = ?
+    """, (message_id, group_id)).fetchone()
 
 
 @socketio.on("connect")
@@ -470,12 +515,18 @@ def get_chat(chat_id):
             u.name AS sender_name,
             m.text,
             m.created_at,
-            m.read_at
+            m.read_at,
+            m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
         WHERE m.chat_id = ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM hidden_messages hm
+              WHERE hm.message_id = m.id AND hm.user_id = ?
+          )
         ORDER BY m.created_at ASC, m.id ASC
-    """, (chat_id,)).fetchall()
+    """, (chat_id, user_id)).fetchall()
     conn.close()
 
     if read_upto_message_id:
@@ -529,7 +580,8 @@ def create_chat_message(chat_id):
             u.name AS sender_name,
             m.text,
             m.created_at,
-            m.read_at
+            m.read_at,
+            m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
         WHERE m.id = ?
@@ -569,6 +621,95 @@ def mark_chat_read(chat_id):
         "ok": True,
         "upto_message_id": read_upto_message_id
     })
+
+
+@app.patch("/chats/<int:chat_id>/messages/<int:message_id>")
+def update_chat_message(chat_id, message_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    text = data.get("text", "").strip()
+    if not text:
+        return jsonify({"message": "Текст сообщения обязателен"}), 400
+
+    conn = get_db()
+    if not can_access_direct_chat(conn, user_id, chat_id):
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    message = get_direct_message_for_chat(conn, chat_id, message_id)
+    if not message:
+        conn.close()
+        return jsonify({"message": "Сообщение не найдено"}), 404
+
+    if message["sender_id"] != user_id:
+        conn.close()
+        return jsonify({"message": "Можно редактировать только свои сообщения"}), 403
+
+    conn.execute("""
+        UPDATE messages
+        SET text = ?, edited_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND chat_id = ?
+    """, (text, message_id, chat_id))
+    conn.commit()
+
+    updated_message = get_direct_message_for_chat(conn, chat_id, message_id)
+    conn.close()
+
+    payload = {
+        "chat_id": chat_id,
+        "message": serialize_direct_message(updated_message)
+    }
+    socketio.emit("message_updated", payload, room=f"direct_{chat_id}")
+    return jsonify(payload["message"])
+
+
+@app.delete("/chats/<int:chat_id>/messages/<int:message_id>")
+def delete_chat_message(chat_id, message_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    scope = (request.args.get("scope") or "me").strip().lower()
+    if scope not in {"me", "all"}:
+        return jsonify({"message": "Некорректный scope"}), 400
+
+    conn = get_db()
+    if not can_access_direct_chat(conn, user_id, chat_id):
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    message = get_direct_message_for_chat(conn, chat_id, message_id)
+    if not message:
+        conn.close()
+        return jsonify({"message": "Сообщение не найдено"}), 404
+
+    if scope == "all":
+        if message["sender_id"] != user_id:
+            conn.close()
+            return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
+
+        conn.execute("DELETE FROM hidden_messages WHERE message_id = ?", (message_id,))
+        conn.execute("DELETE FROM messages WHERE id = ? AND chat_id = ?", (message_id, chat_id))
+        conn.commit()
+        conn.close()
+
+        socketio.emit("message_deleted", {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "scope": "all"
+        }, room=f"direct_{chat_id}")
+        return jsonify({"ok": True})
+
+    conn.execute("""
+        INSERT OR IGNORE INTO hidden_messages (message_id, user_id)
+        VALUES (?, ?)
+    """, (message_id, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
 
 
 @app.post("/groups")
@@ -645,15 +786,22 @@ def get_group(group_id):
 
     messages = conn.execute("""
         SELECT
+            gm.id,
             gm.sender_id,
             u.name AS sender_name,
             gm.text,
-            gm.created_at
+            gm.created_at,
+            gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
         WHERE gm.group_id = ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM hidden_group_messages hgm
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+          )
         ORDER BY gm.created_at ASC, gm.id ASC
-    """, (group_id,)).fetchall()
+    """, (group_id, user_id)).fetchall()
     conn.close()
 
     return jsonify({
@@ -662,12 +810,7 @@ def get_group(group_id):
         "name": group["title"],
         "members_count": members_count_row["members_count"],
         "messages": [
-            {
-                "sender_id": message["sender_id"],
-                "sender_name": message["sender_name"],
-                "text": message["text"],
-                "created_at": message["created_at"]
-            }
+            serialize_group_message(message)
             for message in messages
         ]
     })
@@ -714,20 +857,99 @@ def create_group_message(group_id):
     conn.close()
 
     socketio.emit("new_message", {
-        "id": message["id"],
-        "sender_id": message["sender_id"],
-        "sender_name": message["sender_name"],
-        "text": message["text"],
-        "created_at": message["created_at"]
+        **serialize_group_message(message)
     }, room=f"group_{group_id}")
 
-    return jsonify({
-        "id": message["id"],
-        "sender_id": message["sender_id"],
-        "sender_name": message["sender_name"],
-        "text": message["text"],
-        "created_at": message["created_at"]
-    }), 201
+    return jsonify(serialize_group_message(message)), 201
+
+
+@app.patch("/groups/<int:group_id>/messages/<int:message_id>")
+def update_group_message(group_id, message_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    text = data.get("text", "").strip()
+    if not text:
+        return jsonify({"message": "Текст сообщения обязателен"}), 400
+
+    conn = get_db()
+    if not can_access_group(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    message = get_group_message_for_group(conn, group_id, message_id)
+    if not message:
+        conn.close()
+        return jsonify({"message": "Сообщение не найдено"}), 404
+
+    if message["sender_id"] != user_id:
+        conn.close()
+        return jsonify({"message": "Можно редактировать только свои сообщения"}), 403
+
+    conn.execute("""
+        UPDATE group_messages
+        SET text = ?, edited_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND group_id = ?
+    """, (text, message_id, group_id))
+    conn.commit()
+
+    updated_message = get_group_message_for_group(conn, group_id, message_id)
+    conn.close()
+
+    payload = {
+        "group_id": group_id,
+        "message": serialize_group_message(updated_message)
+    }
+    socketio.emit("message_updated", payload, room=f"group_{group_id}")
+    return jsonify(payload["message"])
+
+
+@app.delete("/groups/<int:group_id>/messages/<int:message_id>")
+def delete_group_message(group_id, message_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    scope = (request.args.get("scope") or "me").strip().lower()
+    if scope not in {"me", "all"}:
+        return jsonify({"message": "Некорректный scope"}), 400
+
+    conn = get_db()
+    if not can_access_group(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    message = get_group_message_for_group(conn, group_id, message_id)
+    if not message:
+        conn.close()
+        return jsonify({"message": "Сообщение не найдено"}), 404
+
+    if scope == "all":
+        if message["sender_id"] != user_id:
+            conn.close()
+            return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
+
+        conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id = ?", (message_id,))
+        conn.execute("DELETE FROM group_messages WHERE id = ? AND group_id = ?", (message_id, group_id))
+        conn.commit()
+        conn.close()
+
+        socketio.emit("message_deleted", {
+            "group_id": group_id,
+            "message_id": message_id,
+            "scope": "all"
+        }, room=f"group_{group_id}")
+        return jsonify({"ok": True})
+
+    conn.execute("""
+        INSERT OR IGNORE INTO hidden_group_messages (group_message_id, user_id)
+        VALUES (?, ?)
+    """, (message_id, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

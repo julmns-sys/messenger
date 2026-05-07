@@ -31,13 +31,22 @@ function renderReadIndicator(message, own, chatType) {
   `;
 }
 
+function renderEditedIndicator(message) {
+  if (!message?.is_edited) {
+    return "";
+  }
+
+  return '<span class="message-edited" title="Сообщение изменено">(изм.)</span>';
+}
+
 function renderMessageItem(message, currentUserId, chatType) {
   const own = String(message.sender_id) === String(currentUserId);
   return `
-    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""}>
+    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
       <p class="message-text">${escapeHtml(message.text || "")}</p>
       <div class="message-meta">
+        ${renderEditedIndicator(message)}
         <span class="message-time">${escapeHtml(formatTime(message.created_at))}</span>
         ${renderReadIndicator(message, own, chatType)}
       </div>
@@ -74,8 +83,6 @@ function renderMessages(container, messages, currentUserId, chatType) {
       return renderMessageItem(message, currentUserId, chatType);
     })
     .join("");
-
-  container.scrollTop = container.scrollHeight;
 }
 
 function appendMessage(container, message, currentUserId, chatType) {
@@ -143,6 +150,32 @@ function updateScrollDownButton(container, button) {
   button.classList.toggle("visible", !isNearBottom(container));
 }
 
+function buildMessageActionMenu() {
+  const menu = document.createElement("div");
+  menu.className = "message-action-menu";
+  menu.hidden = true;
+  menu.innerHTML = `
+    <button type="button" data-action="edit">Редактировать</button>
+    <button type="button" data-action="delete-me">Удалить у меня</button>
+    <button type="button" data-action="delete-all" class="danger">Удалить у всех</button>
+  `;
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function buildEditBanner() {
+  const banner = document.createElement("div");
+  banner.className = "composer-edit-banner";
+  banner.hidden = true;
+  banner.innerHTML = `
+    <div class="composer-edit-copy">
+      <span class="composer-edit-title">Редактирование сообщения</span>
+    </div>
+    <button type="button" class="composer-edit-cancel">Отмена</button>
+  `;
+  return banner;
+}
+
 function setChatTitle(title, subtitle = "") {
   const titleNode = document.getElementById("chatTitle");
   const subtitleNode = document.getElementById("chatSubtitle");
@@ -171,15 +204,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   const input = document.getElementById("messageInput");
   const scrollDownButton = document.getElementById("scrollDownButton");
   const sendButton = composer.querySelector('button[type="submit"]');
+  const messageActionMenu = buildMessageActionMenu();
+  const editBanner = buildEditBanner();
   let socket = null;
   let selectedUser = null;
   let pendingMessageState = null;
   let isSendingMessage = false;
   let isMarkingRead = false;
+  let activeMessageMenuTarget = null;
+  let hideMessageMenuTimer = null;
+  let editingMessageState = null;
 
   if (!messagesNode || !composer || !input) {
     return;
   }
+
+  composer.parentNode.insertBefore(editBanner, composer);
 
   async function loadSelectedUser() {
     if (chatId || chatType === "group" || !userId) {
@@ -195,6 +235,86 @@ document.addEventListener("DOMContentLoaded", async () => {
     const subtitle = user?.username ? `@${user.username}` : "";
     setChatTitle(title, subtitle);
     renderMessages(messagesNode, [], currentUser.id, chatType);
+    updateScrollDownButton(messagesNode, scrollDownButton);
+  }
+
+  function setEditingMessageState(nextState) {
+    editingMessageState = nextState;
+    composer.classList.toggle("is-editing", Boolean(nextState));
+    editBanner.hidden = !nextState;
+
+    if (nextState) {
+      input.value = nextState.text;
+      input.placeholder = "Редактирование сообщения";
+      if (sendButton) {
+        sendButton.textContent = "✓";
+        sendButton.setAttribute("aria-label", "Сохранить");
+      }
+    } else {
+      input.placeholder = chatType === "group" ? "Сообщение в группу..." : "Напишите сообщение...";
+      if (sendButton) {
+        sendButton.textContent = "➤";
+        sendButton.setAttribute("aria-label", "Отправить");
+      }
+    }
+
+    input.focus();
+    const caretPos = input.value.length;
+    input.setSelectionRange(caretPos, caretPos);
+  }
+
+  function hideMessageMenu() {
+    activeMessageMenuTarget = null;
+    if (hideMessageMenuTimer) {
+      window.clearTimeout(hideMessageMenuTimer);
+      hideMessageMenuTimer = null;
+    }
+
+    if (messageActionMenu.hidden) {
+      return;
+    }
+
+    messageActionMenu.classList.remove("visible");
+    hideMessageMenuTimer = window.setTimeout(() => {
+      messageActionMenu.hidden = true;
+      hideMessageMenuTimer = null;
+    }, 160);
+  }
+
+  function showMessageMenu(targetNode, clientX, clientY) {
+    if (hideMessageMenuTimer) {
+      window.clearTimeout(hideMessageMenuTimer);
+      hideMessageMenuTimer = null;
+    }
+
+    activeMessageMenuTarget = targetNode;
+    const isOwnMessage = targetNode.dataset.own === "true";
+
+    messageActionMenu.querySelector('[data-action="edit"]').hidden = !isOwnMessage;
+    messageActionMenu.querySelector('[data-action="delete-all"]').hidden = !isOwnMessage;
+    messageActionMenu.hidden = false;
+
+    const menuWidth = 180;
+    const menuHeight = isOwnMessage ? 122 : 46;
+    const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
+    const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
+    messageActionMenu.style.left = `${Math.max(12, left)}px`;
+    messageActionMenu.style.top = `${Math.max(12, top)}px`;
+    requestAnimationFrame(() => {
+      messageActionMenu.classList.add("visible");
+    });
+  }
+
+  async function reloadThreadPreservingViewport() {
+    const shouldStickToBottom = isNearBottom(messagesNode);
+    const distanceFromBottom = messagesNode.scrollHeight - messagesNode.scrollTop;
+    await loadThread({ preserveScroll: !shouldStickToBottom, distanceFromBottom });
+
+    if (shouldStickToBottom) {
+      scrollMessagesToBottom(messagesNode);
+    } else {
+      messagesNode.scrollTop = Math.max(0, messagesNode.scrollHeight - distanceFromBottom);
+    }
     updateScrollDownButton(messagesNode, scrollDownButton);
   }
 
@@ -251,7 +371,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     throw new Error("Не удалось создать личный чат");
   }
 
-  async function loadThread() {
+  async function loadThread(options = {}) {
     const path = chatType === "group" ? `/groups/${chatId}` : `/chats/${chatId}`;
     const data = await apiFetch(path);
     const currentChat = Array.isArray(chatState.allChats)
@@ -264,7 +384,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     setChatTitle(title, subtitle);
     renderMessages(messagesNode, data.messages || [], currentUser.id, chatType);
-    scrollMessagesToBottom(messagesNode);
+    if (!options.preserveScroll) {
+      scrollMessagesToBottom(messagesNode);
+    }
     updateScrollDownButton(messagesNode, scrollDownButton);
   }
 
@@ -317,6 +439,30 @@ document.addEventListener("DOMContentLoaded", async () => {
         updateScrollDownButton(messagesNode, scrollDownButton);
       });
 
+      socket.on("message_updated", async (data) => {
+        const roomMatches = chatType === "group"
+          ? String(data?.group_id) === String(chatId)
+          : String(data?.chat_id) === String(chatId);
+        if (!roomMatches) {
+          return;
+        }
+
+        await reloadThreadPreservingViewport();
+        await loadChats("chatList", { showLoading: false });
+      });
+
+      socket.on("message_deleted", async (data) => {
+        const roomMatches = chatType === "group"
+          ? String(data?.group_id) === String(chatId)
+          : String(data?.chat_id) === String(chatId);
+        if (!roomMatches) {
+          return;
+        }
+
+        await reloadThreadPreservingViewport();
+        await loadChats("chatList", { showLoading: false });
+      });
+
       socket.on("message_read", (data) => {
         if (
           chatType !== "direct" ||
@@ -363,8 +509,101 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   messagesNode.addEventListener("scroll", () => {
+    hideMessageMenu();
     updateScrollDownButton(messagesNode, scrollDownButton);
   });
+
+  messagesNode.addEventListener("contextmenu", (event) => {
+    const messageNode = event.target.closest(".message[data-message-id]");
+    if (!messageNode || messageNode.classList.contains("pending")) {
+      return;
+    }
+
+    event.preventDefault();
+    showMessageMenu(messageNode, event.clientX, event.clientY);
+  });
+
+  messageActionMenu.addEventListener("click", async (event) => {
+    const action = event.target.closest("button")?.dataset.action;
+    const targetNode = activeMessageMenuTarget;
+    const messageId = targetNode?.dataset.messageId;
+    const isOwnMessage = targetNode?.dataset.own === "true";
+    hideMessageMenu();
+
+    if (!action || !messageId) {
+      return;
+    }
+
+    const basePath = chatType === "group"
+      ? `/groups/${chatId}/messages/${messageId}`
+      : `/chats/${chatId}/messages/${messageId}`;
+
+    try {
+      if (action === "edit") {
+        if (!isOwnMessage) return;
+        const currentText = targetNode?.querySelector(".message-text")?.textContent || "";
+        setEditingMessageState({
+          messageId,
+          text: currentText,
+          basePath
+        });
+        return;
+      } else if (action === "delete-me") {
+        await apiFetch(`${basePath}?scope=me`, { method: "DELETE" });
+      } else if (action === "delete-all") {
+        if (!isOwnMessage) return;
+        await apiFetch(`${basePath}?scope=all`, { method: "DELETE" });
+      } else {
+        return;
+      }
+
+      await reloadThreadPreservingViewport();
+      await loadChats("chatList", { showLoading: false });
+      if (chatType === "direct") {
+        await markCurrentDirectChatAsRead();
+      }
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = "status error";
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".message-action-menu")) {
+      hideMessageMenu();
+    }
+  });
+
+  document.addEventListener("mousedown", (event) => {
+    if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
+      hideMessageMenu();
+    }
+  });
+
+  document.addEventListener("contextmenu", (event) => {
+    if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
+      hideMessageMenu();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (editingMessageState) {
+        setEditingMessageState(null);
+        input.value = "";
+      }
+      hideMessageMenu();
+    }
+  });
+
+  editBanner.querySelector(".composer-edit-cancel")?.addEventListener("click", () => {
+    setEditingMessageState(null);
+    input.value = "";
+    status.textContent = "";
+    status.className = "status thread-status";
+  });
+
+  window.addEventListener("resize", hideMessageMenu);
 
   if (scrollDownButton) {
     scrollDownButton.addEventListener("click", () => {
@@ -379,6 +618,50 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const text = input.value.trim();
     if (!text) return;
+
+    if (editingMessageState) {
+      if (text === editingMessageState.text.trim()) {
+        setEditingMessageState(null);
+        input.value = "";
+        status.textContent = "";
+        status.className = "status thread-status";
+        return;
+      }
+
+      isSendingMessage = true;
+      input.disabled = true;
+      if (sendButton) {
+        sendButton.disabled = true;
+      }
+      status.textContent = "";
+      status.className = "status thread-status";
+
+      try {
+        await apiFetch(editingMessageState.basePath, {
+          method: "PATCH",
+          body: JSON.stringify({ text })
+        });
+
+        setEditingMessageState(null);
+        input.value = "";
+        await reloadThreadPreservingViewport();
+        await loadChats("chatList", { showLoading: false });
+        if (chatType === "direct") {
+          await markCurrentDirectChatAsRead();
+        }
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      } finally {
+        input.disabled = false;
+        if (sendButton) {
+          sendButton.disabled = false;
+        }
+        input.focus();
+        isSendingMessage = false;
+      }
+      return;
+    }
 
     isSendingMessage = true;
     const shouldStickToBottom = isNearBottom(messagesNode);

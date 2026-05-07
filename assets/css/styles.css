@@ -572,6 +572,12 @@ textarea {
   line-height: 1;
 }
 
+.message-edited {
+  font-size: 11px;
+  color: var(--text-soft);
+  opacity: 0.82;
+}
+
 .message-meta {
   display: flex;
   align-items: center;
@@ -582,6 +588,54 @@ textarea {
 
 .message.pending {
   opacity: 0.92;
+}
+
+.message-action-menu {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 14px 30px rgba(31, 52, 79, 0.14);
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+  transform-origin: top left;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  pointer-events: none;
+}
+
+.message-action-menu.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.message-action-menu button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.message-action-menu button:hover {
+  background: rgba(51, 144, 236, 0.08);
+}
+
+.message-action-menu button.danger {
+  color: #c94b4b;
+}
+
+.message-action-menu button.danger:hover {
+  background: rgba(217, 83, 79, 0.08);
 }
 
 .message-status-indicator {
@@ -687,6 +741,11 @@ textarea {
   -ms-overflow-style: none;
 }
 
+.composer.is-editing .textarea {
+  border-color: rgba(51, 144, 236, 0.3);
+  background: rgba(235, 245, 255, 0.54);
+}
+
 .composer .textarea::-webkit-scrollbar {
   width: 0;
   height: 0;
@@ -702,6 +761,16 @@ textarea {
   font-size: 18px;
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow-float);
+}
+
+.send-button:disabled {
+  cursor: default;
+  opacity: 0.7;
+  box-shadow: 0 6px 14px rgba(34, 66, 110, 0.08);
+}
+
+.composer.is-editing .send-button {
+  background: linear-gradient(180deg, rgba(78, 185, 129, 0.96), rgba(47, 154, 102, 0.96));
 }
 
 .page-header {
@@ -882,6 +951,47 @@ textarea {
   background: transparent;
 }
 
+.composer-edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 20px 8px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.32);
+  backdrop-filter: blur(12px);
+}
+
+.composer-edit-banner[hidden] {
+  display: none !important;
+}
+
+.composer-edit-copy {
+  min-width: 0;
+}
+
+.composer-edit-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.composer-edit-cancel {
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  font: inherit;
+  padding: 4px 0;
+}
+
+.composer-edit-cancel:hover {
+  color: var(--text);
+}
+
 .scroll-down-button {
   position: absolute;
   right: 22px;
@@ -1035,6 +1145,11 @@ textarea {
     gap: 10px;
     padding: 12px 14px 12px;
     border-top: 0;
+  }
+
+  .thread-page .composer-edit-banner {
+    margin: 0 14px 8px;
+    padding: 9px 12px;
   }
 
   .thread-page .composer .textarea {

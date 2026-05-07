@@ -50,6 +50,8 @@ def init_db():
     }
     if "read_at" not in message_columns:
         cur.execute("ALTER TABLE messages ADD COLUMN read_at TIMESTAMP")
+    if "edited_at" not in message_columns:
+        cur.execute("ALTER TABLE messages ADD COLUMN edited_at TIMESTAMP")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS groups (
@@ -77,6 +79,31 @@ def init_db():
         sender_id INTEGER NOT NULL,
         text TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    group_message_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(group_messages)").fetchall()
+    }
+    if "edited_at" not in group_message_columns:
+        cur.execute("ALTER TABLE group_messages ADD COLUMN edited_at TIMESTAMP")
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS hidden_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        UNIQUE(message_id, user_id)
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS hidden_group_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_message_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        UNIQUE(group_message_id, user_id)
     )
     """)
 
