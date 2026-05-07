@@ -638,6 +638,105 @@ textarea {
   background: rgba(217, 83, 79, 0.08);
 }
 
+.delete-undo-toast {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 280px;
+  max-width: calc(100% - 32px);
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 14px 28px rgba(31, 52, 79, 0.12);
+  opacity: 0;
+  transform: translate(-50%, -8px) scale(0.96);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+}
+
+.delete-undo-toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+  pointer-events: auto;
+}
+
+.delete-undo-progress {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+
+.delete-undo-ring {
+  width: 18px;
+  height: 18px;
+  transform: rotate(-90deg);
+}
+
+.delete-undo-ring-track,
+.delete-undo-ring-bar {
+  fill: none;
+  stroke-width: 2;
+}
+
+.delete-undo-ring-track {
+  stroke: rgba(51, 144, 236, 0.18);
+}
+
+.delete-undo-ring-bar {
+  stroke: rgba(51, 144, 236, 0.88);
+  stroke-linecap: round;
+  stroke-dasharray: 50.27;
+  stroke-dashoffset: 0;
+}
+
+.delete-undo-ring-bar.running {
+  animation: delete-undo-progress 3s linear forwards;
+}
+
+.delete-undo-timer {
+  flex: 0 0 auto;
+  min-width: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: center;
+}
+
+.delete-undo-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.delete-undo-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.delete-undo-button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 4px 0;
+}
+
+.delete-undo-button:hover {
+  color: var(--accent-dark);
+}
+
 .message-status-indicator {
   display: inline-flex;
   align-items: center;
@@ -713,6 +812,16 @@ textarea {
   40% {
     opacity: 0.82;
     transform: scale(1);
+  }
+}
+
+@keyframes delete-undo-progress {
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: 50.27;
   }
 }
 

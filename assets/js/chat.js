@@ -239,6 +239,26 @@ function buildEditBanner() {
   return banner;
 }
 
+function buildDeleteUndoToast() {
+  const toast = document.createElement("div");
+  toast.className = "delete-undo-toast";
+  toast.hidden = true;
+  toast.innerHTML = `
+    <span class="delete-undo-progress" aria-hidden="true">
+      <svg viewBox="0 0 20 20" class="delete-undo-ring">
+        <circle class="delete-undo-ring-track" cx="10" cy="10" r="8"></circle>
+        <circle class="delete-undo-ring-bar" cx="10" cy="10" r="8"></circle>
+      </svg>
+    </span>
+    <span class="delete-undo-timer" aria-live="polite">3</span>
+    <div class="delete-undo-copy">
+      <span class="delete-undo-title">Сообщение будет удалено</span>
+    </div>
+    <button type="button" class="delete-undo-button">Отмена</button>
+  `;
+  return toast;
+}
+
 function setChatTitle(title, subtitle = "") {
   const titleNode = document.getElementById("chatTitle");
   const subtitleNode = document.getElementById("chatSubtitle");
@@ -263,12 +283,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const messagesNode = document.getElementById("messages");
   const composer = document.getElementById("messageForm");
+  const contentBody = document.querySelector(".content-body");
   const status = document.getElementById("messageStatus");
   const input = document.getElementById("messageInput");
   const scrollDownButton = document.getElementById("scrollDownButton");
   const sendButton = composer.querySelector('button[type="submit"]');
   const messageActionMenu = buildMessageActionMenu();
   const editBanner = buildEditBanner();
+  const deleteUndoToast = buildDeleteUndoToast();
   let socket = null;
   let selectedUser = null;
   let pendingMessageState = null;
@@ -283,12 +305,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   let oldestMessageId = null;
   let hasMoreMessages = false;
   let isLoadingOlder = false;
+  let pendingDeleteState = null;
+  let deleteUndoCountdownTimer = null;
 
-  if (!messagesNode || !composer || !input) {
+  if (!messagesNode || !composer || !input || !contentBody) {
     return;
   }
 
   composer.parentNode.insertBefore(editBanner, composer);
+  contentBody.appendChild(deleteUndoToast);
 
   async function loadSelectedUser() {
     if (chatId || chatType === "group" || !userId) {
@@ -332,6 +357,143 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.focus();
     const caretPos = input.value.length;
     input.setSelectionRange(caretPos, caretPos);
+  }
+
+  function hideDeleteUndoToast() {
+    if (deleteUndoCountdownTimer) {
+      window.clearInterval(deleteUndoCountdownTimer);
+      deleteUndoCountdownTimer = null;
+    }
+    deleteUndoToast.classList.remove("visible");
+    window.setTimeout(() => {
+      if (!deleteUndoToast.classList.contains("visible")) {
+        deleteUndoToast.hidden = true;
+      }
+    }, 180);
+  }
+
+  function showDeleteUndoToast(scope) {
+    const titleNode = deleteUndoToast.querySelector(".delete-undo-title");
+    const timerNode = deleteUndoToast.querySelector(".delete-undo-timer");
+    if (titleNode) {
+      titleNode.textContent = scope === "all"
+        ? "Сообщение будет удалено у всех"
+        : "Сообщение будет удалено";
+    }
+
+    let secondsLeft = 3;
+    if (timerNode) {
+      timerNode.textContent = String(secondsLeft);
+    }
+    if (deleteUndoCountdownTimer) {
+      window.clearInterval(deleteUndoCountdownTimer);
+    }
+    deleteUndoCountdownTimer = window.setInterval(() => {
+      secondsLeft -= 1;
+      if (timerNode && secondsLeft > 0) {
+        timerNode.textContent = String(secondsLeft);
+      }
+      if (secondsLeft <= 0 && deleteUndoCountdownTimer) {
+        window.clearInterval(deleteUndoCountdownTimer);
+        deleteUndoCountdownTimer = null;
+      }
+    }, 1000);
+
+    deleteUndoToast.hidden = false;
+    requestAnimationFrame(() => {
+      const ringBar = deleteUndoToast.querySelector(".delete-undo-ring-bar");
+      if (ringBar) {
+        ringBar.classList.remove("running");
+        void ringBar.getBoundingClientRect();
+        ringBar.classList.add("running");
+      }
+      deleteUndoToast.classList.add("visible");
+    });
+  }
+
+  function restoreRemovedMessage(container, state) {
+    if (!state?.messageNode) {
+      return;
+    }
+
+    const emptyState = container.querySelector(".empty-state");
+    if (emptyState) {
+      emptyState.remove();
+    }
+
+    renderedMessages.add(`id:${state.messageId}`);
+    if (state.nextSibling && state.nextSibling.parentNode === container) {
+      container.insertBefore(state.messageNode, state.nextSibling);
+    } else {
+      container.appendChild(state.messageNode);
+    }
+  }
+
+  async function flushPendingDelete(reason = "commit") {
+    if (!pendingDeleteState) {
+      return;
+    }
+
+    const state = pendingDeleteState;
+    pendingDeleteState = null;
+    if (state.timerId) {
+      window.clearTimeout(state.timerId);
+    }
+
+    if (reason === "undo") {
+      restoreRemovedMessage(messagesNode, state);
+      hideDeleteUndoToast();
+      updateScrollDownButton(messagesNode, scrollDownButton);
+      return;
+    }
+
+    hideDeleteUndoToast();
+    try {
+      await apiFetch(`${state.basePath}?scope=${state.scope}`, { method: "DELETE" });
+      await loadChats("chatList", { showLoading: false });
+      if (chatType === "direct") {
+        await markCurrentDirectChatAsRead();
+      }
+    } catch (error) {
+      restoreRemovedMessage(messagesNode, state);
+      status.textContent = error.message;
+      status.className = "status error";
+    } finally {
+      updateScrollDownButton(messagesNode, scrollDownButton);
+    }
+  }
+
+  function queueDeleteMessage(basePath, scope, messageId) {
+    if (pendingDeleteState) {
+      void flushPendingDelete("commit");
+    }
+
+    const messageNode = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+    if (!messageNode) {
+      return;
+    }
+
+    const nextSibling = messageNode.nextElementSibling;
+    const removed = removeMessageNode(messagesNode, Number(messageId));
+    if (!removed) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      void flushPendingDelete("commit");
+    }, 3000);
+
+    pendingDeleteState = {
+      basePath,
+      scope,
+      messageId: Number(messageId),
+      messageNode,
+      nextSibling,
+      timerId
+    };
+
+    showDeleteUndoToast(scope);
+    updateScrollDownButton(messagesNode, scrollDownButton);
   }
 
   function hideMessageMenu() {
@@ -735,12 +897,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
         return;
       } else if (action === "delete-me") {
-        await apiFetch(`${basePath}?scope=me`, { method: "DELETE" });
-        removeMessageNode(messagesNode, Number(messageId));
+        queueDeleteMessage(basePath, "me", messageId);
+        return;
       } else if (action === "delete-all") {
         if (!isOwnMessage) return;
-        await apiFetch(`${basePath}?scope=all`, { method: "DELETE" });
-        removeMessageNode(messagesNode, Number(messageId));
+        queueDeleteMessage(basePath, "all", messageId);
+        return;
       } else {
         return;
       }
@@ -794,6 +956,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.value = "";
     status.textContent = "";
     status.className = "status thread-status";
+  });
+
+  deleteUndoToast.querySelector(".delete-undo-button")?.addEventListener("click", () => {
+    void flushPendingDelete("undo");
   });
 
   window.addEventListener("resize", hideMessageMenu);
@@ -914,6 +1080,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       input.focus();
       isSendingMessage = false;
       updateScrollDownButton(messagesNode, scrollDownButton);
+    }
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (socket) {
+      socket.disconnect();
+      socket = null;
+    }
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (socket) {
+      socket.disconnect();
+      socket = null;
     }
   });
 });

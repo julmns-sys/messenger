@@ -9,8 +9,31 @@ app = Flask(__name__, static_folder="assets")
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-tokens = {}
 socket_sessions = {}
+
+
+def persist_token(token, user_id):
+    conn = get_db()
+    conn.execute("""
+        INSERT OR REPLACE INTO auth_tokens (token, user_id)
+        VALUES (?, ?)
+    """, (token, user_id))
+    conn.commit()
+    conn.close()
+
+
+def lookup_user_id_by_token(token):
+    if not token:
+        return None
+
+    conn = get_db()
+    row = conn.execute("""
+        SELECT user_id
+        FROM auth_tokens
+        WHERE token = ?
+    """, (token,)).fetchone()
+    conn.close()
+    return row["user_id"] if row else None
 
 
 def current_user_id():
@@ -19,13 +42,11 @@ def current_user_id():
         return None
 
     token = auth.replace("Bearer ", "")
-    return tokens.get(token)
+    return lookup_user_id_by_token(token)
 
 
 def user_id_from_token(token):
-    if not token:
-        return None
-    return tokens.get(token)
+    return lookup_user_id_by_token(token)
 
 
 def can_access_direct_chat(conn, user_id, chat_id):
@@ -315,7 +336,7 @@ def register():
     conn.close()
 
     token = secrets.token_hex(32)
-    tokens[token] = user_id
+    persist_token(token, user_id)
 
     return jsonify({
         "token": token,
@@ -345,7 +366,7 @@ def login():
         return jsonify({"message": "Неверный логин или пароль"}), 401
 
     token = secrets.token_hex(32)
-    tokens[token] = user["id"]
+    persist_token(token, user["id"])
 
     return jsonify({
         "token": token,
