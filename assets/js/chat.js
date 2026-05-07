@@ -1,5 +1,7 @@
 const renderedMessages = new Set();
 const BOTTOM_THRESHOLD = 24;
+const PAGE_SIZE = 30;
+const TOP_LOAD_THRESHOLD = 80;
 
 function getMessageKey(message) {
   if (message.id != null) {
@@ -101,6 +103,37 @@ function appendMessage(container, message, currentUserId, chatType) {
   return true;
 }
 
+function prependMessages(container, messages, currentUserId, chatType) {
+  if (!messages.length) {
+    return 0;
+  }
+
+  if (container.querySelector(".empty-state")) {
+    container.innerHTML = "";
+  }
+
+  const nextHtml = [];
+  let insertedCount = 0;
+
+  for (const message of messages) {
+    const key = getMessageKey(message);
+    if (renderedMessages.has(key)) {
+      continue;
+    }
+
+    renderedMessages.add(key);
+    nextHtml.push(renderMessageItem(message, currentUserId, chatType));
+    insertedCount += 1;
+  }
+
+  if (!nextHtml.length) {
+    return 0;
+  }
+
+  container.insertAdjacentHTML("afterbegin", nextHtml.join(""));
+  return insertedCount;
+}
+
 function isNearBottom(container) {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= BOTTOM_THRESHOLD;
 }
@@ -122,6 +155,36 @@ function removePendingMessage(node) {
   if (node?.parentNode) {
     node.parentNode.removeChild(node);
   }
+}
+
+function ensureEmptyState(container) {
+  if (container.querySelector(".message") || container.querySelector(".empty-state")) {
+    return;
+  }
+
+  container.innerHTML = '<div class="empty-state">Сообщений пока нет</div>';
+}
+
+function replaceMessageNode(container, message, currentUserId, chatType) {
+  const messageNode = container.querySelector(`.message[data-message-id="${CSS.escape(String(message.id))}"]`);
+  if (!messageNode) {
+    return false;
+  }
+
+  messageNode.outerHTML = renderMessageItem(message, currentUserId, chatType);
+  return true;
+}
+
+function removeMessageNode(container, messageId) {
+  const messageNode = container.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+  if (!messageNode) {
+    return false;
+  }
+
+  renderedMessages.delete(`id:${messageId}`);
+  messageNode.remove();
+  ensureEmptyState(container);
+  return true;
 }
 
 function markOwnMessagesAsRead(container, uptoMessageId) {
@@ -217,6 +280,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   let touchMenuPressTimer = null;
   let touchMenuTarget = null;
   let touchMenuPoint = null;
+  let oldestMessageId = null;
+  let hasMoreMessages = false;
+  let isLoadingOlder = false;
 
   if (!messagesNode || !composer || !input) {
     return;
@@ -238,6 +304,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const subtitle = user?.username ? `@${user.username}` : "";
     setChatTitle(title, subtitle);
     renderMessages(messagesNode, [], currentUser.id, chatType);
+    oldestMessageId = null;
+    hasMoreMessages = false;
     updateScrollDownButton(messagesNode, scrollDownButton);
   }
 
@@ -374,9 +442,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     throw new Error("Не удалось создать личный чат");
   }
 
+  async function fetchMessagesPage(beforeMessageId = null) {
+    const basePath = chatType === "group"
+      ? `/groups/${chatId}/messages`
+      : `/chats/${chatId}/messages`;
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+    if (beforeMessageId != null) {
+      params.set("before", String(beforeMessageId));
+    }
+    return apiFetch(`${basePath}?${params.toString()}`);
+  }
+
+  function updatePaginationState(messages, nextHasMore) {
+    hasMoreMessages = Boolean(nextHasMore);
+    oldestMessageId = messages.length ? messages[0].id : null;
+  }
+
   async function loadThread(options = {}) {
     const path = chatType === "group" ? `/groups/${chatId}` : `/chats/${chatId}`;
-    const data = await apiFetch(path);
+    const data = await apiFetch(`${path}?limit=${PAGE_SIZE}`);
     const currentChat = Array.isArray(chatState.allChats)
       ? chatState.allChats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === chatType)
       : null;
@@ -386,11 +470,42 @@ document.addEventListener("DOMContentLoaded", async () => {
       : data.username ? `@${data.username}` : "в сети";
 
     setChatTitle(title, subtitle);
-    renderMessages(messagesNode, data.messages || [], currentUser.id, chatType);
+    const nextMessages = data.messages || [];
+    renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
+    updatePaginationState(nextMessages, data.has_more_messages);
     if (!options.preserveScroll) {
       scrollMessagesToBottom(messagesNode);
     }
     updateScrollDownButton(messagesNode, scrollDownButton);
+  }
+
+  async function loadOlderMessages() {
+    if (!chatId || isLoadingOlder || !hasMoreMessages || !oldestMessageId) {
+      return;
+    }
+
+    isLoadingOlder = true;
+    const previousScrollHeight = messagesNode.scrollHeight;
+    const previousScrollTop = messagesNode.scrollTop;
+
+    try {
+      const data = await fetchMessagesPage(oldestMessageId);
+      const olderMessages = data.messages || [];
+      const insertedCount = prependMessages(messagesNode, olderMessages, currentUser.id, chatType);
+
+      if (insertedCount > 0) {
+        oldestMessageId = olderMessages[0]?.id ?? oldestMessageId;
+        const newScrollHeight = messagesNode.scrollHeight;
+        messagesNode.scrollTop = previousScrollTop + (newScrollHeight - previousScrollHeight);
+      }
+
+      hasMoreMessages = Boolean(data.has_more_messages) && olderMessages.length > 0;
+    } catch {
+      // Ignore transient pagination errors and allow retry on next scroll.
+    } finally {
+      isLoadingOlder = false;
+      updateScrollDownButton(messagesNode, scrollDownButton);
+    }
   }
 
   function connectRealtime() {
@@ -450,7 +565,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           return;
         }
 
-        await reloadThreadPreservingViewport();
+        const replaced = replaceMessageNode(messagesNode, data.message, currentUser.id, chatType);
+        if (!replaced) {
+          await reloadThreadPreservingViewport();
+        }
         await loadChats("chatList", { showLoading: false });
       });
 
@@ -462,7 +580,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           return;
         }
 
-        await reloadThreadPreservingViewport();
+        const removed = removeMessageNode(messagesNode, Number(data?.message_id || 0));
+        if (!removed) {
+          await reloadThreadPreservingViewport();
+        }
         await loadChats("chatList", { showLoading: false });
       });
 
@@ -513,6 +634,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   messagesNode.addEventListener("scroll", () => {
     hideMessageMenu();
+    if (messagesNode.scrollTop <= TOP_LOAD_THRESHOLD) {
+      loadOlderMessages();
+    }
     updateScrollDownButton(messagesNode, scrollDownButton);
   });
 
@@ -612,14 +736,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       } else if (action === "delete-me") {
         await apiFetch(`${basePath}?scope=me`, { method: "DELETE" });
+        removeMessageNode(messagesNode, Number(messageId));
       } else if (action === "delete-all") {
         if (!isOwnMessage) return;
         await apiFetch(`${basePath}?scope=all`, { method: "DELETE" });
+        removeMessageNode(messagesNode, Number(messageId));
       } else {
         return;
       }
 
-      await reloadThreadPreservingViewport();
       await loadChats("chatList", { showLoading: false });
       if (chatType === "direct") {
         await markCurrentDirectChatAsRead();
@@ -705,14 +830,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       status.className = "status thread-status";
 
       try {
-        await apiFetch(editingMessageState.basePath, {
+        const updatedMessage = await apiFetch(editingMessageState.basePath, {
           method: "PATCH",
           body: JSON.stringify({ text })
         });
 
         setEditingMessageState(null);
         input.value = "";
-        await reloadThreadPreservingViewport();
+        replaceMessageNode(messagesNode, updatedMessage, currentUser.id, chatType);
         await loadChats("chatList", { showLoading: false });
         if (chatType === "direct") {
           await markCurrentDirectChatAsRead();

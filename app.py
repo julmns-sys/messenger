@@ -133,6 +133,96 @@ def get_group_message_for_group(conn, group_id, message_id):
     """, (message_id, group_id)).fetchone()
 
 
+def parse_limit_arg(default=30, maximum=100):
+    raw_limit = request.args.get("limit", str(default)).strip()
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = default
+    return max(1, min(limit, maximum))
+
+
+def parse_before_id_arg():
+    raw_before = (request.args.get("before") or "").strip()
+    if not raw_before:
+        return None
+    try:
+        return int(raw_before)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
+    params = [chat_id, user_id]
+    before_clause = ""
+    if before_id is not None:
+        before_clause = "AND m.id < ?"
+        params.append(before_id)
+    params.append(limit + 1)
+
+    rows = conn.execute(f"""
+        SELECT
+            m.id,
+            m.sender_id,
+            u.name AS sender_name,
+            m.text,
+            m.created_at,
+            m.read_at,
+            m.edited_at
+        FROM messages m
+        JOIN users u ON u.id = m.sender_id
+        WHERE m.chat_id = ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM hidden_messages hm
+              WHERE hm.message_id = m.id AND hm.user_id = ?
+          )
+          {before_clause}
+        ORDER BY m.id DESC
+        LIMIT ?
+    """, params).fetchall()
+
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    page_rows = list(reversed(page_rows))
+    return page_rows, has_more
+
+
+def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
+    params = [group_id, user_id]
+    before_clause = ""
+    if before_id is not None:
+        before_clause = "AND gm.id < ?"
+        params.append(before_id)
+    params.append(limit + 1)
+
+    rows = conn.execute(f"""
+        SELECT
+            gm.id,
+            gm.sender_id,
+            u.name AS sender_name,
+            gm.text,
+            gm.created_at,
+            gm.edited_at
+        FROM group_messages gm
+        JOIN users u ON u.id = gm.sender_id
+        WHERE gm.group_id = ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM hidden_group_messages hgm
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+          )
+          {before_clause}
+        ORDER BY gm.id DESC
+        LIMIT ?
+    """, params).fetchall()
+
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    page_rows = list(reversed(page_rows))
+    return page_rows, has_more
+
+
 @socketio.on("connect")
 def handle_connect(auth):
     token = None
@@ -507,26 +597,8 @@ def get_chat(chat_id):
         return jsonify({"message": "Чат не найден"}), 404
 
     read_upto_message_id = mark_direct_chat_as_read(conn, chat_id, user_id)
-
-    messages = conn.execute("""
-        SELECT
-            m.id,
-            m.sender_id,
-            u.name AS sender_name,
-            m.text,
-            m.created_at,
-            m.read_at,
-            m.edited_at
-        FROM messages m
-        JOIN users u ON u.id = m.sender_id
-        WHERE m.chat_id = ?
-          AND NOT EXISTS (
-              SELECT 1
-              FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
-          )
-        ORDER BY m.created_at ASC, m.id ASC
-    """, (chat_id, user_id)).fetchall()
+    limit = parse_limit_arg()
+    messages, has_more_messages = fetch_direct_messages_page(conn, chat_id, user_id, limit)
     conn.close()
 
     if read_upto_message_id:
@@ -540,10 +612,34 @@ def get_chat(chat_id):
         "id": chat["id"],
         "title": chat["username"],
         "username": chat["username"],
+        "has_more_messages": has_more_messages,
         "messages": [
             serialize_direct_message(message)
             for message in messages
         ]
+    })
+
+
+@app.get("/chats/<int:chat_id>/messages")
+def get_chat_messages(chat_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    chat = can_access_direct_chat(conn, user_id, chat_id)
+    if not chat:
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    limit = parse_limit_arg()
+    before_id = parse_before_id_arg()
+    messages, has_more = fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id)
+    conn.close()
+
+    return jsonify({
+        "messages": [serialize_direct_message(message) for message in messages],
+        "has_more_messages": has_more
     })
 
 
@@ -783,25 +879,8 @@ def get_group(group_id):
         FROM group_members
         WHERE group_id = ?
     """, (group_id,)).fetchone()
-
-    messages = conn.execute("""
-        SELECT
-            gm.id,
-            gm.sender_id,
-            u.name AS sender_name,
-            gm.text,
-            gm.created_at,
-            gm.edited_at
-        FROM group_messages gm
-        JOIN users u ON u.id = gm.sender_id
-        WHERE gm.group_id = ?
-          AND NOT EXISTS (
-              SELECT 1
-              FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
-          )
-        ORDER BY gm.created_at ASC, gm.id ASC
-    """, (group_id, user_id)).fetchall()
+    limit = parse_limit_arg()
+    messages, has_more_messages = fetch_group_messages_page(conn, group_id, user_id, limit)
     conn.close()
 
     return jsonify({
@@ -809,10 +888,34 @@ def get_group(group_id):
         "title": group["title"],
         "name": group["title"],
         "members_count": members_count_row["members_count"],
+        "has_more_messages": has_more_messages,
         "messages": [
             serialize_group_message(message)
             for message in messages
         ]
+    })
+
+
+@app.get("/groups/<int:group_id>/messages")
+def get_group_messages(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    member = can_access_group(conn, user_id, group_id)
+    if not member:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    limit = parse_limit_arg()
+    before_id = parse_before_id_arg()
+    messages, has_more = fetch_group_messages_page(conn, group_id, user_id, limit, before_id)
+    conn.close()
+
+    return jsonify({
+        "messages": [serialize_group_message(message) for message in messages],
+        "has_more_messages": has_more
     })
 
 
