@@ -214,6 +214,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   let activeMessageMenuTarget = null;
   let hideMessageMenuTimer = null;
   let editingMessageState = null;
+  let touchMenuPressTimer = null;
+  let touchMenuTarget = null;
+  let touchMenuPoint = null;
 
   if (!messagesNode || !composer || !input) {
     return;
@@ -523,6 +526,65 @@ document.addEventListener("DOMContentLoaded", async () => {
     showMessageMenu(messageNode, event.clientX, event.clientY);
   });
 
+  messagesNode.addEventListener("touchstart", (event) => {
+    const touch = event.touches[0];
+    const messageNode = event.target.closest(".message[data-message-id]");
+    if (!touch || !messageNode || messageNode.classList.contains("pending")) {
+      touchMenuTarget = null;
+      touchMenuPoint = null;
+      return;
+    }
+
+    touchMenuTarget = messageNode;
+    touchMenuPoint = { x: touch.clientX, y: touch.clientY };
+    if (touchMenuPressTimer) {
+      window.clearTimeout(touchMenuPressTimer);
+    }
+
+    touchMenuPressTimer = window.setTimeout(() => {
+      if (!touchMenuTarget || !touchMenuPoint) {
+        return;
+      }
+
+      showMessageMenu(touchMenuTarget, touchMenuPoint.x, touchMenuPoint.y);
+      touchMenuPressTimer = null;
+    }, 520);
+  }, { passive: true });
+
+  messagesNode.addEventListener("touchmove", (event) => {
+    const touch = event.touches[0];
+    if (!touchMenuPressTimer || !touch || !touchMenuPoint) {
+      return;
+    }
+
+    const deltaX = Math.abs(touch.clientX - touchMenuPoint.x);
+    const deltaY = Math.abs(touch.clientY - touchMenuPoint.y);
+    if (deltaX > 10 || deltaY > 10) {
+      window.clearTimeout(touchMenuPressTimer);
+      touchMenuPressTimer = null;
+      touchMenuTarget = null;
+      touchMenuPoint = null;
+    }
+  }, { passive: true });
+
+  messagesNode.addEventListener("touchend", () => {
+    if (touchMenuPressTimer) {
+      window.clearTimeout(touchMenuPressTimer);
+      touchMenuPressTimer = null;
+    }
+    touchMenuTarget = null;
+    touchMenuPoint = null;
+  }, { passive: true });
+
+  messagesNode.addEventListener("touchcancel", () => {
+    if (touchMenuPressTimer) {
+      window.clearTimeout(touchMenuPressTimer);
+      touchMenuPressTimer = null;
+    }
+    touchMenuTarget = null;
+    touchMenuPoint = null;
+  }, { passive: true });
+
   messageActionMenu.addEventListener("click", async (event) => {
     const action = event.target.closest("button")?.dataset.action;
     const targetNode = activeMessageMenuTarget;
@@ -579,6 +641,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       hideMessageMenu();
     }
   });
+
+  document.addEventListener("touchstart", (event) => {
+    if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
+      hideMessageMenu();
+    }
+  }, { passive: true });
 
   document.addEventListener("contextmenu", (event) => {
     if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {

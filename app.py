@@ -849,7 +849,8 @@ def create_group_message(group_id):
             gm.sender_id,
             u.name AS sender_name,
             gm.text,
-            gm.created_at
+            gm.created_at,
+            gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
         WHERE gm.id = ?
