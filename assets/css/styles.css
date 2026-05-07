@@ -562,6 +562,8 @@ textarea {
   margin: 0;
   line-height: 1.45;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-time {
