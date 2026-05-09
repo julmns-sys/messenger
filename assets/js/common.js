@@ -3,6 +3,26 @@ const chatState = {
   refreshIntervalId: null,
   refreshListId: null
 };
+const CHAT_LIST_SCROLL_KEY = "messenger:chat-list-scroll-top";
+
+function readChatListScroll() {
+  const rawValue = window.sessionStorage.getItem(CHAT_LIST_SCROLL_KEY);
+  const scrollTop = Number.parseInt(rawValue || "", 10);
+  return Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0;
+}
+
+function saveChatListScroll(list) {
+  if (!list) return;
+  window.sessionStorage.setItem(CHAT_LIST_SCROLL_KEY, String(Math.max(0, list.scrollTop || 0)));
+}
+
+function restoreChatListScroll(list, fallbackScrollTop = 0) {
+  if (!list) return;
+  const targetScrollTop = fallbackScrollTop > 0 ? fallbackScrollTop : readChatListScroll();
+  requestAnimationFrame(() => {
+    list.scrollTop = targetScrollTop;
+  });
+}
 
 function bindLogout(buttonId = "logoutButton") {
   const logoutButton = document.getElementById(buttonId);
@@ -29,6 +49,8 @@ async function loadChats(listId = "chatList", options = {}) {
   const { showLoading = true } = options;
   const list = document.getElementById(listId);
   if (!list) return [];
+
+  bindChatListScrollPersistence(listId);
 
   if (showLoading) {
     list.innerHTML = '<div class="empty-state">Загрузка чатов...</div>';
@@ -85,6 +107,24 @@ function bindChatSearch(listId = "chatList") {
   });
 }
 
+function bindChatListScrollPersistence(listId = "chatList") {
+  const list = document.getElementById(listId);
+  if (!list || list.dataset.chatScrollBound === "true") {
+    return;
+  }
+
+  list.dataset.chatScrollBound = "true";
+  list.addEventListener("scroll", () => {
+    saveChatListScroll(list);
+  }, { passive: true });
+
+  list.addEventListener("click", (event) => {
+    if (event.target.closest(".chat-item")) {
+      saveChatListScroll(list);
+    }
+  });
+}
+
 function stopChatsAutoRefresh() {
   if (chatState.refreshIntervalId) {
     clearInterval(chatState.refreshIntervalId);
@@ -111,11 +151,20 @@ function startChatsAutoRefresh(listId = "chatList", intervalMs = 2000) {
 
 window.addEventListener("pagehide", stopChatsAutoRefresh);
 window.addEventListener("beforeunload", stopChatsAutoRefresh);
+window.addEventListener("pagehide", () => {
+  saveChatListScroll(document.getElementById("chatList"));
+});
+window.addEventListener("beforeunload", () => {
+  saveChatListScroll(document.getElementById("chatList"));
+});
 
 function renderChats(list, chats) {
+  const previousScrollTop = list.scrollTop;
+
   if (!chats.length) {
     const hasQuery = Boolean(document.querySelector(".sidebar-search .search-input")?.value.trim());
     list.innerHTML = `<div class="empty-state">${hasQuery ? "Ничего не найдено" : "Чатов пока нет"}</div>`;
+    restoreChatListScroll(list, previousScrollTop);
     return;
   }
 
@@ -148,4 +197,6 @@ function renderChats(list, chats) {
       `;
     })
     .join("");
+
+  restoreChatListScroll(list, previousScrollTop);
 }
