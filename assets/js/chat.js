@@ -218,12 +218,30 @@ function buildMessageActionMenu() {
   menu.className = "message-action-menu";
   menu.hidden = true;
   menu.innerHTML = `
+    <button type="button" data-action="select">Выбрать</button>
     <button type="button" data-action="edit">Редактировать</button>
     <button type="button" data-action="delete-me">Удалить у меня</button>
     <button type="button" data-action="delete-all" class="danger">Удалить у всех</button>
   `;
   document.body.appendChild(menu);
   return menu;
+}
+
+function buildSelectionToolbar() {
+  const toolbar = document.createElement("div");
+  toolbar.className = "selection-toolbar";
+  toolbar.hidden = true;
+  toolbar.innerHTML = `
+    <div class="selection-toolbar-copy">
+      <span class="selection-toolbar-count">0 сообщений</span>
+    </div>
+    <div class="selection-toolbar-actions">
+      <button type="button" class="selection-toolbar-button" data-action="cancel">Отмена</button>
+      <button type="button" class="selection-toolbar-button" data-action="delete-me">Удалить у меня</button>
+      <button type="button" class="selection-toolbar-button danger" data-action="delete-all">Удалить у всех</button>
+    </div>
+  `;
+  return toolbar;
 }
 
 function buildEditBanner() {
@@ -287,10 +305,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const status = document.getElementById("messageStatus");
   const input = document.getElementById("messageInput");
   const scrollDownButton = document.getElementById("scrollDownButton");
-  const sendButton = composer.querySelector('button[type="submit"]');
+  const composerWrap = composer?.closest(".composer-wrap");
+  const sendButton = composer?.querySelector('button[type="submit"]');
   const messageActionMenu = buildMessageActionMenu();
   const editBanner = buildEditBanner();
   const deleteUndoToast = buildDeleteUndoToast();
+  const selectionToolbar = buildSelectionToolbar();
   let socket = null;
   let selectedUser = null;
   let pendingMessageState = null;
@@ -307,12 +327,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   let isLoadingOlder = false;
   let pendingDeleteState = null;
   let deleteUndoCountdownTimer = null;
+  let isSelectionMode = false;
+  const selectedMessageIds = new Set();
+  const committedDeleteEchoIds = new Set();
 
-  if (!messagesNode || !composer || !input || !contentBody) {
+  if (!messagesNode || !composer || !input || !contentBody || !composerWrap) {
     return;
   }
 
   composer.parentNode.insertBefore(editBanner, composer);
+  contentBody.insertBefore(selectionToolbar, composerWrap);
   contentBody.appendChild(deleteUndoToast);
 
   async function loadSelectedUser() {
@@ -329,9 +353,290 @@ document.addEventListener("DOMContentLoaded", async () => {
     const subtitle = user?.username ? `@${user.username}` : "";
     setChatTitle(title, subtitle);
     renderMessages(messagesNode, [], currentUser.id, chatType);
+    selectedMessageIds.clear();
+    isSelectionMode = false;
     oldestMessageId = null;
     hasMoreMessages = false;
+    document.body.classList.remove("selection-mode");
+    selectionToolbar.hidden = true;
     updateScrollDownButton(messagesNode, scrollDownButton);
+  }
+
+  function formatSelectedMessagesCount(count) {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) {
+      return `${count} сообщение`;
+    }
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+      return `${count} сообщения`;
+    }
+    return `${count} сообщений`;
+  }
+
+  function formatDeleteToastTitle(scope, count = 1) {
+    const noun = formatSelectedMessagesCount(count);
+    if (scope === "all") {
+      return count > 1 ? `${noun} будут удалены у всех` : "Сообщение будет удалено у всех";
+    }
+
+    return count > 1 ? `${noun} будут удалены` : "Сообщение будет удалено";
+  }
+
+  function syncMessageSelectionState(messageId) {
+    const node = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+    if (!node) {
+      return;
+    }
+
+    node.classList.toggle("selected", selectedMessageIds.has(Number(messageId)));
+  }
+
+  function updateSelectionToolbar() {
+    const count = selectedMessageIds.size;
+    const countNode = selectionToolbar.querySelector(".selection-toolbar-count");
+    const deleteAllButton = selectionToolbar.querySelector('[data-action="delete-all"]');
+    const deleteMeButton = selectionToolbar.querySelector('[data-action="delete-me"]');
+    const selectedNodes = [...selectedMessageIds].map((messageId) => (
+      messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`)
+    )).filter(Boolean);
+    const allOwn = selectedNodes.length > 0 && selectedNodes.every((node) => node.dataset.own === "true");
+
+    document.body.classList.toggle("selection-mode", isSelectionMode);
+    selectionToolbar.hidden = !isSelectionMode;
+
+    if (countNode) {
+      countNode.textContent = formatSelectedMessagesCount(count);
+    }
+
+    if (deleteMeButton) {
+      deleteMeButton.disabled = count === 0;
+    }
+
+    if (deleteAllButton) {
+      deleteAllButton.disabled = count === 0 || !allOwn;
+      deleteAllButton.hidden = !allOwn;
+    }
+
+    if (count === 0) {
+      isSelectionMode = false;
+      selectionToolbar.hidden = true;
+      document.body.classList.remove("selection-mode");
+    }
+  }
+
+  function clearSelectedMessages() {
+    selectedMessageIds.forEach((messageId) => {
+      const node = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+      if (node) {
+        node.classList.remove("selected");
+      }
+    });
+    selectedMessageIds.clear();
+    updateSelectionToolbar();
+  }
+
+  function exitSelectionMode() {
+    clearSelectedMessages();
+    isSelectionMode = false;
+    selectionToolbar.hidden = true;
+    document.body.classList.remove("selection-mode");
+  }
+
+  function toggleMessageSelection(messageNode) {
+    const messageId = Number(messageNode?.dataset.messageId || "0");
+    if (!messageId) {
+      return;
+    }
+
+    isSelectionMode = true;
+    if (selectedMessageIds.has(messageId)) {
+      selectedMessageIds.delete(messageId);
+    } else {
+      selectedMessageIds.add(messageId);
+    }
+
+    syncMessageSelectionState(messageId);
+    updateSelectionToolbar();
+  }
+
+  function enterSelectionMode(messageNode) {
+    hideMessageMenu();
+    if (editingMessageState) {
+      setEditingMessageState(null);
+      input.value = "";
+    }
+    if (!messageNode) {
+      return;
+    }
+    if (!isSelectionMode) {
+      isSelectionMode = true;
+      selectionToolbar.hidden = false;
+    }
+    toggleMessageSelection(messageNode);
+  }
+
+  function collectSelectedMessageItems() {
+    const selectedIds = new Set(selectedMessageIds);
+    const messageNodes = [...messagesNode.querySelectorAll(".message[data-message-id]")];
+
+    return messageNodes
+      .map((node, index) => {
+        const messageId = Number(node.dataset.messageId || "0");
+        const nextAnchorNode = messageNodes.slice(index + 1).find((candidate) => {
+          const candidateId = Number(candidate.dataset.messageId || "0");
+          return candidateId && !selectedIds.has(candidateId);
+        });
+        const prevAnchorNode = [...messageNodes.slice(0, index)].reverse().find((candidate) => {
+          const candidateId = Number(candidate.dataset.messageId || "0");
+          return candidateId && !selectedIds.has(candidateId);
+        });
+
+        return {
+          messageId,
+          messageNode: node,
+          nextSibling: node.nextElementSibling,
+          anchorNextId: Number(nextAnchorNode?.dataset.messageId || "0") || null,
+          anchorPrevId: Number(prevAnchorNode?.dataset.messageId || "0") || null,
+          originalIndex: index
+        };
+      })
+      .filter((item) => item.messageId && selectedIds.has(item.messageId));
+  }
+
+  function restoreRemovedMessages(container, items) {
+    if (!Array.isArray(items) || !items.length) {
+      return;
+    }
+
+    const emptyState = container.querySelector(".empty-state");
+    if (emptyState) {
+      emptyState.remove();
+    }
+
+    [...items]
+      .sort((left, right) => (left.originalIndex || 0) - (right.originalIndex || 0))
+      .forEach((item) => {
+      if (!item?.messageNode) {
+        return;
+      }
+
+      item.messageNode.classList.remove("selected");
+      renderedMessages.add(`id:${item.messageId}`);
+      const nextAnchor = item.anchorNextId
+        ? container.querySelector(`.message[data-message-id="${CSS.escape(String(item.anchorNextId))}"]`)
+        : null;
+      if (nextAnchor) {
+        container.insertBefore(item.messageNode, nextAnchor);
+        return;
+      }
+
+      const prevAnchor = item.anchorPrevId
+        ? container.querySelector(`.message[data-message-id="${CSS.escape(String(item.anchorPrevId))}"]`)
+        : null;
+      if (prevAnchor?.parentNode === container) {
+        prevAnchor.insertAdjacentElement("afterend", item.messageNode);
+        return;
+      }
+
+      if (item.nextSibling && item.nextSibling.parentNode === container) {
+        container.insertBefore(item.messageNode, item.nextSibling);
+        return;
+      }
+
+      container.appendChild(item.messageNode);
+    });
+  }
+
+  function queuePendingDelete(state) {
+    if (pendingDeleteState) {
+      void flushPendingDelete("commit");
+    }
+
+    pendingDeleteState = {
+      ...state,
+      timerId: window.setTimeout(() => {
+        void flushPendingDelete("commit");
+      }, 3000)
+    };
+
+    showDeleteUndoToast(state.scope, state.removedItems.length);
+    updateScrollDownButton(messagesNode, scrollDownButton);
+  }
+
+  function queueBulkDelete(scope, messageItems) {
+    if (!chatId || !messageItems.length) {
+      return false;
+    }
+
+    const messageIds = messageItems.map((item) => item.messageId);
+    const path = chatType === "group"
+      ? `/groups/${chatId}/messages/bulk-delete`
+      : `/chats/${chatId}/messages/bulk-delete`;
+
+    let removedCount = 0;
+    messageItems.forEach((item) => {
+      item.messageNode.classList.remove("selected");
+      if (removeMessageNode(messagesNode, item.messageId)) {
+        removedCount += 1;
+      }
+    });
+
+    if (!removedCount) {
+      return false;
+    }
+
+    queuePendingDelete({
+      scope,
+      removedItems: messageItems,
+      request: {
+        path,
+        options: {
+          method: "POST",
+          body: JSON.stringify({
+            message_ids: messageIds,
+            scope
+          })
+        }
+      }
+    });
+
+    return true;
+  }
+
+  async function deleteSelectedMessages(scope) {
+    if (!chatId || !selectedMessageIds.size) {
+      return;
+    }
+
+    const messageItems = collectSelectedMessageItems();
+    const actionButtons = selectionToolbar.querySelectorAll("button");
+
+    if (pendingDeleteState) {
+      await flushPendingDelete("commit");
+    }
+
+    actionButtons.forEach((button) => {
+      button.disabled = true;
+    });
+    status.textContent = "";
+    status.className = "status thread-status";
+
+    try {
+      if (!queueBulkDelete(scope, messageItems)) {
+        return;
+      }
+      exitSelectionMode();
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = "status error";
+      updateSelectionToolbar();
+    } finally {
+      actionButtons.forEach((button) => {
+        button.disabled = false;
+      });
+      updateScrollDownButton(messagesNode, scrollDownButton);
+    }
   }
 
   function setEditingMessageState(nextState) {
@@ -372,13 +677,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }, 180);
   }
 
-  function showDeleteUndoToast(scope) {
+  function showDeleteUndoToast(scope, count = 1) {
     const titleNode = deleteUndoToast.querySelector(".delete-undo-title");
     const timerNode = deleteUndoToast.querySelector(".delete-undo-timer");
     if (titleNode) {
-      titleNode.textContent = scope === "all"
-        ? "Сообщение будет удалено у всех"
-        : "Сообщение будет удалено";
+      titleNode.textContent = formatDeleteToastTitle(scope, count);
     }
 
     let secondsLeft = 3;
@@ -411,24 +714,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  function restoreRemovedMessage(container, state) {
-    if (!state?.messageNode) {
-      return;
-    }
-
-    const emptyState = container.querySelector(".empty-state");
-    if (emptyState) {
-      emptyState.remove();
-    }
-
-    renderedMessages.add(`id:${state.messageId}`);
-    if (state.nextSibling && state.nextSibling.parentNode === container) {
-      container.insertBefore(state.messageNode, state.nextSibling);
-    } else {
-      container.appendChild(state.messageNode);
-    }
-  }
-
   async function flushPendingDelete(reason = "commit") {
     if (!pendingDeleteState) {
       return;
@@ -441,7 +726,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (reason === "undo") {
-      restoreRemovedMessage(messagesNode, state);
+      restoreRemovedMessages(messagesNode, state.removedItems);
       hideDeleteUndoToast();
       updateScrollDownButton(messagesNode, scrollDownButton);
       return;
@@ -449,13 +734,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     hideDeleteUndoToast();
     try {
-      await apiFetch(`${state.basePath}?scope=${state.scope}`, { method: "DELETE" });
+      await apiFetch(state.request.path, state.request.options);
+      state.removedItems.forEach((item) => {
+        committedDeleteEchoIds.add(item.messageId);
+      });
       await loadChats("chatList", { showLoading: false });
       if (chatType === "direct") {
         await markCurrentDirectChatAsRead();
       }
     } catch (error) {
-      restoreRemovedMessage(messagesNode, state);
+      restoreRemovedMessages(messagesNode, state.removedItems);
       status.textContent = error.message;
       status.className = "status error";
     } finally {
@@ -468,32 +756,37 @@ document.addEventListener("DOMContentLoaded", async () => {
       void flushPendingDelete("commit");
     }
 
+    if (isSelectionMode) {
+      exitSelectionMode();
+    }
+
     const messageNode = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
     if (!messageNode) {
       return;
     }
 
-    const nextSibling = messageNode.nextElementSibling;
+    const removedItem = {
+      messageId: Number(messageId),
+      messageNode,
+      nextSibling: messageNode.nextElementSibling,
+      anchorNextId: Number(messageNode.nextElementSibling?.dataset?.messageId || "0") || null,
+      anchorPrevId: Number(messageNode.previousElementSibling?.dataset?.messageId || "0") || null,
+      originalIndex: [...messagesNode.querySelectorAll(".message[data-message-id]")].findIndex((node) => node === messageNode)
+    };
+    messageNode.classList.remove("selected");
     const removed = removeMessageNode(messagesNode, Number(messageId));
     if (!removed) {
       return;
     }
 
-    const timerId = window.setTimeout(() => {
-      void flushPendingDelete("commit");
-    }, 3000);
-
-    pendingDeleteState = {
-      basePath,
+    queuePendingDelete({
       scope,
-      messageId: Number(messageId),
-      messageNode,
-      nextSibling,
-      timerId
-    };
-
-    showDeleteUndoToast(scope);
-    updateScrollDownButton(messagesNode, scrollDownButton);
+      removedItems: [removedItem],
+      request: {
+        path: `${basePath}?scope=${scope}`,
+        options: { method: "DELETE" }
+      }
+    });
   }
 
   function hideMessageMenu() {
@@ -528,7 +821,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     messageActionMenu.hidden = false;
 
     const menuWidth = 180;
-    const menuHeight = isOwnMessage ? 122 : 46;
+    const menuHeight = isOwnMessage ? 164 : 84;
     const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
     const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
     messageActionMenu.style.left = `${Math.max(12, left)}px`;
@@ -633,6 +926,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     setChatTitle(title, subtitle);
     const nextMessages = data.messages || [];
+    exitSelectionMode();
     renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
     updatePaginationState(nextMessages, data.has_more_messages);
     if (!options.preserveScroll) {
@@ -708,6 +1002,8 @@ document.addEventListener("DOMContentLoaded", async () => {
           return;
         }
 
+        syncMessageSelectionState(message.id);
+
         if (shouldStickToBottom) {
           scrollMessagesToBottom(messagesNode);
         }
@@ -730,6 +1026,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         const replaced = replaceMessageNode(messagesNode, data.message, currentUser.id, chatType);
         if (!replaced) {
           await reloadThreadPreservingViewport();
+        } else {
+          syncMessageSelectionState(data.message.id);
         }
         await loadChats("chatList", { showLoading: false });
       });
@@ -742,7 +1040,15 @@ document.addEventListener("DOMContentLoaded", async () => {
           return;
         }
 
-        const removed = removeMessageNode(messagesNode, Number(data?.message_id || 0));
+        const messageId = Number(data?.message_id || 0);
+        if (committedDeleteEchoIds.has(messageId)) {
+          committedDeleteEchoIds.delete(messageId);
+          return;
+        }
+
+        const removed = removeMessageNode(messagesNode, messageId);
+        selectedMessageIds.delete(messageId);
+        updateSelectionToolbar();
         if (!removed) {
           await reloadThreadPreservingViewport();
         }
@@ -759,6 +1065,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         markOwnMessagesAsRead(messagesNode, Number(data?.upto_message_id || 0));
+      });
+
+      socket.on("chat_deleted", (data) => {
+        if (chatType !== "direct" || String(data?.chat_id) !== String(chatId)) {
+          return;
+        }
+
+        window.location.href = "index.html";
       });
     }
 
@@ -809,7 +1123,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     event.preventDefault();
+    if (isSelectionMode) {
+      toggleMessageSelection(messageNode);
+      return;
+    }
     showMessageMenu(messageNode, event.clientX, event.clientY);
+  });
+
+  messagesNode.addEventListener("click", (event) => {
+    const messageNode = event.target.closest(".message[data-message-id]");
+    if (!isSelectionMode || !messageNode || messageNode.classList.contains("pending")) {
+      return;
+    }
+
+    event.preventDefault();
+    toggleMessageSelection(messageNode);
   });
 
   messagesNode.addEventListener("touchstart", (event) => {
@@ -887,7 +1215,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       : `/chats/${chatId}/messages/${messageId}`;
 
     try {
-      if (action === "edit") {
+      if (action === "select") {
+        enterSelectionMode(targetNode);
+        return;
+      } else if (action === "edit") {
         if (!isOwnMessage) return;
         const currentText = targetNode?.querySelector(".message-text")?.textContent || "";
         setEditingMessageState({
@@ -943,6 +1274,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      if (isSelectionMode) {
+        exitSelectionMode();
+      }
       if (editingMessageState) {
         setEditingMessageState(null);
         input.value = "";
@@ -960,6 +1294,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   deleteUndoToast.querySelector(".delete-undo-button")?.addEventListener("click", () => {
     void flushPendingDelete("undo");
+  });
+
+  selectionToolbar.addEventListener("click", (event) => {
+    const action = event.target.closest("button")?.dataset.action;
+    if (!action) {
+      return;
+    }
+
+    if (action === "cancel") {
+      exitSelectionMode();
+      return;
+    }
+
+    if (action === "delete-me" || action === "delete-all") {
+      void deleteSelectedMessages(action === "delete-all" ? "all" : "me");
+    }
   });
 
   window.addEventListener("resize", hideMessageMenu);
@@ -1004,6 +1354,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         setEditingMessageState(null);
         input.value = "";
         replaceMessageNode(messagesNode, updatedMessage, currentUser.id, chatType);
+        syncMessageSelectionState(updatedMessage.id);
         await loadChats("chatList", { showLoading: false });
         if (chatType === "direct") {
           await markCurrentDirectChatAsRead();
@@ -1054,6 +1405,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       removePendingMessage(pendingMessageNode);
       pendingMessageState = null;
       appendMessage(messagesNode, sentMessage, currentUser.id, chatType);
+      syncMessageSelectionState(sentMessage.id);
       if (shouldStickToBottom) {
         scrollMessagesToBottom(messagesNode);
       }

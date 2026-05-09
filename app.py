@@ -173,6 +173,34 @@ def parse_before_id_arg():
         return None
 
 
+def parse_message_ids_payload():
+    data = request.json or {}
+    raw_message_ids = data.get("message_ids", [])
+
+    if not isinstance(raw_message_ids, list) or not raw_message_ids:
+        return None, "message_ids должен быть непустым списком"
+
+    message_ids = []
+    seen = set()
+
+    for raw_message_id in raw_message_ids:
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError):
+            return None, "message_ids содержит некорректный id"
+
+        if message_id <= 0:
+            return None, "message_ids содержит некорректный id"
+
+        if message_id in seen:
+            continue
+
+        seen.add(message_id)
+        message_ids.append(message_id)
+
+    return message_ids, None
+
+
 def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
     params = [chat_id, user_id]
     before_clause = ""
@@ -293,6 +321,20 @@ def handle_join_chat(data):
     emit("join_ok", {"room": room})
 
 
+def delete_direct_chat_for_user(conn, chat_id, user_id):
+    conn.execute("""
+        INSERT OR IGNORE INTO hidden_direct_chats (chat_id, user_id)
+        VALUES (?, ?)
+    """, (chat_id, user_id))
+    conn.execute("""
+        INSERT OR IGNORE INTO hidden_messages (message_id, user_id)
+        SELECT id, ?
+        FROM messages
+        WHERE chat_id = ?
+    """, (user_id, chat_id))
+    conn.commit()
+
+
 @app.route("/")
 def home():
     return send_from_directory(".", "login.html")
@@ -402,10 +444,15 @@ def search_users():
                     FROM messages m
                     WHERE m.chat_id = c.id
                 )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM hidden_direct_chats hdc
+                    WHERE hdc.chat_id = c.id AND hdc.user_id = ?
+                )
             )
         WHERE u.username LIKE ? AND u.id != ?
         LIMIT 20
-    """, (user_id, user_id, f"%{username}%", user_id)).fetchall()
+    """, (user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
     conn.close()
 
     return jsonify([dict(u) for u in users])
@@ -469,7 +516,12 @@ def get_chats():
               FROM messages m
               WHERE m.chat_id = c.id
           )
-    """, (user_id, user_id, user_id)).fetchall()
+          AND NOT EXISTS (
+              SELECT 1
+              FROM hidden_direct_chats hdc
+              WHERE hdc.chat_id = c.id AND hdc.user_id = ?
+          )
+    """, (user_id, user_id, user_id, user_id)).fetchall()
 
     group_chats = conn.execute("""
         SELECT
@@ -684,6 +736,7 @@ def create_chat_message(chat_id):
         return jsonify({"message": "Чат не найден"}), 404
 
     cur = conn.cursor()
+    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = ?", (chat_id,))
     cur.execute("""
         INSERT INTO messages (chat_id, sender_id, text)
         VALUES (?, ?, ?)
@@ -710,6 +763,48 @@ def create_chat_message(chat_id):
     socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
 
     return jsonify(message_data), 201
+
+
+@app.delete("/chats/<int:chat_id>")
+def delete_direct_chat(chat_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    scope = (request.args.get("scope") or "me").strip().lower()
+    if scope not in {"me", "all"}:
+        return jsonify({"message": "Некорректный scope"}), 400
+
+    conn = get_db()
+    if not can_access_direct_chat(conn, user_id, chat_id):
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    if scope == "all":
+        message_ids = [
+            row["id"]
+            for row in conn.execute("SELECT id FROM messages WHERE chat_id = ?", (chat_id,)).fetchall()
+        ]
+
+        if message_ids:
+            placeholders = ",".join("?" for _ in message_ids)
+            conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
+
+        conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = ?", (chat_id,))
+        conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+        conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        conn.commit()
+        conn.close()
+
+        socketio.emit("chat_deleted", {
+            "chat_id": chat_id,
+            "scope": "all"
+        }, room=f"direct_{chat_id}")
+        return jsonify({"ok": True})
+
+    delete_direct_chat_for_user(conn, chat_id, user_id)
+    conn.close()
+    return jsonify({"ok": True})
 
 
 @app.post("/chats/<int:chat_id>/read")
@@ -827,6 +922,68 @@ def delete_chat_message(chat_id, message_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.post("/chats/<int:chat_id>/messages/bulk-delete")
+def bulk_delete_chat_messages(chat_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    scope = (request.json or {}).get("scope", "me")
+    scope = str(scope).strip().lower()
+    if scope not in {"me", "all"}:
+        return jsonify({"message": "Некорректный scope"}), 400
+
+    message_ids, error = parse_message_ids_payload()
+    if error:
+        return jsonify({"message": error}), 400
+
+    conn = get_db()
+    if not can_access_direct_chat(conn, user_id, chat_id):
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    placeholders = ",".join("?" for _ in message_ids)
+    message_rows = conn.execute(f"""
+        SELECT id, sender_id
+        FROM messages
+        WHERE chat_id = ? AND id IN ({placeholders})
+    """, [chat_id, *message_ids]).fetchall()
+
+    found_ids = {row["id"] for row in message_rows}
+    missing_ids = [message_id for message_id in message_ids if message_id not in found_ids]
+    if missing_ids:
+        conn.close()
+        return jsonify({"message": "Некоторые сообщения не найдены"}), 404
+
+    if scope == "all":
+        foreign_ids = [row["id"] for row in message_rows if row["sender_id"] != user_id]
+        if foreign_ids:
+            conn.close()
+            return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
+
+        conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
+        conn.execute(f"DELETE FROM messages WHERE chat_id = ? AND id IN ({placeholders})", [chat_id, *message_ids])
+        conn.commit()
+        conn.close()
+
+        for message_id in message_ids:
+            socketio.emit("message_deleted", {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "scope": "all"
+            }, room=f"direct_{chat_id}")
+
+        return jsonify({"ok": True, "deleted_ids": message_ids, "scope": scope})
+
+    conn.executemany("""
+        INSERT OR IGNORE INTO hidden_messages (message_id, user_id)
+        VALUES (?, ?)
+    """, [(message_id, user_id) for message_id in message_ids])
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "deleted_ids": message_ids, "scope": scope})
 
 
 @app.post("/groups")
@@ -1075,6 +1232,68 @@ def delete_group_message(group_id, message_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
+
+
+@app.post("/groups/<int:group_id>/messages/bulk-delete")
+def bulk_delete_group_messages(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    scope = (request.json or {}).get("scope", "me")
+    scope = str(scope).strip().lower()
+    if scope not in {"me", "all"}:
+        return jsonify({"message": "Некорректный scope"}), 400
+
+    message_ids, error = parse_message_ids_payload()
+    if error:
+        return jsonify({"message": error}), 400
+
+    conn = get_db()
+    if not can_access_group(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    placeholders = ",".join("?" for _ in message_ids)
+    message_rows = conn.execute(f"""
+        SELECT id, sender_id
+        FROM group_messages
+        WHERE group_id = ? AND id IN ({placeholders})
+    """, [group_id, *message_ids]).fetchall()
+
+    found_ids = {row["id"] for row in message_rows}
+    missing_ids = [message_id for message_id in message_ids if message_id not in found_ids]
+    if missing_ids:
+        conn.close()
+        return jsonify({"message": "Некоторые сообщения не найдены"}), 404
+
+    if scope == "all":
+        foreign_ids = [row["id"] for row in message_rows if row["sender_id"] != user_id]
+        if foreign_ids:
+            conn.close()
+            return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
+
+        conn.execute(f"DELETE FROM hidden_group_messages WHERE group_message_id IN ({placeholders})", message_ids)
+        conn.execute(f"DELETE FROM group_messages WHERE group_id = ? AND id IN ({placeholders})", [group_id, *message_ids])
+        conn.commit()
+        conn.close()
+
+        for message_id in message_ids:
+            socketio.emit("message_deleted", {
+                "group_id": group_id,
+                "message_id": message_id,
+                "scope": "all"
+            }, room=f"group_{group_id}")
+
+        return jsonify({"ok": True, "deleted_ids": message_ids, "scope": scope})
+
+    conn.executemany("""
+        INSERT OR IGNORE INTO hidden_group_messages (group_message_id, user_id)
+        VALUES (?, ?)
+    """, [(message_id, user_id) for message_id in message_ids])
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "deleted_ids": message_ids, "scope": scope})
 
 
 if __name__ == "__main__":

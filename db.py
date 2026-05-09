@@ -107,6 +107,16 @@ def init_db():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS hidden_direct_chats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(chat_id, user_id)
+    )
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS hidden_group_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_message_id INTEGER NOT NULL,
