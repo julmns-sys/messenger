@@ -983,6 +983,12 @@ textarea {
   gap: 18px;
   overflow: auto;
   height: calc(100% - 85px);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.thread-info-panel-body::-webkit-scrollbar {
+  display: none;
 }
 
 .thread-info-hero {
@@ -1054,11 +1060,18 @@ textarea {
 
 .thread-info-members-list {
   padding: 0;
-  max-height: 260px;
+  max-height: min(360px, 52vh);
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.thread-info-members-list::-webkit-scrollbar {
+  display: none;
 }
 
 .thread-info-members-list .member-item {
-  padding: 10px 12px;
+  padding: 10px;
   border-radius: 18px;
 }
 
@@ -1088,6 +1101,79 @@ textarea {
   flex: 0 0 auto;
   white-space: nowrap;
   padding: 8px 12px;
+}
+
+.thread-member-menu-hint {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 20px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+
+.thread-member-menu-hint:hover,
+.thread-member-menu-hint:focus-visible {
+  background: rgba(51, 144, 236, 0.08);
+  color: var(--text);
+  outline: none;
+}
+
+.thread-member-action-menu {
+  position: fixed;
+  z-index: 38;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.84);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 14px 30px rgba(31, 52, 79, 0.14);
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+  transform-origin: top left;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  pointer-events: none;
+}
+
+.thread-member-action-menu.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.thread-member-action-menu button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.thread-member-action-menu button:hover {
+  background: rgba(51, 144, 236, 0.08);
+}
+
+.thread-member-action-menu button.danger {
+  color: #c94b4b;
+}
+
+.thread-member-action-menu button.danger:hover {
+  background: rgba(217, 83, 79, 0.08);
 }
 
 .placeholder,
@@ -2272,6 +2358,14 @@ textarea {
 
   .member-item .button {
     margin-left: 54px;
+  }
+
+  .thread-info-members-list .member-item {
+    padding-right: 8px;
+  }
+
+  .thread-member-menu-hint {
+    display: none;
   }
 
   .thread-header {

@@ -741,6 +741,8 @@ function showChatListActionMenu(targetNode, clientX, clientY) {
     `
     : `
       <button type="button" data-action="edit-tag">Изменить тег</button>
+      <button type="button" data-action="clear-group-history">Очистить историю</button>
+      <button type="button" data-action="leave-group" class="danger">Выйти из группы</button>
     `;
   menu.hidden = false;
   const menuRect = menu.getBoundingClientRect();
@@ -836,6 +838,15 @@ function getActiveDirectChatContext() {
   };
 }
 
+function getActiveThreadContext() {
+  const currentPath = window.location.pathname.split("/").pop() || "index.html";
+  const currentId = new URLSearchParams(window.location.search).get("id");
+  return {
+    currentPath,
+    currentId
+  };
+}
+
 async function deleteDirectChatFromList(chatItem, scope, listId = "chatList") {
   const chatId = chatItem?.dataset.chatId;
   const chatType = chatItem?.dataset.chatType;
@@ -902,6 +913,42 @@ async function flushPendingChatDelete(reason = "commit", listId = "chatList") {
     renderChats(document.getElementById(state.listId || listId), filterChats(getChatSearchQuery()));
     hideChatDeleteUndoToast();
     window.alert(error.message);
+  }
+}
+
+async function clearGroupHistoryFromList(chatItem, listId = "chatList") {
+  const groupId = chatItem?.dataset.chatId;
+  const chatType = chatItem?.dataset.chatType;
+  if (!groupId || chatType !== "group") {
+    return;
+  }
+
+  await apiFetch(`/groups/${encodeURIComponent(groupId)}/messages`, {
+    method: "DELETE"
+  });
+  await loadChats(listId, { showLoading: false });
+
+  const { currentPath, currentId } = getActiveThreadContext();
+  if (currentPath === "group_chat.html" && String(currentId) === String(groupId)) {
+    window.location.reload();
+  }
+}
+
+async function leaveGroupFromList(chatItem, listId = "chatList") {
+  const groupId = chatItem?.dataset.chatId;
+  const chatType = chatItem?.dataset.chatType;
+  if (!groupId || chatType !== "group") {
+    return;
+  }
+
+  await apiFetch(`/groups/${encodeURIComponent(groupId)}/leave`, {
+    method: "DELETE"
+  });
+  await loadChats(listId, { showLoading: false });
+
+  const { currentPath, currentId } = getActiveThreadContext();
+  if (currentPath === "group_chat.html" && String(currentId) === String(groupId)) {
+    window.location.href = "index.html";
   }
 }
 
@@ -978,7 +1025,19 @@ function bindChatListActions(listId = "chatList") {
     }
 
     try {
-      await deleteDirectChatFromList(targetItem, action === "delete-all" ? "all" : "me", listId);
+      if (action === "delete-me" || action === "delete-all") {
+        await deleteDirectChatFromList(targetItem, action === "delete-all" ? "all" : "me", listId);
+        return;
+      }
+
+      if (action === "clear-group-history") {
+        await clearGroupHistoryFromList(targetItem, listId);
+        return;
+      }
+
+      if (action === "leave-group") {
+        await leaveGroupFromList(targetItem, listId);
+      }
     } catch (error) {
       window.alert(error.message);
     }

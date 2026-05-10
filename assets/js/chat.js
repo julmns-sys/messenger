@@ -320,7 +320,14 @@ function fillThreadInfoPanel(info, chatType) {
       membersWrapNode.hidden = false;
       membersListNode.innerHTML = members.length
         ? members.map((member) => `
-          <article class="member-item">
+          <article
+            class="member-item"
+            data-member-id="${escapeHtml(String(member.id))}"
+            data-member-name="${escapeHtml(member.name || member.username || "User")}"
+            data-member-username="${escapeHtml(member.username || "")}"
+            data-member-is-admin="${member.is_admin ? "true" : "false"}"
+            data-member-is-owner="${member.is_owner ? "true" : "false"}"
+          >
             <div class="avatar small">${escapeHtml(initials(member.name || member.username || "U"))}</div>
             <div class="result-meta">
               <div class="result-topline">
@@ -329,14 +336,7 @@ function fillThreadInfoPanel(info, chatType) {
               </div>
               <p class="result-username">@${escapeHtml(member.username || "")}</p>
             </div>
-            ${canManageAdmins && !member.is_owner ? `
-              <button
-                class="button button-secondary thread-member-admin-button"
-                type="button"
-                data-member-admin-toggle="${escapeHtml(String(member.id))}"
-                data-next-admin-state="${member.is_admin ? "false" : "true"}"
-              >${member.is_admin ? "Снять админа" : "Сделать админом"}</button>
-            ` : ""}
+            ${canManageAdmins && !member.is_owner ? '<button type="button" class="thread-member-menu-hint" data-member-menu-trigger="true" aria-label="Действия с участником">⋯</button>' : ""}
           </article>
         `).join("")
         : '<div class="empty-state">Участников пока нет</div>';
@@ -345,6 +345,14 @@ function fillThreadInfoPanel(info, chatType) {
       membersListNode.innerHTML = "";
     }
   }
+}
+
+function buildThreadMemberActionMenu() {
+  const menu = document.createElement("div");
+  menu.className = "thread-member-action-menu";
+  menu.hidden = true;
+  document.body.appendChild(menu);
+  return menu;
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -379,6 +387,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const editBanner = buildEditBanner();
   const deleteUndoToast = buildDeleteUndoToast();
   const selectionToolbar = buildSelectionToolbar();
+  const threadMemberActionMenu = buildThreadMemberActionMenu();
   let socket = null;
   let selectedUser = null;
   let currentThreadInfo = null;
@@ -391,6 +400,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   let touchMenuPressTimer = null;
   let touchMenuTarget = null;
   let touchMenuPoint = null;
+  let threadMemberTouchTimer = null;
+  let activeThreadMemberItem = null;
   let oldestMessageId = null;
   let hasMoreMessages = false;
   let isLoadingOlder = false;
@@ -442,6 +453,39 @@ document.addEventListener("DOMContentLoaded", async () => {
       title
     };
     fillThreadInfoPanel(currentThreadInfo, chatType);
+  }
+
+  function hideThreadMemberActionMenu() {
+    activeThreadMemberItem = null;
+    threadMemberActionMenu.classList.remove("visible");
+    window.setTimeout(() => {
+      if (!threadMemberActionMenu.classList.contains("visible")) {
+        threadMemberActionMenu.hidden = true;
+      }
+    }, 120);
+  }
+
+  function showThreadMemberActionMenu(memberItem, clientX, clientY) {
+    if (!memberItem || memberItem.dataset.memberIsOwner === "true") {
+      return;
+    }
+
+    const isAdmin = memberItem.dataset.memberIsAdmin === "true";
+    threadMemberActionMenu.innerHTML = `
+      <button type="button" data-member-action="toggle-admin">${isAdmin ? "Снять админа" : "Сделать админом"}</button>
+      <button type="button" data-member-action="remove-member" class="danger">Удалить из группы</button>
+    `;
+    activeThreadMemberItem = memberItem;
+    threadMemberActionMenu.hidden = false;
+    const menuWidth = 190;
+    const menuHeight = 84;
+    const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
+    const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
+    threadMemberActionMenu.style.left = `${Math.max(12, left)}px`;
+    threadMemberActionMenu.style.top = `${Math.max(12, top)}px`;
+    requestAnimationFrame(() => {
+      threadMemberActionMenu.classList.add("visible");
+    });
   }
 
   function renderPendingDirectChat(user) {
@@ -1212,28 +1256,96 @@ document.addEventListener("DOMContentLoaded", async () => {
     setThreadInfoOpen(false);
   });
 
-  threadInfoMembersListNode?.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-member-admin-toggle]");
-    if (!button || chatType !== "group" || !chatId) {
+  threadInfoMembersListNode?.addEventListener("contextmenu", (event) => {
+    const memberItem = event.target.closest(".member-item[data-member-id]");
+    if (!memberItem || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
       return;
     }
 
-    const memberUserId = button.dataset.memberAdminToggle;
-    const nextAdminState = button.dataset.nextAdminState === "true";
+    event.preventDefault();
+    showThreadMemberActionMenu(memberItem, event.clientX, event.clientY);
+  });
+
+  threadInfoMembersListNode?.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-member-menu-trigger]");
+    if (!trigger || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
+      return;
+    }
+
+    const memberItem = trigger.closest(".member-item[data-member-id]");
+    if (!memberItem) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = trigger.getBoundingClientRect();
+    showThreadMemberActionMenu(memberItem, rect.right, rect.bottom + 6);
+  });
+
+  threadInfoMembersListNode?.addEventListener("touchstart", (event) => {
+    const touch = event.touches[0];
+    const memberItem = event.target.closest(".member-item[data-member-id]");
+    if (!touch || !memberItem || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
+      return;
+    }
+
+    if (threadMemberTouchTimer) {
+      window.clearTimeout(threadMemberTouchTimer);
+    }
+
+    activeThreadMemberItem = memberItem;
+    threadMemberTouchTimer = window.setTimeout(() => {
+      showThreadMemberActionMenu(memberItem, touch.clientX, touch.clientY);
+      threadMemberTouchTimer = null;
+    }, 520);
+  }, { passive: true });
+
+  threadInfoMembersListNode?.addEventListener("touchend", () => {
+    if (threadMemberTouchTimer) {
+      window.clearTimeout(threadMemberTouchTimer);
+      threadMemberTouchTimer = null;
+    }
+  }, { passive: true });
+
+  threadInfoMembersListNode?.addEventListener("touchcancel", () => {
+    if (threadMemberTouchTimer) {
+      window.clearTimeout(threadMemberTouchTimer);
+      threadMemberTouchTimer = null;
+    }
+  }, { passive: true });
+
+  threadMemberActionMenu.addEventListener("click", async (event) => {
+    const action = event.target.closest("button")?.dataset.memberAction;
+    const memberItem = activeThreadMemberItem;
+    hideThreadMemberActionMenu();
+    if (!action || !memberItem || !chatId) {
+      return;
+    }
+
+    const memberUserId = memberItem.dataset.memberId;
     if (!memberUserId) {
       return;
     }
 
-    button.disabled = true;
     try {
-      await apiFetch(`/groups/${encodeURIComponent(chatId)}/members/${encodeURIComponent(memberUserId)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ is_admin: nextAdminState })
-      });
+      if (action === "toggle-admin") {
+        const nextAdminState = memberItem.dataset.memberIsAdmin !== "true";
+        await apiFetch(`/groups/${encodeURIComponent(chatId)}/members/${encodeURIComponent(memberUserId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ is_admin: nextAdminState })
+        });
+      }
+
+      if (action === "remove-member") {
+        await apiFetch(`/groups/${encodeURIComponent(chatId)}/members/${encodeURIComponent(memberUserId)}`, {
+          method: "DELETE"
+        });
+      }
+
       await refreshCurrentThreadInfo();
     } catch (error) {
       window.alert(error.message);
-      button.disabled = false;
     }
   });
 
@@ -1395,11 +1507,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!event.target.closest(".message-action-menu")) {
       hideMessageMenu();
     }
+    if (!event.target.closest(".thread-member-action-menu") && !event.target.closest("[data-member-menu-trigger]")) {
+      hideThreadMemberActionMenu();
+    }
   });
 
   document.addEventListener("mousedown", (event) => {
     if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
       hideMessageMenu();
+    }
+    if (!event.target.closest(".thread-member-action-menu") && !event.target.closest(".member-item[data-member-id]")) {
+      hideThreadMemberActionMenu();
     }
   });
 
@@ -1407,11 +1525,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
       hideMessageMenu();
     }
+    if (!event.target.closest(".thread-member-action-menu") && !event.target.closest(".member-item[data-member-id]")) {
+      hideThreadMemberActionMenu();
+    }
   }, { passive: true });
 
   document.addEventListener("contextmenu", (event) => {
     if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
       hideMessageMenu();
+    }
+    if (!event.target.closest(".thread-member-action-menu") && !event.target.closest(".member-item[data-member-id]")) {
+      hideThreadMemberActionMenu();
     }
   });
 
@@ -1425,6 +1549,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         input.value = "";
       }
       hideMessageMenu();
+      hideThreadMemberActionMenu();
     }
   });
 
@@ -1455,7 +1580,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  window.addEventListener("resize", hideMessageMenu);
+  window.addEventListener("resize", () => {
+    hideMessageMenu();
+    hideThreadMemberActionMenu();
+  });
 
   if (scrollDownButton) {
     scrollDownButton.addEventListener("click", () => {
