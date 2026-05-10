@@ -18,7 +18,6 @@
               </div>
               <div class="sidebar-actions">
                 <a class="icon-button" href="index.html" aria-label="Chats">←</a>
-                <button class="icon-button" id="logoutButton" type="button" aria-label="Logout">×</button>
               </div>
             </div>
             <div class="sidebar-search">
@@ -39,10 +38,14 @@
             </div>
             <div class="sidebar-profile-body">
               <div class="sidebar-profile-card">
+                <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                <div class="sidebar-profile-menu" id="sidebarProfileMenu" hidden>
+                  <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button">Изменить профиль</button>
+                  <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button">Выйти из аккаунта</button>
+                </div>
                 <div class="avatar sidebar-profile-avatar" id="sidebarProfileAvatar">?</div>
                 <h2 class="sidebar-profile-name" id="sidebarProfileName">Пользователь</h2>
                 <p class="sidebar-profile-username" id="sidebarProfileUsername">@username</p>
-                <button class="sidebar-profile-mode-toggle" id="sidebarProfileEditToggle" type="button">Изменить</button>
                 <div class="sidebar-profile-facts">
                   <div class="sidebar-profile-fact">
                     <span class="sidebar-profile-label">Имя</span>
@@ -70,12 +73,6 @@
                     <div class="sidebar-profile-line">
                       <strong id="sidebarProfileBio">Не указана</strong>
                       <button class="sidebar-profile-edit" type="button" data-profile-edit="bio" aria-label="Изменить bio">✎</button>
-                    </div>
-                  </div>
-                  <div class="sidebar-profile-fact">
-                    <span class="sidebar-profile-label">ID</span>
-                    <div class="sidebar-profile-line">
-                      <strong id="sidebarProfileId">-</strong>
                     </div>
                   </div>
                 </div>
@@ -106,9 +103,7 @@
             <button class="button" style="width: auto;" type="submit">Найти</button>
           </form>
           <div id="searchStatus" class="status"></div>
-          <div class="result-list" id="resultList">
-            <div class="empty-state">Введите username для поиска</div>
-          </div>
+          <div class="result-list" id="resultList" hidden></div>
         </div>
 
         <div class="panel stack">

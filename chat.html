@@ -19,7 +19,6 @@
               <div class="sidebar-actions">
                 <a class="icon-button" href="search.html" aria-label="Search">@</a>
                 <a class="icon-button" href="create_group.html" aria-label="Create group">+</a>
-                <button class="icon-button" id="logoutButton" type="button" aria-label="Logout">×</button>
               </div>
             </div>
             <div class="sidebar-search">
@@ -40,10 +39,14 @@
             </div>
             <div class="sidebar-profile-body">
               <div class="sidebar-profile-card">
+                <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                <div class="sidebar-profile-menu" id="sidebarProfileMenu" hidden>
+                  <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button">Изменить профиль</button>
+                  <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button">Выйти из аккаунта</button>
+                </div>
                 <div class="avatar sidebar-profile-avatar" id="sidebarProfileAvatar">?</div>
                 <h2 class="sidebar-profile-name" id="sidebarProfileName">Пользователь</h2>
                 <p class="sidebar-profile-username" id="sidebarProfileUsername">@username</p>
-                <button class="sidebar-profile-mode-toggle" id="sidebarProfileEditToggle" type="button">Изменить</button>
                 <div class="sidebar-profile-facts">
                   <div class="sidebar-profile-fact">
                     <span class="sidebar-profile-label">Имя</span>
@@ -71,12 +74,6 @@
                     <div class="sidebar-profile-line">
                       <strong id="sidebarProfileBio">Не указана</strong>
                       <button class="sidebar-profile-edit" type="button" data-profile-edit="bio" aria-label="Изменить bio">✎</button>
-                    </div>
-                  </div>
-                  <div class="sidebar-profile-fact">
-                    <span class="sidebar-profile-label">ID</span>
-                    <div class="sidebar-profile-line">
-                      <strong id="sidebarProfileId">-</strong>
                     </div>
                   </div>
                 </div>
@@ -134,17 +131,13 @@
               <p class="thread-info-handle" id="threadInfoHandle">@username</p>
             </div>
             <div class="thread-info-facts">
-              <div class="thread-info-fact">
-                <span class="thread-info-label">Описание</span>
+              <div class="thread-info-fact" id="threadInfoDescriptionFact">
+                <span class="thread-info-label" id="threadInfoDescriptionLabel">Bio</span>
                 <strong id="threadInfoDescription">Нет описания</strong>
               </div>
               <div class="thread-info-fact">
                 <span class="thread-info-label">Тип</span>
                 <strong id="threadInfoType">Личный чат</strong>
-              </div>
-              <div class="thread-info-fact">
-                <span class="thread-info-label">ID</span>
-                <strong id="threadInfoId">-</strong>
               </div>
             </div>
             <div class="thread-info-members" id="threadInfoMembersWrap" hidden>

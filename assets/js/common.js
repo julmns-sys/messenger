@@ -12,6 +12,8 @@ let chatListTouchTimer = null;
 let chatListTouchTarget = null;
 let chatDeleteUndoToast = null;
 let chatTagEditorModal = null;
+let groupOwnerLeaveModal = null;
+let groupDeleteConfirmModal = null;
 let pendingChatDeleteState = null;
 let chatDeleteUndoCountdownTimer = null;
 const pendingDeletedChatKeys = new Set();
@@ -146,6 +148,75 @@ function bindLogout(buttonId = "logoutButton") {
   });
 }
 
+let profileLogoutModal = null;
+
+function buildProfileLogoutModal() {
+  if (profileLogoutModal) {
+    return profileLogoutModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "profile-logout-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="profile-logout-backdrop" data-profile-logout-close="true"></div>
+    <div class="profile-logout-card" role="dialog" aria-modal="true" aria-labelledby="profileLogoutTitle">
+      <div class="profile-logout-header">
+        <h3 id="profileLogoutTitle">Выйти из аккаунта?</h3>
+        <button type="button" class="profile-logout-close" data-profile-logout-close="true" aria-label="Закрыть">×</button>
+      </div>
+      <div class="profile-logout-body">
+        <div class="profile-logout-actions">
+          <button type="button" class="button button-secondary" data-profile-logout-close="true">Отмена</button>
+          <button type="button" class="button button-danger" id="profileLogoutConfirm">Выйти</button>
+        </div>
+        <div class="status profile-logout-status" id="profileLogoutStatus"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  profileLogoutModal = modal;
+  return modal;
+}
+
+function closeProfileLogoutModal() {
+  if (!profileLogoutModal) {
+    return;
+  }
+  profileLogoutModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (profileLogoutModal && !profileLogoutModal.classList.contains("visible")) {
+      profileLogoutModal.hidden = true;
+    }
+  }, 180);
+}
+
+function openProfileLogoutModal() {
+  const modal = buildProfileLogoutModal();
+  const confirmButton = modal.querySelector("#profileLogoutConfirm");
+  const status = modal.querySelector("#profileLogoutStatus");
+  if (!confirmButton || !status) {
+    return;
+  }
+
+  status.textContent = "";
+  status.className = "status profile-logout-status";
+  confirmButton.disabled = false;
+  confirmButton.textContent = "Выйти";
+  confirmButton.onclick = () => {
+    confirmButton.disabled = true;
+    confirmButton.textContent = "Выход...";
+    status.textContent = "Завершение сессии...";
+    clearSession();
+    window.location.href = "login.html";
+  };
+
+  modal.hidden = false;
+  requestAnimationFrame(() => {
+    modal.classList.add("visible");
+  });
+}
+
 function fillUserBadge(targetId = "currentUserBadge") {
   const target = document.getElementById(targetId);
   const user = getCurrentUser();
@@ -158,8 +229,7 @@ function getSidebarProfileFields() {
     name: document.getElementById("sidebarProfileNameField"),
     email: document.getElementById("sidebarProfileEmail"),
     username: document.getElementById("sidebarProfileHandle"),
-    bio: document.getElementById("sidebarProfileBio"),
-    id: document.getElementById("sidebarProfileId")
+    bio: document.getElementById("sidebarProfileBio")
   };
 }
 
@@ -175,8 +245,6 @@ function getSidebarProfileFieldValue(field, user) {
       return user.username ? `@${user.username}` : "Не указан";
     case "bio":
       return user.bio || "Не указана";
-    case "id":
-      return user.id ? String(user.id) : "-";
     default:
       return "";
   }
@@ -189,7 +257,7 @@ function fillSidebarProfile() {
   const username = document.getElementById("sidebarProfileUsername");
   const fields = getSidebarProfileFields();
 
-  if (!user || !avatar || !name || !username || !fields.name || !fields.email || !fields.username || !fields.bio || !fields.id) {
+  if (!user || !avatar || !name || !username || !fields.name || !fields.email || !fields.username || !fields.bio) {
     return;
   }
 
@@ -203,7 +271,6 @@ function fillSidebarProfile() {
   fields.username.textContent = getSidebarProfileFieldValue("username", user);
   fields.bio.textContent = getSidebarProfileFieldValue("bio", user);
   fields.bio.classList.toggle("multiline", Boolean(user.bio));
-  fields.id.textContent = getSidebarProfileFieldValue("id", user);
 
   fields.email.textContent = getSidebarProfileFieldValue("email", user);
   fields.email.classList.toggle("is-blurred", Boolean(user.email));
@@ -213,12 +280,7 @@ function fillSidebarProfile() {
 
 function setSidebarProfileEditMode(sidebar, isActive) {
   if (!sidebar) return;
-  const toggleButton = document.getElementById("sidebarProfileEditToggle");
   sidebar.classList.toggle("profile-edit-mode", Boolean(isActive));
-  if (toggleButton) {
-    toggleButton.textContent = isActive ? "Готово" : "Изменить";
-    toggleButton.setAttribute("aria-pressed", isActive ? "true" : "false");
-  }
   if (!isActive) {
     document.querySelectorAll(".sidebar-profile-fact").forEach(hideSidebarProfileEditor);
   }
@@ -421,17 +483,42 @@ function setSidebarProfileOpen(sidebar, isOpen) {
   }
 }
 
+function closeSidebarProfileMenu(menuTrigger, menu) {
+  if (!menuTrigger || !menu) return;
+  menuTrigger.setAttribute("aria-expanded", "false");
+  menu.classList.remove("visible");
+  window.setTimeout(() => {
+    if (!menu.classList.contains("visible")) {
+      menu.hidden = true;
+    }
+  }, 180);
+}
+
+function openSidebarProfileMenu(menuTrigger, menu) {
+  if (!menuTrigger || !menu) return;
+  menu.hidden = false;
+  menuTrigger.setAttribute("aria-expanded", "true");
+  requestAnimationFrame(() => {
+    menu.classList.add("visible");
+  });
+}
+
 function initSidebarProfile() {
   const sidebar = document.querySelector(".sidebar");
   const badge = document.getElementById("currentUserBadge");
   const backButton = document.getElementById("sidebarProfileBack");
   const emailButton = document.getElementById("sidebarProfileEmail");
-  const editToggleButton = document.getElementById("sidebarProfileEditToggle");
+  const profileFacts = document.querySelector(".sidebar-profile-facts");
+  const menuTrigger = document.getElementById("sidebarProfileMenuTrigger");
+  const menu = document.getElementById("sidebarProfileMenu");
+  const editActionButton = document.getElementById("sidebarProfileEditAction");
+  const logoutButton = document.getElementById("sidebarProfileLogout");
   const editButtons = document.querySelectorAll("[data-profile-edit]");
 
   fillSidebarProfile();
+  buildProfileLogoutModal();
 
-  if (!sidebar || !badge || !backButton || !editToggleButton || badge.dataset.profileBound === "true") {
+  if (!sidebar || !badge || !backButton || !menuTrigger || !menu || badge.dataset.profileBound === "true") {
     return;
   }
 
@@ -439,17 +526,34 @@ function initSidebarProfile() {
   badge.addEventListener("click", () => {
     setSidebarProfileOpen(sidebar, true);
     setSidebarProfileEditMode(sidebar, false);
+    closeSidebarProfileMenu(menuTrigger, menu);
     void syncSidebarProfile();
   });
 
   backButton.addEventListener("click", () => {
     setSidebarProfileOpen(sidebar, false);
     setSidebarProfileEditMode(sidebar, false);
+    closeSidebarProfileMenu(menuTrigger, menu);
   });
 
-  editToggleButton.addEventListener("click", () => {
+  menuTrigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (menu.hidden) {
+      openSidebarProfileMenu(menuTrigger, menu);
+      return;
+    }
+    closeSidebarProfileMenu(menuTrigger, menu);
+  });
+
+  editActionButton?.addEventListener("click", () => {
     const nextState = !sidebar.classList.contains("profile-edit-mode");
     setSidebarProfileEditMode(sidebar, nextState);
+    closeSidebarProfileMenu(menuTrigger, menu);
+  });
+
+  logoutButton?.addEventListener("click", () => {
+    closeSidebarProfileMenu(menuTrigger, menu);
+    openProfileLogoutModal();
   });
 
   if (emailButton && !emailButton.dataset.toggleBound) {
@@ -473,9 +577,46 @@ function initSidebarProfile() {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      closeSidebarProfileMenu(menuTrigger, menu);
+      return;
+    }
+    if (event.key === "Escape" && profileLogoutModal && !profileLogoutModal.hidden) {
+      closeProfileLogoutModal();
+      return;
+    }
     if (event.key === "Escape" && sidebar.classList.contains("profile-open")) {
       setSidebarProfileOpen(sidebar, false);
       setSidebarProfileEditMode(sidebar, false);
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (menu.hidden) return;
+    if (event.target.closest("#sidebarProfileMenu") || event.target.closest("#sidebarProfileMenuTrigger")) {
+      return;
+    }
+    closeSidebarProfileMenu(menuTrigger, menu);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!sidebar.classList.contains("profile-edit-mode")) {
+      return;
+    }
+    if (event.target.closest(".sidebar-profile-facts")) {
+      return;
+    }
+    if (event.target.closest("#sidebarProfileMenu") || event.target.closest("#sidebarProfileMenuTrigger")) {
+      return;
+    }
+    if (profileFacts) {
+      setSidebarProfileEditMode(sidebar, false);
+    }
+  });
+
+  profileLogoutModal?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-profile-logout-close=\"true\"]")) {
+      closeProfileLogoutModal();
     }
   });
 }
@@ -646,6 +787,99 @@ function buildChatDeleteUndoToast() {
   document.body.appendChild(toast);
   chatDeleteUndoToast = toast;
   return toast;
+}
+
+function buildGroupOwnerLeaveModal() {
+  if (groupOwnerLeaveModal) {
+    return groupOwnerLeaveModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "group-owner-leave-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="group-owner-leave-backdrop" data-group-owner-close="true"></div>
+    <div class="group-owner-leave-card" role="dialog" aria-modal="true" aria-labelledby="groupOwnerLeaveTitle">
+      <div class="group-owner-leave-header">
+        <h3 id="groupOwnerLeaveTitle">Выход создателя</h3>
+        <button type="button" class="group-owner-leave-close" data-group-owner-close="true" aria-label="Закрыть">×</button>
+      </div>
+      <div class="group-owner-leave-body">
+        <p class="group-owner-leave-copy" id="groupOwnerLeaveCopy">Выберите действие перед выходом из группы.</p>
+        <div class="group-owner-leave-options">
+          <button type="button" class="button button-danger group-owner-leave-option" data-owner-leave-action="delete-group">
+            Удалить группу для всех
+          </button>
+        </div>
+        <div class="group-owner-leave-transfer" id="groupOwnerLeaveTransfer">
+          <div class="group-owner-leave-transfer-title">Новый создатель</div>
+          <div class="group-owner-leave-members" id="groupOwnerLeaveMembers"></div>
+          <button type="button" class="button group-owner-leave-submit" id="groupOwnerLeaveSubmit" hidden disabled>
+            Передать права и выйти
+          </button>
+        </div>
+        <div class="status group-owner-leave-status" id="groupOwnerLeaveStatus"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  groupOwnerLeaveModal = modal;
+  return modal;
+}
+
+function buildGroupDeleteConfirmModal() {
+  if (groupDeleteConfirmModal) {
+    return groupDeleteConfirmModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "group-delete-confirm-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="group-delete-confirm-backdrop" data-group-delete-close="true"></div>
+    <div class="group-delete-confirm-card" role="dialog" aria-modal="true" aria-labelledby="groupDeleteConfirmTitle">
+      <div class="group-delete-confirm-header">
+        <h3 id="groupDeleteConfirmTitle">Удалить группу</h3>
+        <button type="button" class="group-delete-confirm-close" data-group-delete-close="true" aria-label="Закрыть">×</button>
+      </div>
+      <div class="group-delete-confirm-body">
+        <p class="group-delete-confirm-copy">Вы уверены, что хотите удалить группу для всех участников?</p>
+        <p class="group-delete-confirm-note">Это действие нельзя отменить.</p>
+        <div class="group-delete-confirm-actions">
+          <button type="button" class="button button-secondary" data-group-delete-close="true">Отмена</button>
+          <button type="button" class="button button-danger" id="groupDeleteConfirmSubmit">Удалить группу</button>
+        </div>
+        <div class="status group-delete-confirm-status" id="groupDeleteConfirmStatus"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  groupDeleteConfirmModal = modal;
+  return modal;
+}
+
+function closeGroupOwnerLeaveModal() {
+  if (!groupOwnerLeaveModal) {
+    return;
+  }
+  groupOwnerLeaveModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (groupOwnerLeaveModal && !groupOwnerLeaveModal.classList.contains("visible")) {
+      groupOwnerLeaveModal.hidden = true;
+    }
+  }, 180);
+}
+
+function closeGroupDeleteConfirmModal() {
+  if (!groupDeleteConfirmModal) {
+    return;
+  }
+  groupDeleteConfirmModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (groupDeleteConfirmModal && !groupDeleteConfirmModal.classList.contains("visible")) {
+      groupDeleteConfirmModal.hidden = true;
+    }
+  }, 180);
 }
 
 function hideChatDeleteUndoToast() {
@@ -847,6 +1081,176 @@ function getActiveThreadContext() {
   };
 }
 
+function setGroupOwnerLeaveStatus(message, type = "") {
+  const modal = buildGroupOwnerLeaveModal();
+  const status = modal.querySelector("#groupOwnerLeaveStatus");
+  if (!status) {
+    return;
+  }
+  status.textContent = message;
+  status.className = `status group-owner-leave-status ${type}`.trim();
+}
+
+function renderGroupOwnerTransferMembers(members, selectedMemberId = "") {
+  const modal = buildGroupOwnerLeaveModal();
+  const membersNode = modal.querySelector("#groupOwnerLeaveMembers");
+  const submitButton = modal.querySelector("#groupOwnerLeaveSubmit");
+  if (!membersNode || !submitButton) {
+    return;
+  }
+
+  if (!members.length) {
+    membersNode.innerHTML = '<div class="empty-state">Нет участников для передачи прав</div>';
+    submitButton.hidden = true;
+    submitButton.disabled = true;
+    return;
+  }
+
+  membersNode.innerHTML = members.map((member) => {
+    const isSelected = String(member.id) === String(selectedMemberId);
+    return `
+      <article class="group-owner-leave-member${isSelected ? " selected" : ""}" data-owner-member-id="${escapeHtml(String(member.id))}">
+        <div class="avatar small">${escapeHtml(initials(member.name || member.username || "U"))}</div>
+        <div class="result-meta">
+          <h3 class="result-name">${escapeHtml(member.name || member.username || "User")}</h3>
+          <p class="result-username">@${escapeHtml(member.username || "")}</p>
+        </div>
+        <input class="group-owner-leave-member-check" type="radio" name="groupOwnerLeaveMember" ${isSelected ? "checked" : ""} aria-label="Выбрать участника">
+      </article>
+    `;
+  }).join("");
+
+  submitButton.hidden = false;
+  submitButton.disabled = !selectedMemberId;
+}
+
+function openGroupOwnerLeaveModal(groupContext, payload, listId = "chatList") {
+  const modal = buildGroupOwnerLeaveModal();
+  const confirmModal = buildGroupDeleteConfirmModal();
+  const copy = modal.querySelector("#groupOwnerLeaveCopy");
+  const transferWrap = modal.querySelector("#groupOwnerLeaveTransfer");
+  const submitButton = modal.querySelector("#groupOwnerLeaveSubmit");
+  const deleteButton = modal.querySelector('[data-owner-leave-action="delete-group"]');
+  const transferableMembers = Array.isArray(payload?.transferable_members) ? payload.transferable_members : [];
+  let selectedMemberId = "";
+  let isSubmitting = false;
+
+  if (!copy || !transferWrap || !submitButton || !deleteButton || !confirmModal) {
+    return;
+  }
+
+  modal.dataset.groupId = String(groupContext.groupId);
+  modal.dataset.listId = listId;
+  modal.dataset.currentPath = groupContext.currentPath || "";
+  modal.dataset.currentId = groupContext.currentId || "";
+  modal.dataset.selectedMemberId = "";
+  copy.textContent = payload?.can_transfer_owner
+    ? "Удалите группу для всех или сразу выберите нового владельца."
+    : "В группе нет других участников, поэтому передать права нельзя.";
+  transferWrap.hidden = false;
+  renderGroupOwnerTransferMembers(transferableMembers, "");
+  deleteButton.disabled = false;
+  deleteButton.classList.remove("active");
+  setGroupOwnerLeaveStatus("");
+
+  const updateSubmitState = () => {
+    const canTransfer = payload?.can_transfer_owner && Boolean(selectedMemberId);
+    submitButton.hidden = !payload?.can_transfer_owner;
+    submitButton.disabled = !canTransfer || isSubmitting;
+    submitButton.textContent = isSubmitting ? "Передача..." : "Передать права и выйти";
+  };
+
+  const setSubmittingState = (nextState) => {
+    isSubmitting = nextState;
+    deleteButton.disabled = nextState;
+    updateSubmitState();
+  };
+
+  deleteButton.onclick = () => {
+    if (isSubmitting) {
+      return;
+    }
+    const confirmSubmit = confirmModal.querySelector("#groupDeleteConfirmSubmit");
+    const confirmStatus = confirmModal.querySelector("#groupDeleteConfirmStatus");
+    if (!confirmSubmit || !confirmStatus) {
+      return;
+    }
+
+    confirmStatus.textContent = "";
+    confirmStatus.className = "status group-delete-confirm-status";
+    confirmSubmit.disabled = false;
+    confirmSubmit.textContent = "Удалить группу";
+    confirmSubmit.onclick = async () => {
+      confirmSubmit.disabled = true;
+      confirmSubmit.textContent = "Удаление...";
+      confirmStatus.textContent = "Удаление группы...";
+
+      try {
+        await apiFetch(`/groups/${encodeURIComponent(groupContext.groupId)}`, {
+          method: "DELETE"
+        });
+        closeGroupDeleteConfirmModal();
+        closeGroupOwnerLeaveModal();
+        await loadChats(listId, { showLoading: false });
+        if (groupContext.currentPath === "group_chat.html" && String(groupContext.currentId) === String(groupContext.groupId)) {
+          window.location.href = "index.html";
+        }
+      } catch (error) {
+        confirmSubmit.disabled = false;
+        confirmSubmit.textContent = "Удалить группу";
+        confirmStatus.textContent = error.message;
+        confirmStatus.className = "status group-delete-confirm-status error";
+      }
+    };
+
+    confirmModal.hidden = false;
+    requestAnimationFrame(() => {
+      confirmModal.classList.add("visible");
+    });
+  };
+
+  const membersNode = modal.querySelector("#groupOwnerLeaveMembers");
+  membersNode.onclick = (event) => {
+    const memberNode = event.target.closest("[data-owner-member-id]");
+    if (!memberNode || isSubmitting) {
+      return;
+    }
+    selectedMemberId = String(memberNode.dataset.ownerMemberId || "");
+    modal.dataset.selectedMemberId = selectedMemberId;
+    renderGroupOwnerTransferMembers(transferableMembers, selectedMemberId);
+    updateSubmitState();
+  };
+
+  submitButton.onclick = async () => {
+    if (!selectedMemberId || isSubmitting) {
+      return;
+    }
+
+    setSubmittingState(true);
+    setGroupOwnerLeaveStatus("Передача прав...", "");
+
+    try {
+      await apiFetch(`/groups/${encodeURIComponent(groupContext.groupId)}/transfer-owner`, {
+        method: "POST",
+        body: JSON.stringify({ new_owner_id: selectedMemberId })
+      });
+      closeGroupOwnerLeaveModal();
+      await loadChats(listId, { showLoading: false });
+      if (groupContext.currentPath === "group_chat.html" && String(groupContext.currentId) === String(groupContext.groupId)) {
+        window.location.href = "index.html";
+      }
+    } catch (error) {
+      setSubmittingState(false);
+      setGroupOwnerLeaveStatus(error.message, "error");
+    }
+  };
+
+  modal.hidden = false;
+  requestAnimationFrame(() => {
+    modal.classList.add("visible");
+  });
+}
+
 async function deleteDirectChatFromList(chatItem, scope, listId = "chatList") {
   const chatId = chatItem?.dataset.chatId;
   const chatType = chatItem?.dataset.chatType;
@@ -941,15 +1345,45 @@ async function leaveGroupFromList(chatItem, listId = "chatList") {
     return;
   }
 
-  await apiFetch(`/groups/${encodeURIComponent(groupId)}/leave`, {
-    method: "DELETE"
-  });
-  await loadChats(listId, { showLoading: false });
+  const url = `${API.baseUrl}/groups/${encodeURIComponent(groupId)}/leave`;
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${getToken()}`
+  };
 
-  const { currentPath, currentId } = getActiveThreadContext();
-  if (currentPath === "group_chat.html" && String(currentId) === String(groupId)) {
-    window.location.href = "index.html";
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers
+  });
+
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (response.ok) {
+    await loadChats(listId, { showLoading: false });
+    const { currentPath, currentId } = getActiveThreadContext();
+    if (currentPath === "group_chat.html" && String(currentId) === String(groupId)) {
+      window.location.href = "index.html";
+    }
+    return;
   }
+
+  if (response.status === 409 && payload?.code === "owner_leave_requires_action") {
+    const groupContext = {
+      groupId,
+      ...getActiveThreadContext()
+    };
+    openGroupOwnerLeaveModal(groupContext, payload, listId);
+    return;
+  }
+
+  const message =
+    (payload && payload.message) ||
+    (payload && payload.detail) ||
+    (typeof payload === "string" ? payload : "Request failed");
+  throw new Error(message);
 }
 
 function bindChatListActions(listId = "chatList") {
@@ -961,6 +1395,8 @@ function bindChatListActions(listId = "chatList") {
   buildChatListActionMenu();
   buildChatDeleteUndoToast();
   buildChatTagEditorModal();
+  buildGroupOwnerLeaveModal();
+  buildGroupDeleteConfirmModal();
   list.dataset.chatActionsBound = "true";
 
   list.addEventListener("contextmenu", (event) => {
@@ -1047,6 +1483,18 @@ function bindChatListActions(listId = "chatList") {
     void flushPendingChatDelete("undo", listId);
   });
 
+  groupOwnerLeaveModal?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-group-owner-close=\"true\"]")) {
+      closeGroupOwnerLeaveModal();
+    }
+  });
+
+  groupDeleteConfirmModal?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-group-delete-close=\"true\"]")) {
+      closeGroupDeleteConfirmModal();
+    }
+  });
+
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".chat-list-action-menu")) {
       hideChatListActionMenu();
@@ -1057,9 +1505,20 @@ function bindChatListActions(listId = "chatList") {
     if (
       !event.target.closest(".chat-list-action-menu") &&
       !event.target.closest(".chat-item") &&
-      !event.target.closest(".chat-tag-editor-card")
+      !event.target.closest(".chat-tag-editor-card") &&
+      !event.target.closest(".group-owner-leave-card")
     ) {
       hideChatListActionMenu();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && groupDeleteConfirmModal && !groupDeleteConfirmModal.hidden) {
+      closeGroupDeleteConfirmModal();
+      return;
+    }
+    if (event.key === "Escape" && groupOwnerLeaveModal && !groupOwnerLeaveModal.hidden) {
+      closeGroupOwnerLeaveModal();
     }
   });
 

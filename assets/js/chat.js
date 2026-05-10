@@ -290,13 +290,16 @@ function fillThreadInfoPanel(info, chatType) {
   const avatarNode = document.getElementById("threadInfoAvatar");
   const nameNode = document.getElementById("threadInfoName");
   const handleNode = document.getElementById("threadInfoHandle");
+  const descriptionFactNode = document.getElementById("threadInfoDescriptionFact");
+  const descriptionLabelNode = document.getElementById("threadInfoDescriptionLabel");
   const descriptionNode = document.getElementById("threadInfoDescription");
   const typeNode = document.getElementById("threadInfoType");
-  const idNode = document.getElementById("threadInfoId");
+  const menuTriggerNode = document.getElementById("threadInfoMenuTrigger");
   const membersWrapNode = document.getElementById("threadInfoMembersWrap");
   const membersListNode = document.getElementById("threadInfoMembersList");
+  const memberAddTriggerNode = document.getElementById("threadMemberAddTrigger");
 
-  if (!avatarNode || !nameNode || !handleNode || !descriptionNode || !typeNode || !idNode) {
+  if (!avatarNode || !nameNode || !handleNode || !descriptionNode || !typeNode) {
     return;
   }
 
@@ -307,17 +310,33 @@ function fillThreadInfoPanel(info, chatType) {
   handleNode.textContent = chatType === "group"
     ? `${info?.members_count || 0} участников`
     : info?.username ? `@${info.username}` : "Личный чат";
-  descriptionNode.textContent = chatType === "group"
-    ? info?.description || "Описание группы пока не добавлено"
-    : info?.bio || "У пользователя пока нет bio";
   typeNode.textContent = chatType === "group" ? "Группа" : "Личный чат";
-  idNode.textContent = info?.id ? String(info.id) : "-";
+
+  if (descriptionFactNode && descriptionLabelNode) {
+    if (chatType === "group") {
+      descriptionFactNode.hidden = false;
+      descriptionLabelNode.textContent = "Описание";
+      descriptionNode.textContent = info?.description || "Описание группы пока не добавлено";
+    } else {
+      const hasBio = Boolean(info?.bio && String(info.bio).trim());
+      descriptionFactNode.hidden = !hasBio;
+      descriptionLabelNode.textContent = "Bio";
+      descriptionNode.textContent = hasBio ? info.bio : "";
+    }
+  }
 
   if (membersWrapNode && membersListNode) {
     if (chatType === "group") {
       const members = Array.isArray(info?.members) ? info.members : [];
+      const canEditGroup = Boolean(info?.can_edit_group);
       const canManageAdmins = Boolean(info?.can_manage_admins);
       membersWrapNode.hidden = false;
+      if (menuTriggerNode) {
+        menuTriggerNode.hidden = !canEditGroup;
+      }
+      if (memberAddTriggerNode) {
+        memberAddTriggerNode.hidden = !canManageAdmins;
+      }
       membersListNode.innerHTML = members.length
         ? members.map((member) => `
           <article
@@ -342,9 +361,42 @@ function fillThreadInfoPanel(info, chatType) {
         : '<div class="empty-state">Участников пока нет</div>';
     } else {
       membersWrapNode.hidden = true;
+      if (menuTriggerNode) {
+        menuTriggerNode.hidden = true;
+      }
+      if (memberAddTriggerNode) {
+        memberAddTriggerNode.hidden = true;
+      }
       membersListNode.innerHTML = "";
     }
   }
+}
+
+function renderThreadMemberCandidateResults(results, selectedIds = new Set()) {
+  const resultsNode = document.getElementById("threadMemberSearchResults");
+  if (!resultsNode) {
+    return;
+  }
+
+  if (!results.length) {
+    resultsNode.innerHTML = '<div class="empty-state">Подходящих пользователей не найдено</div>';
+    return;
+  }
+
+  resultsNode.innerHTML = results.map((user) => {
+    const userId = String(user.id);
+    const isSelected = selectedIds.has(userId);
+    return `
+      <article class="thread-member-option${isSelected ? " selected" : ""}" data-candidate-user-id="${escapeHtml(userId)}">
+        <div class="avatar small">${escapeHtml(initials(user.name || user.username || "U"))}</div>
+        <div class="result-meta">
+          <h3 class="result-name">${escapeHtml(user.name || user.username || "User")}</h3>
+          <p class="result-username">@${escapeHtml(user.username || "")}</p>
+        </div>
+        <input class="thread-member-option-check" type="checkbox" ${isSelected ? "checked" : ""} aria-label="Выбрать пользователя">
+      </article>
+    `;
+  }).join("");
 }
 
 function buildThreadMemberActionMenu() {
@@ -353,6 +405,16 @@ function buildThreadMemberActionMenu() {
   menu.hidden = true;
   document.body.appendChild(menu);
   return menu;
+}
+
+function syncGroupChatTitleInState(chatId, nextTitle) {
+  if (!Array.isArray(chatState.allChats)) {
+    return;
+  }
+  const currentChat = chatState.allChats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === "group");
+  if (currentChat) {
+    currentChat.title = nextTitle;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -380,7 +442,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   const subtitleNode = document.getElementById("chatSubtitle");
   const headerAvatarNode = document.getElementById("chatAvatar");
   const threadInfoCloseButton = document.getElementById("threadInfoClose");
+  const threadInfoMenuTrigger = document.getElementById("threadInfoMenuTrigger");
+  const threadInfoActionMenu = document.getElementById("threadInfoActionMenu");
   const threadInfoMembersListNode = document.getElementById("threadInfoMembersList");
+  const threadMemberAddTrigger = document.getElementById("threadMemberAddTrigger");
+  const threadMemberAddModal = document.getElementById("threadMemberAddModal");
+  const threadMemberAddClose = document.getElementById("threadMemberAddClose");
+  const threadMemberAddInput = document.getElementById("threadMemberAddInput");
+  const threadMemberAddStatus = document.getElementById("threadMemberAddStatus");
+  const threadMemberSearchResults = document.getElementById("threadMemberSearchResults");
+  const threadMemberAddSubmit = document.getElementById("threadMemberAddSubmit");
+  const threadGroupEditModal = document.getElementById("threadGroupEditModal");
+  const threadGroupEditForm = document.getElementById("threadGroupEditForm");
+  const threadGroupEditTitleInput = document.getElementById("threadGroupEditTitleInput");
+  const threadGroupEditDescriptionInput = document.getElementById("threadGroupEditDescriptionInput");
+  const threadGroupEditStatus = document.getElementById("threadGroupEditStatus");
+  const threadGroupEditSubmit = document.getElementById("threadGroupEditSubmit");
   const composerWrap = composer?.closest(".composer-wrap");
   const sendButton = composer?.querySelector('button[type="submit"]');
   const messageActionMenu = buildMessageActionMenu();
@@ -402,6 +479,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   let touchMenuPoint = null;
   let threadMemberTouchTimer = null;
   let activeThreadMemberItem = null;
+  let threadMemberContacts = [];
+  let filteredThreadMemberCandidates = [];
+  let isSubmittingThreadMembers = false;
+  let isSavingGroupDetails = false;
   let oldestMessageId = null;
   let hasMoreMessages = false;
   let isLoadingOlder = false;
@@ -425,6 +506,66 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (panel) {
       panel.setAttribute("aria-hidden", isOpen ? "false" : "true");
     }
+  }
+
+  function closeThreadInfoActionMenu() {
+    if (!threadInfoActionMenu || !threadInfoMenuTrigger) {
+      return;
+    }
+    threadInfoMenuTrigger.setAttribute("aria-expanded", "false");
+    threadInfoActionMenu.classList.remove("visible");
+    window.setTimeout(() => {
+      if (!threadInfoActionMenu.classList.contains("visible")) {
+        threadInfoActionMenu.hidden = true;
+      }
+    }, 160);
+  }
+
+  function openThreadInfoActionMenu() {
+    if (!threadInfoActionMenu || !threadInfoMenuTrigger) {
+      return;
+    }
+    threadInfoActionMenu.hidden = false;
+    threadInfoMenuTrigger.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => {
+      threadInfoActionMenu.classList.add("visible");
+    });
+  }
+
+  function setThreadGroupEditStatus(message, type = "") {
+    if (!threadGroupEditStatus) {
+      return;
+    }
+    threadGroupEditStatus.textContent = message;
+    threadGroupEditStatus.className = `status thread-group-edit-status ${type}`.trim();
+  }
+
+  function closeThreadGroupEditModal() {
+    if (!threadGroupEditModal || isSavingGroupDetails) {
+      return;
+    }
+    threadGroupEditModal.hidden = true;
+    setThreadGroupEditStatus("");
+  }
+
+  function openThreadGroupEditModal() {
+    if (!threadGroupEditModal || chatType !== "group" || !currentThreadInfo?.can_edit_group) {
+      return;
+    }
+    closeThreadInfoActionMenu();
+    threadGroupEditModal.hidden = false;
+    setThreadGroupEditStatus("");
+    if (threadGroupEditTitleInput) {
+      threadGroupEditTitleInput.value = currentThreadInfo?.title || currentThreadInfo?.name || "";
+    }
+    if (threadGroupEditDescriptionInput) {
+      threadGroupEditDescriptionInput.value = currentThreadInfo?.description || "";
+    }
+    if (threadGroupEditSubmit) {
+      threadGroupEditSubmit.disabled = false;
+      threadGroupEditSubmit.textContent = "Сохранить";
+    }
+    threadGroupEditTitleInput?.focus();
   }
 
   async function loadSelectedUser() {
@@ -452,6 +593,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       ...data,
       title
     };
+    if (chatType === "group") {
+      setChatTitle(title, `${data.members_count || data.members?.length || 0} участников`);
+    }
     fillThreadInfoPanel(currentThreadInfo, chatType);
   }
 
@@ -463,6 +607,114 @@ document.addEventListener("DOMContentLoaded", async () => {
         threadMemberActionMenu.hidden = true;
       }
     }, 120);
+  }
+
+  function setThreadMemberAddStatus(message, type = "") {
+    if (!threadMemberAddStatus) {
+      return;
+    }
+    threadMemberAddStatus.textContent = message;
+    threadMemberAddStatus.className = `status thread-member-add-status ${type}`.trim();
+  }
+
+  function getCurrentGroupMemberIds() {
+    return new Set(
+      Array.isArray(currentThreadInfo?.members)
+        ? currentThreadInfo.members.map((member) => String(member.id))
+        : []
+    );
+  }
+
+  function getSelectedThreadMemberIds() {
+    if (!threadMemberSearchResults) {
+      return new Set();
+    }
+    return new Set(
+      [...threadMemberSearchResults.querySelectorAll('.thread-member-option.selected[data-candidate-user-id]')]
+        .map((node) => String(node.dataset.candidateUserId))
+    );
+  }
+
+  function updateThreadMemberSubmitState() {
+    if (!threadMemberAddSubmit) {
+      return;
+    }
+    const selectedCount = getSelectedThreadMemberIds().size;
+    threadMemberAddSubmit.hidden = selectedCount === 0;
+    threadMemberAddSubmit.disabled = selectedCount === 0 || isSubmittingThreadMembers;
+    threadMemberAddSubmit.textContent = selectedCount > 0 ? `Добавить (${selectedCount})` : "Добавить";
+  }
+
+  function filterThreadMemberCandidates(query = "", preserveSelection = true) {
+    const normalizedQuery = query.trim().replace(/^@/, "").toLowerCase();
+    const existingMemberIds = getCurrentGroupMemberIds();
+    const selectedIds = preserveSelection ? getSelectedThreadMemberIds() : new Set();
+    const baseCandidates = threadMemberContacts.filter((user) => !existingMemberIds.has(String(user.id)));
+    filteredThreadMemberCandidates = normalizedQuery
+      ? baseCandidates.filter((user) => {
+        const username = String(user.username || "").toLowerCase();
+        const name = String(user.name || "").toLowerCase();
+        return username.includes(normalizedQuery) || name.includes(normalizedQuery);
+      })
+      : baseCandidates;
+    renderThreadMemberCandidateResults(filteredThreadMemberCandidates, selectedIds);
+    setThreadMemberAddStatus(
+      filteredThreadMemberCandidates.length
+        ? "Выберите одного или нескольких пользователей"
+        : "Подходящих пользователей не найдено",
+      filteredThreadMemberCandidates.length ? "" : "error"
+    );
+    updateThreadMemberSubmitState();
+  }
+
+  async function openThreadMemberAddModal() {
+    if (!threadMemberAddModal || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
+      return;
+    }
+
+    threadMemberAddModal.hidden = false;
+    if (threadMemberAddInput) {
+      threadMemberAddInput.value = "";
+    }
+    if (threadMemberSearchResults) {
+      threadMemberSearchResults.innerHTML = "";
+    }
+    if (threadMemberAddSubmit) {
+      threadMemberAddSubmit.hidden = true;
+      threadMemberAddSubmit.disabled = true;
+      threadMemberAddSubmit.textContent = "Добавить";
+    }
+    setThreadMemberAddStatus("Загрузка...", "");
+
+    try {
+      const data = await apiFetch("/contacts");
+      threadMemberContacts = Array.isArray(data) ? data : data.items || [];
+      filterThreadMemberCandidates("", false);
+      threadMemberAddInput?.focus();
+    } catch (error) {
+      threadMemberContacts = [];
+      filteredThreadMemberCandidates = [];
+      setThreadMemberAddStatus(error.message, "error");
+      updateThreadMemberSubmitState();
+    }
+  }
+
+  function closeThreadMemberAddModal() {
+    if (!threadMemberAddModal) {
+      return;
+    }
+    threadMemberAddModal.hidden = true;
+    threadMemberContacts = [];
+    filteredThreadMemberCandidates = [];
+    isSubmittingThreadMembers = false;
+    if (threadMemberAddInput) {
+      threadMemberAddInput.value = "";
+    }
+    if (threadMemberSearchResults) {
+      threadMemberSearchResults.innerHTML = "";
+    }
+    setThreadMemberAddStatus("");
+    updateThreadMemberSubmitState();
   }
 
   function showThreadMemberActionMenu(memberItem, clientX, clientY) {
@@ -1245,6 +1497,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!currentThreadInfo) {
       return;
     }
+    closeThreadInfoActionMenu();
+    closeThreadMemberAddModal();
     fillThreadInfoPanel(currentThreadInfo, chatType);
     setThreadInfoOpen(true);
   }
@@ -1252,8 +1506,27 @@ document.addEventListener("DOMContentLoaded", async () => {
   titleNode?.addEventListener("click", openThreadInfoPanel);
   subtitleNode?.addEventListener("click", openThreadInfoPanel);
   headerAvatarNode?.addEventListener("click", openThreadInfoPanel);
+  threadInfoMenuTrigger?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (threadInfoActionMenu?.hidden) {
+      openThreadInfoActionMenu();
+      return;
+    }
+    closeThreadInfoActionMenu();
+  });
   threadInfoCloseButton?.addEventListener("click", () => {
+    closeThreadInfoActionMenu();
+    closeThreadMemberAddModal();
+    closeThreadGroupEditModal();
     setThreadInfoOpen(false);
+  });
+
+  threadInfoActionMenu?.addEventListener("click", (event) => {
+    const action = event.target.closest("button")?.dataset.threadInfoAction;
+    if (action === "edit-group") {
+      openThreadGroupEditModal();
+    }
   });
 
   threadInfoMembersListNode?.addEventListener("contextmenu", (event) => {
@@ -1314,6 +1587,126 @@ document.addEventListener("DOMContentLoaded", async () => {
       threadMemberTouchTimer = null;
     }
   }, { passive: true });
+
+  threadMemberAddTrigger?.addEventListener("click", () => {
+    void openThreadMemberAddModal();
+  });
+
+  threadMemberAddClose?.addEventListener("click", () => {
+    closeThreadMemberAddModal();
+  });
+
+  threadMemberAddModal?.addEventListener("click", (event) => {
+    if (event.target === threadMemberAddModal) {
+      closeThreadMemberAddModal();
+    }
+  });
+
+  threadGroupEditModal?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-group-edit-close=\"true\"]")) {
+      closeThreadGroupEditModal();
+    }
+  });
+
+  threadMemberAddInput?.addEventListener("input", () => {
+    filterThreadMemberCandidates(threadMemberAddInput.value);
+  });
+
+  threadMemberSearchResults?.addEventListener("click", (event) => {
+    const option = event.target.closest(".thread-member-option[data-candidate-user-id]");
+    if (!option) {
+      return;
+    }
+    option.classList.toggle("selected");
+    const checkbox = option.querySelector(".thread-member-option-check");
+    if (checkbox) {
+      checkbox.checked = option.classList.contains("selected");
+    }
+    updateThreadMemberSubmitState();
+  });
+
+  threadMemberAddSubmit?.addEventListener("click", async () => {
+    if (!chatId || chatType !== "group" || isSubmittingThreadMembers) {
+      return;
+    }
+
+    const memberIds = [...getSelectedThreadMemberIds()];
+    if (!memberIds.length) {
+      updateThreadMemberSubmitState();
+      return;
+    }
+
+    isSubmittingThreadMembers = true;
+    updateThreadMemberSubmitState();
+    setThreadMemberAddStatus("Добавление...", "");
+
+    try {
+      await apiFetch(`/groups/${encodeURIComponent(chatId)}/members`, {
+        method: "POST",
+        body: JSON.stringify({ member_ids: memberIds })
+      });
+      await refreshCurrentThreadInfo();
+      closeThreadMemberAddModal();
+    } catch (error) {
+      isSubmittingThreadMembers = false;
+      setThreadMemberAddStatus(error.message, "error");
+      updateThreadMemberSubmitState();
+    }
+  });
+
+  threadGroupEditForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!chatId || chatType !== "group" || isSavingGroupDetails) {
+      return;
+    }
+
+    const nextTitle = threadGroupEditTitleInput?.value.trim() || "";
+    const nextDescription = threadGroupEditDescriptionInput?.value.trim() || "";
+
+    if (!nextTitle) {
+      setThreadGroupEditStatus("Название группы обязательно", "error");
+      threadGroupEditTitleInput?.focus();
+      return;
+    }
+
+    isSavingGroupDetails = true;
+    if (threadGroupEditSubmit) {
+      threadGroupEditSubmit.disabled = true;
+      threadGroupEditSubmit.textContent = "Сохранение...";
+    }
+    setThreadGroupEditStatus("Сохраняем...", "");
+
+    try {
+      const data = await apiFetch(`/groups/${encodeURIComponent(chatId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          title: nextTitle,
+          description: nextDescription
+        })
+      });
+
+      syncGroupChatTitleInState(chatId, data.title || nextTitle);
+      currentThreadInfo = {
+        ...currentThreadInfo,
+        ...data,
+        title: data.title || nextTitle,
+        description: typeof data.description === "string" ? data.description : nextDescription
+      };
+      setChatTitle(currentThreadInfo.title, `${currentThreadInfo.members_count || currentThreadInfo.members?.length || 0} участников`);
+      fillThreadInfoPanel(currentThreadInfo, chatType);
+      await loadChats("chatList", { showLoading: false });
+      isSavingGroupDetails = false;
+      closeThreadGroupEditModal();
+    } catch (error) {
+      setThreadGroupEditStatus(error.message, "error");
+    } finally {
+      isSavingGroupDetails = false;
+      if (threadGroupEditSubmit) {
+        threadGroupEditSubmit.disabled = false;
+        threadGroupEditSubmit.textContent = "Сохранить";
+      }
+    }
+  });
 
   threadMemberActionMenu.addEventListener("click", async (event) => {
     const action = event.target.closest("button")?.dataset.memberAction;
@@ -1541,6 +1934,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      if (!threadMemberAddModal?.hidden) {
+        closeThreadMemberAddModal();
+        return;
+      }
       if (isSelectionMode) {
         exitSelectionMode();
       }
@@ -1721,8 +2118,29 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && threadInfoActionMenu && !threadInfoActionMenu.hidden) {
+      closeThreadInfoActionMenu();
+      return;
+    }
+    if (event.key === "Escape" && threadGroupEditModal && !threadGroupEditModal.hidden) {
+      closeThreadGroupEditModal();
+      return;
+    }
     if (event.key === "Escape" && contentNode.classList.contains("thread-info-open")) {
+      closeThreadInfoActionMenu();
+      closeThreadMemberAddModal();
+      closeThreadGroupEditModal();
       setThreadInfoOpen(false);
     }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!threadInfoActionMenu || threadInfoActionMenu.hidden) {
+      return;
+    }
+    if (event.target.closest("#threadInfoActionMenu") || event.target.closest("#threadInfoMenuTrigger")) {
+      return;
+    }
+    closeThreadInfoActionMenu();
   });
 });

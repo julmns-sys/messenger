@@ -1,6 +1,7 @@
 const searchState = {
   results: [],
-  contacts: []
+  contacts: [],
+  hasSearched: false
 };
 
 function renderActionButtonContent(icon, text) {
@@ -60,8 +61,16 @@ function renderResults(results) {
   const resultList = document.getElementById("resultList");
   if (!resultList) return;
 
+  if (!searchState.hasSearched) {
+    resultList.hidden = true;
+    resultList.innerHTML = "";
+    return;
+  }
+
+  resultList.hidden = false;
+
   if (!results.length) {
-    resultList.innerHTML = '<div class="empty-state">Ничего не найдено</div>';
+    resultList.innerHTML = '<div class="empty-state">Пользователь не найден</div>';
     return;
   }
 
@@ -187,10 +196,29 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (!form || !input) return;
 
+  input.addEventListener("input", () => {
+    if (input.value.trim()) {
+      return;
+    }
+
+    searchState.results = [];
+    searchState.hasSearched = false;
+    renderResults(searchState.results);
+    status.textContent = "";
+    status.className = "status";
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const query = input.value.trim().replace(/^@/, "");
-    if (!query) return;
+    if (!query) {
+      searchState.results = [];
+      searchState.hasSearched = false;
+      renderResults(searchState.results);
+      status.textContent = "";
+      status.className = "status";
+      return;
+    }
 
     status.textContent = "Поиск...";
     status.className = "status";
@@ -198,10 +226,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       const data = await apiFetch(`/users/search?username=${encodeURIComponent(query)}`);
       searchState.results = Array.isArray(data) ? data : data.items || [];
+      searchState.hasSearched = true;
       renderResults(searchState.results);
       status.textContent = `${searchState.results.length} найдено`;
       status.className = "status";
     } catch (error) {
+      searchState.hasSearched = true;
+      searchState.results = [];
+      renderResults(searchState.results);
       status.textContent = error.message;
       status.className = "status error";
     }

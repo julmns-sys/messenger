@@ -80,6 +80,30 @@ def can_manage_group_admins(conn, user_id, group_id):
     return bool(group and group["owner_id"] == user_id)
 
 
+def can_edit_group_details(conn, user_id, group_id):
+    if not user_id:
+        return False
+
+    group = conn.execute("""
+        SELECT owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+
+    if not group:
+        return False
+
+    if group["owner_id"] == user_id:
+        return True
+
+    member = conn.execute("""
+        SELECT is_admin
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+    return bool(member and member["is_admin"])
+
+
 def can_access_direct_chat(conn, user_id, chat_id):
     if not user_id:
         return False
@@ -1308,6 +1332,7 @@ def get_group(group_id):
         WHERE gm.group_id = ?
         ORDER BY COALESCE(u.name, u.username), u.username
     """, (group_id,)).fetchall()
+    can_edit_group = can_edit_group_details(conn, user_id, group_id)
     limit = parse_limit_arg()
     messages, has_more_messages = fetch_group_messages_page(conn, group_id, user_id, limit)
     conn.close()
@@ -1318,6 +1343,7 @@ def get_group(group_id):
         "name": group["title"],
         "description": group["description"],
         "owner_id": group["owner_id"],
+        "can_edit_group": can_edit_group,
         "can_manage_admins": group["owner_id"] == user_id,
         "members_count": members_count_row["members_count"],
         "members": [
@@ -1333,6 +1359,68 @@ def get_group(group_id):
             serialize_group_message(message)
             for message in messages
         ]
+    })
+
+
+@app.patch("/groups/<int:group_id>")
+def update_group(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    title = str(data.get("title", "")).strip()
+    description = str(data.get("description", "")).strip()
+
+    if not title:
+        return jsonify({"message": "Название группы обязательно"}), 400
+
+    if len(title) > 16:
+        return jsonify({"message": "Название группы: максимум 16 символов"}), 400
+
+    conn = get_db()
+    group = conn.execute("""
+        SELECT id, owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+
+    if not group:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    if not can_edit_group_details(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Редактировать группу может только владелец или администратор"}), 403
+
+    conn.execute("""
+        UPDATE groups
+        SET title = ?, description = ?
+        WHERE id = ?
+    """, (title, description, group_id))
+    conn.commit()
+
+    updated_group = conn.execute("""
+        SELECT id, title, description, owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+    members_count_row = conn.execute("""
+        SELECT COUNT(*) AS members_count
+        FROM group_members
+        WHERE group_id = ?
+    """, (group_id,)).fetchone()
+    conn.close()
+
+    return jsonify({
+        "id": updated_group["id"],
+        "title": updated_group["title"],
+        "name": updated_group["title"],
+        "description": updated_group["description"],
+        "owner_id": updated_group["owner_id"],
+        "can_edit_group": True,
+        "can_manage_admins": updated_group["owner_id"] == user_id,
+        "members_count": members_count_row["members_count"]
     })
 
 
@@ -1418,8 +1506,27 @@ def leave_group(group_id):
         return jsonify({"message": "Вы не состоите в группе"}), 404
 
     if group["owner_id"] == user_id:
+        transferable_members = conn.execute("""
+            SELECT u.id, u.name, u.username, u.bio, gm.is_admin
+            FROM group_members gm
+            JOIN users u ON u.id = gm.user_id
+            WHERE gm.group_id = ? AND gm.user_id != ?
+            ORDER BY COALESCE(u.name, u.username), u.username
+        """, (group_id, user_id)).fetchall()
         conn.close()
-        return jsonify({"message": "Создатель группы пока не может выйти из нее"}), 400
+        return jsonify({
+            "message": "Создатель группы должен выбрать действие перед выходом",
+            "code": "owner_leave_requires_action",
+            "can_delete_group": True,
+            "can_transfer_owner": bool(transferable_members),
+            "transferable_members": [
+                {
+                    **serialize_public_user(member_row),
+                    "is_admin": bool(member_row["is_admin"])
+                }
+                for member_row in transferable_members
+            ]
+        }), 409
 
     conn.execute("""
         DELETE FROM group_members
@@ -1433,6 +1540,212 @@ def leave_group(group_id):
         "group_id": group_id,
         "user_id": user_id
     })
+
+
+@app.delete("/groups/<int:group_id>")
+def delete_group(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    group = conn.execute("""
+        SELECT owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+
+    if not group:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    if group["owner_id"] != user_id:
+        conn.close()
+        return jsonify({"message": "Удалить группу может только создатель"}), 403
+
+    group_message_ids = [
+        row["id"]
+        for row in conn.execute("""
+            SELECT id
+            FROM group_messages
+            WHERE group_id = ?
+        """, (group_id,)).fetchall()
+    ]
+
+    if group_message_ids:
+        placeholders = ",".join("?" for _ in group_message_ids)
+        conn.execute(f"""
+            DELETE FROM hidden_group_messages
+            WHERE group_message_id IN ({placeholders})
+        """, group_message_ids)
+
+    conn.execute("DELETE FROM group_messages WHERE group_id = ?", (group_id,))
+    conn.execute("DELETE FROM group_members WHERE group_id = ?", (group_id,))
+    conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "ok": True,
+        "group_id": group_id
+    })
+
+
+@app.post("/groups/<int:group_id>/transfer-owner")
+def transfer_group_owner(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    new_owner_id = data.get("new_owner_id")
+
+    try:
+        new_owner_id = int(new_owner_id)
+    except (TypeError, ValueError):
+        return jsonify({"message": "Некорректный new_owner_id"}), 400
+
+    conn = get_db()
+    group = conn.execute("""
+        SELECT owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+
+    if not group:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    if group["owner_id"] != user_id:
+        conn.close()
+        return jsonify({"message": "Передать группу может только создатель"}), 403
+
+    if new_owner_id == user_id:
+        conn.close()
+        return jsonify({"message": "Нужно выбрать другого участника"}), 400
+
+    target_member = conn.execute("""
+        SELECT user_id
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, new_owner_id)).fetchone()
+    if not target_member:
+        conn.close()
+        return jsonify({"message": "Участник не найден"}), 404
+
+    conn.execute("""
+        UPDATE groups
+        SET owner_id = ?
+        WHERE id = ?
+    """, (new_owner_id, group_id))
+    conn.execute("""
+        UPDATE group_members
+        SET is_admin = 1
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, new_owner_id))
+    conn.execute("""
+        DELETE FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "ok": True,
+        "group_id": group_id,
+        "new_owner_id": new_owner_id,
+        "removed_user_id": user_id
+    })
+
+
+@app.post("/groups/<int:group_id>/members")
+def add_group_members(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    raw_member_ids = data.get("member_ids")
+    if raw_member_ids is None:
+        single_member_id = data.get("user_id") or data.get("member_user_id")
+        raw_member_ids = [single_member_id] if single_member_id is not None else []
+
+    if not isinstance(raw_member_ids, list):
+        return jsonify({"message": "member_ids должен быть списком"}), 400
+
+    member_ids = []
+    for raw_id in raw_member_ids:
+        try:
+            member_id = int(raw_id)
+        except (TypeError, ValueError):
+            return jsonify({"message": "Некорректный member_id"}), 400
+        if member_id != user_id and member_id not in member_ids:
+            member_ids.append(member_id)
+
+    if not member_ids:
+        return jsonify({"message": "Выберите хотя бы одного пользователя"}), 400
+
+    conn = get_db()
+    if not can_manage_group_admins(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Недостаточно прав"}), 403
+
+    group = conn.execute("""
+        SELECT id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+    if not group:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    placeholders = ",".join("?" for _ in member_ids)
+    users = conn.execute(f"""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id IN ({placeholders})
+    """, member_ids).fetchall()
+    found_user_ids = {user["id"] for user in users}
+    missing_user_ids = [member_id for member_id in member_ids if member_id not in found_user_ids]
+    if missing_user_ids:
+        conn.close()
+        return jsonify({"message": "Некоторые пользователи не найдены"}), 404
+
+    existing_rows = conn.execute(f"""
+        SELECT user_id
+        FROM group_members
+        WHERE group_id = ? AND user_id IN ({placeholders})
+    """, [group_id, *member_ids]).fetchall()
+    existing_member_ids = {row["user_id"] for row in existing_rows}
+    new_member_ids = [member_id for member_id in member_ids if member_id not in existing_member_ids]
+
+    if not new_member_ids:
+        conn.close()
+        return jsonify({"message": "Все выбранные пользователи уже в группе"}), 400
+
+    conn.executemany("""
+        INSERT INTO group_members (group_id, user_id, is_admin)
+        VALUES (?, ?, 0)
+    """, [(group_id, member_id) for member_id in new_member_ids])
+    conn.commit()
+    conn.close()
+
+    added_members = [
+        {
+            **serialize_public_user(user),
+            "is_admin": False,
+            "is_owner": False
+        }
+        for user in users
+        if user["id"] in set(new_member_ids)
+    ]
+
+    return jsonify({
+        "ok": True,
+        "group_id": group_id,
+        "added_count": len(added_members),
+        "members": added_members
+    }), 201
 
 
 @app.patch("/groups/<int:group_id>/members/<int:member_user_id>")
