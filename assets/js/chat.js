@@ -286,6 +286,67 @@ function setChatTitle(title, subtitle = "") {
   if (avatarNode) avatarNode.textContent = initials(title || "Чат");
 }
 
+function fillThreadInfoPanel(info, chatType) {
+  const avatarNode = document.getElementById("threadInfoAvatar");
+  const nameNode = document.getElementById("threadInfoName");
+  const handleNode = document.getElementById("threadInfoHandle");
+  const descriptionNode = document.getElementById("threadInfoDescription");
+  const typeNode = document.getElementById("threadInfoType");
+  const idNode = document.getElementById("threadInfoId");
+  const membersWrapNode = document.getElementById("threadInfoMembersWrap");
+  const membersListNode = document.getElementById("threadInfoMembersList");
+
+  if (!avatarNode || !nameNode || !handleNode || !descriptionNode || !typeNode || !idNode) {
+    return;
+  }
+
+  const title = info?.title || info?.name || info?.username || "Чат";
+  avatarNode.textContent = initials(title);
+  avatarNode.classList.toggle("group-avatar", chatType === "group");
+  nameNode.textContent = title;
+  handleNode.textContent = chatType === "group"
+    ? `${info?.members_count || 0} участников`
+    : info?.username ? `@${info.username}` : "Личный чат";
+  descriptionNode.textContent = chatType === "group"
+    ? info?.description || "Описание группы пока не добавлено"
+    : info?.bio || "У пользователя пока нет bio";
+  typeNode.textContent = chatType === "group" ? "Группа" : "Личный чат";
+  idNode.textContent = info?.id ? String(info.id) : "-";
+
+  if (membersWrapNode && membersListNode) {
+    if (chatType === "group") {
+      const members = Array.isArray(info?.members) ? info.members : [];
+      const canManageAdmins = Boolean(info?.can_manage_admins);
+      membersWrapNode.hidden = false;
+      membersListNode.innerHTML = members.length
+        ? members.map((member) => `
+          <article class="member-item">
+            <div class="avatar small">${escapeHtml(initials(member.name || member.username || "U"))}</div>
+            <div class="result-meta">
+              <div class="result-topline">
+                <h3 class="result-name">${escapeHtml(member.name || member.username || "User")}</h3>
+                ${member.is_owner ? '<span class="thread-member-role owner">Создатель</span>' : member.is_admin ? '<span class="thread-member-role">Админ</span>' : ""}
+              </div>
+              <p class="result-username">@${escapeHtml(member.username || "")}</p>
+            </div>
+            ${canManageAdmins && !member.is_owner ? `
+              <button
+                class="button button-secondary thread-member-admin-button"
+                type="button"
+                data-member-admin-toggle="${escapeHtml(String(member.id))}"
+                data-next-admin-state="${member.is_admin ? "false" : "true"}"
+              >${member.is_admin ? "Снять админа" : "Сделать админом"}</button>
+            ` : ""}
+          </article>
+        `).join("")
+        : '<div class="empty-state">Участников пока нет</div>';
+    } else {
+      membersWrapNode.hidden = true;
+      membersListNode.innerHTML = "";
+    }
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   requireAuth();
   bindLogout();
@@ -303,9 +364,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   const messagesNode = document.getElementById("messages");
   const composer = document.getElementById("messageForm");
   const contentBody = document.querySelector(".content-body");
+  const contentNode = document.querySelector(".content");
   const status = document.getElementById("messageStatus");
   const input = document.getElementById("messageInput");
   const scrollDownButton = document.getElementById("scrollDownButton");
+  const titleNode = document.getElementById("chatTitle");
+  const subtitleNode = document.getElementById("chatSubtitle");
+  const headerAvatarNode = document.getElementById("chatAvatar");
+  const threadInfoCloseButton = document.getElementById("threadInfoClose");
+  const threadInfoMembersListNode = document.getElementById("threadInfoMembersList");
   const composerWrap = composer?.closest(".composer-wrap");
   const sendButton = composer?.querySelector('button[type="submit"]');
   const messageActionMenu = buildMessageActionMenu();
@@ -314,6 +381,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const selectionToolbar = buildSelectionToolbar();
   let socket = null;
   let selectedUser = null;
+  let currentThreadInfo = null;
   let pendingMessageState = null;
   let isSendingMessage = false;
   let isMarkingRead = false;
@@ -332,7 +400,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const selectedMessageIds = new Set();
   const committedDeleteEchoIds = new Set();
 
-  if (!messagesNode || !composer || !input || !contentBody || !composerWrap) {
+  if (!messagesNode || !composer || !input || !contentBody || !composerWrap || !contentNode) {
     return;
   }
 
@@ -340,19 +408,48 @@ document.addEventListener("DOMContentLoaded", async () => {
   contentBody.insertBefore(selectionToolbar, composerWrap);
   contentBody.appendChild(deleteUndoToast);
 
+  function setThreadInfoOpen(isOpen) {
+    contentNode.classList.toggle("thread-info-open", Boolean(isOpen));
+    const panel = document.getElementById("threadInfoPanel");
+    if (panel) {
+      panel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+    }
+  }
+
   async function loadSelectedUser() {
     if (chatId || chatType === "group" || !userId) {
       return null;
     }
 
     selectedUser = await apiFetch(`/users/${encodeURIComponent(userId)}`);
+    currentThreadInfo = selectedUser;
     return selectedUser;
+  }
+
+  async function refreshCurrentThreadInfo() {
+    if (!chatId) {
+      return;
+    }
+
+    const path = chatType === "group" ? `/groups/${chatId}?limit=1` : `/chats/${chatId}?limit=1`;
+    const data = await apiFetch(path);
+    const currentChat = Array.isArray(chatState.allChats)
+      ? chatState.allChats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === chatType)
+      : null;
+    const title = currentChat?.title || data.title || data.name || data.username || "Чат";
+    currentThreadInfo = {
+      ...data,
+      title
+    };
+    fillThreadInfoPanel(currentThreadInfo, chatType);
   }
 
   function renderPendingDirectChat(user) {
     const title = user?.name || user?.username || "Чат";
     const subtitle = user?.username ? `@${user.username}` : "";
+    currentThreadInfo = user ? { ...user, title } : null;
     setChatTitle(title, subtitle);
+    fillThreadInfoPanel(currentThreadInfo, chatType);
     renderMessages(messagesNode, [], currentUser.id, chatType);
     selectedMessageIds.clear();
     isSelectionMode = false;
@@ -925,7 +1022,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       ? `${(data.members_count || data.members?.length || 0)} участников`
       : data.username ? `@${data.username}` : "в сети";
 
+    currentThreadInfo = {
+      ...data,
+      title
+    };
     setChatTitle(title, subtitle);
+    fillThreadInfoPanel(currentThreadInfo, chatType);
     const nextMessages = data.messages || [];
     exitSelectionMode();
     renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
@@ -1094,6 +1196,46 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch (error) {
     messagesNode.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
   }
+
+  function openThreadInfoPanel() {
+    if (!currentThreadInfo) {
+      return;
+    }
+    fillThreadInfoPanel(currentThreadInfo, chatType);
+    setThreadInfoOpen(true);
+  }
+
+  titleNode?.addEventListener("click", openThreadInfoPanel);
+  subtitleNode?.addEventListener("click", openThreadInfoPanel);
+  headerAvatarNode?.addEventListener("click", openThreadInfoPanel);
+  threadInfoCloseButton?.addEventListener("click", () => {
+    setThreadInfoOpen(false);
+  });
+
+  threadInfoMembersListNode?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-member-admin-toggle]");
+    if (!button || chatType !== "group" || !chatId) {
+      return;
+    }
+
+    const memberUserId = button.dataset.memberAdminToggle;
+    const nextAdminState = button.dataset.nextAdminState === "true";
+    if (!memberUserId) {
+      return;
+    }
+
+    button.disabled = true;
+    try {
+      await apiFetch(`/groups/${encodeURIComponent(chatId)}/members/${encodeURIComponent(memberUserId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_admin: nextAdminState })
+      });
+      await refreshCurrentThreadInfo();
+    } catch (error) {
+      window.alert(error.message);
+      button.disabled = false;
+    }
+  });
 
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) {
@@ -1447,6 +1589,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (socket) {
       socket.disconnect();
       socket = null;
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && contentNode.classList.contains("thread-info-open")) {
+      setThreadInfoOpen(false);
     }
   });
 });

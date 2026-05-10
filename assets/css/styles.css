@@ -514,9 +514,38 @@ textarea {
 }
 
 .sidebar-profile-inline-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 6px;
   font-size: 13px;
   color: var(--text-soft);
+}
+
+.sidebar-profile-inline-status-indicator {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.sidebar-profile-inline-status.loading .sidebar-profile-inline-status-indicator {
+  border: 2px solid rgba(51, 144, 236, 0.18);
+  border-top-color: rgba(51, 144, 236, 0.88);
+  border-radius: 50%;
+  animation: sidebar-profile-spin 0.75s linear infinite;
+}
+
+.sidebar-profile-inline-status.success .sidebar-profile-inline-status-indicator::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 5px;
+  height: 9px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
 }
 
 .sidebar-profile-inline-status.error {
@@ -720,8 +749,52 @@ textarea {
 .result-item .button {
   width: auto;
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   white-space: nowrap;
   padding: 10px 16px;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.result-action-icon {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.result-action-text {
+  line-height: 1;
+}
+
+.result-remove-button {
+  color: #c94b4b;
+}
+
+.result-remove-button:hover {
+  color: #b63d3d;
+}
+
+.contacts-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.contacts-panel-title {
+  margin-bottom: 4px;
+}
+
+.contacts-panel-subtitle {
+  margin: 0;
 }
 
 .member-item {
@@ -775,6 +848,12 @@ textarea {
   letter-spacing: 0.02em;
 }
 
+.chat-custom-label {
+  background: var(--chat-tag-bg, rgba(51, 144, 236, 0.14));
+  color: var(--chat-tag-text, var(--accent));
+  box-shadow: inset 0 0 0 1px var(--chat-tag-border, rgba(51, 144, 236, 0.22));
+}
+
 .chat-preview,
 .result-username,
 .muted {
@@ -798,6 +877,7 @@ textarea {
   min-width: 0;
   height: 100vh;
   min-height: 100vh;
+  position: relative;
   overflow: auto;
   border: 1px solid rgba(255, 255, 255, 0.45);
   border-radius: 34px;
@@ -844,6 +924,170 @@ textarea {
   overflow: hidden;
   position: relative;
   background: rgba(244, 248, 252, 0.42);
+}
+
+.thread-header-main,
+.header-avatar {
+  cursor: pointer;
+}
+
+.thread-info-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 6;
+  width: 360px;
+  height: 100%;
+  border-left: 1px solid rgba(116, 139, 168, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(244, 249, 255, 0.78));
+  backdrop-filter: blur(18px);
+  box-shadow: -16px 0 30px rgba(30, 48, 72, 0.08);
+  transform: translateX(100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s ease;
+}
+
+.content.thread-info-open .thread-info-panel {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.thread-info-panel-header,
+.thread-info-panel-body {
+  padding: 20px;
+}
+
+.thread-info-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(116, 139, 168, 0.14);
+}
+
+.thread-info-title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.thread-info-subtitle {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--text-soft);
+}
+
+.thread-info-panel-body {
+  display: grid;
+  gap: 18px;
+  overflow: auto;
+  height: calc(100% - 85px);
+}
+
+.thread-info-hero {
+  padding: 10px 8px 0;
+  text-align: center;
+}
+
+.thread-info-avatar {
+  width: 92px;
+  height: 92px;
+  margin: 0 auto 16px;
+  font-size: 28px;
+}
+
+.thread-info-name {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.12;
+}
+
+.thread-info-handle {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+  font-size: 15px;
+}
+
+.thread-info-facts {
+  display: grid;
+  gap: 12px;
+}
+
+.thread-info-fact {
+  display: grid;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.44);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.46);
+  box-shadow: 0 10px 22px rgba(31, 52, 79, 0.05);
+}
+
+.thread-info-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+.thread-info-fact strong {
+  font-size: 15px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.thread-info-members {
+  min-height: 0;
+}
+
+.thread-info-members[hidden] {
+  display: none !important;
+}
+
+.thread-info-members-header h4 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.thread-info-members-list {
+  padding: 0;
+  max-height: 260px;
+}
+
+.thread-info-members-list .member-item {
+  padding: 10px 12px;
+  border-radius: 18px;
+}
+
+.thread-info-members-list .member-item + .member-item {
+  margin-top: 6px;
+}
+
+.thread-member-role {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(51, 144, 236, 0.12);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.thread-member-role.owner {
+  background: rgba(47, 143, 123, 0.12);
+  color: #287563;
+}
+
+.thread-member-admin-button {
+  width: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 8px 12px;
 }
 
 .placeholder,
@@ -1027,6 +1271,103 @@ textarea {
 
 .chat-list-action-menu button.danger:hover {
   background: rgba(217, 83, 79, 0.08);
+}
+
+.chat-tag-editor-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.chat-tag-editor-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-tag-editor-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(26, 39, 58, 0.16);
+  backdrop-filter: blur(8px);
+}
+
+.chat-tag-editor-card {
+  position: relative;
+  z-index: 1;
+  width: min(420px, calc(100vw - 28px));
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 18px 38px rgba(24, 41, 66, 0.16);
+  backdrop-filter: blur(18px);
+}
+
+.chat-tag-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.chat-tag-editor-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.chat-tag-editor-close {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(111, 129, 152, 0.1);
+  color: var(--text-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.chat-tag-editor-form {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-tag-editor-color-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-tag-editor-color {
+  width: 54px;
+  height: 42px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.chat-tag-editor-preview {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-tag-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.chat-tag-editor-actions .button {
+  width: auto;
 }
 
 .message-action-menu.visible {
@@ -1270,6 +1611,16 @@ textarea {
 
   to {
     stroke-dashoffset: 50.27;
+  }
+}
+
+@keyframes sidebar-profile-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -1737,6 +2088,10 @@ textarea {
     height: calc(100dvh - 69px);
   }
 
+  .thread-info-panel {
+    width: min(100%, 380px);
+  }
+
   .thread-page .content-header {
     background: rgba(255, 255, 255, 0.58);
   }
@@ -1822,6 +2177,18 @@ textarea {
   }
 }
 
+@media (min-width: 901px) {
+  .thread-page .content-header,
+  .thread-page .content-body {
+    transition: margin-right 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .thread-page .content.thread-info-open .content-header,
+  .thread-page .content.thread-info-open .content-body {
+    margin-right: 360px;
+  }
+}
+
 @media (max-width: 640px) {
   .auth-card,
   .panel {
@@ -1863,7 +2230,34 @@ textarea {
   }
 
   .result-item .button {
-    margin-left: 54px;
+    margin-left: 0;
+    padding: 0;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    font-size: 14px;
+    border-radius: 12px;
+  }
+
+  .result-actions {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .result-actions .button {
+    flex: 0 0 auto;
+    min-height: 36px;
+  }
+
+  .result-action-text {
+    display: none;
+  }
+
+  .result-action-icon {
+    font-size: 16px;
   }
 
   .member-item {

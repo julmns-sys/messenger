@@ -100,6 +100,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
+      if (title.length > 16) {
+        status.textContent = "Название группы: максимум 16 символов";
+        status.className = "status error";
+        return;
+      }
+
       status.textContent = "Создание группы...";
       status.className = "status";
 
@@ -113,6 +119,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           })
         });
 
+        setChatTag(group.id, "group", {
+          label: "Группа",
+          color: "#5ec7aa"
+        });
         window.location.href = `group_chat.html?id=${encodeURIComponent(group.id)}`;
       } catch (error) {
         status.textContent = error.message;

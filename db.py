@@ -43,6 +43,16 @@ def init_db():
     """)
 
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_user_id INTEGER NOT NULL,
+        contact_user_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(owner_user_id, contact_user_id)
+    )
+    """)
+
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id INTEGER NOT NULL,
@@ -85,6 +95,21 @@ def init_db():
         user_id INTEGER NOT NULL,
         UNIQUE(group_id, user_id)
     )
+    """)
+
+    group_member_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(group_members)").fetchall()
+    }
+    if "is_admin" not in group_member_columns:
+        cur.execute("ALTER TABLE group_members ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    cur.execute("""
+        UPDATE group_members
+        SET is_admin = 1
+        WHERE (group_id, user_id) IN (
+            SELECT id, owner_id
+            FROM groups
+        )
     """)
 
     cur.execute("""

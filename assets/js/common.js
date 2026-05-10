@@ -4,18 +4,117 @@ const chatState = {
   refreshListId: null
 };
 const CHAT_LIST_SCROLL_KEY = "messenger:chat-list-scroll-top";
+const CHAT_TAGS_KEY = "messenger:chat-tags";
 let chatListActionMenu = null;
 let activeChatListItem = null;
 let chatListMenuHideTimer = null;
 let chatListTouchTimer = null;
 let chatListTouchTarget = null;
 let chatDeleteUndoToast = null;
+let chatTagEditorModal = null;
 let pendingChatDeleteState = null;
 let chatDeleteUndoCountdownTimer = null;
 const pendingDeletedChatKeys = new Set();
 
 function getChatStateKey(chatId, chatType = "direct") {
   return `${chatType}:${chatId}`;
+}
+
+function readChatTags() {
+  const rawValue = window.localStorage.getItem(CHAT_TAGS_KEY);
+  if (!rawValue) return {};
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveChatTags(tagMap) {
+  window.localStorage.setItem(CHAT_TAGS_KEY, JSON.stringify(tagMap));
+}
+
+function normalizeChatTagColor(color) {
+  const normalized = typeof color === "string" ? color.trim() : "";
+  return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(normalized) ? normalized : "#3390ec";
+}
+
+function getChatTag(chatId, chatType = "direct") {
+  const chatTags = readChatTags();
+  const tag = chatTags[getChatStateKey(chatId, chatType)];
+  if (!tag || typeof tag !== "object") {
+    return null;
+  }
+
+  const label = typeof tag.label === "string" ? tag.label.trim() : "";
+  if (!label) {
+    return null;
+  }
+
+  return {
+    label: label.slice(0, 16),
+    color: normalizeChatTagColor(tag.color)
+  };
+}
+
+function setChatTag(chatId, chatType, tag) {
+  const chatKey = getChatStateKey(chatId, chatType);
+  const chatTags = readChatTags();
+  const label = typeof tag?.label === "string" ? tag.label.trim().slice(0, 16) : "";
+
+  if (!label) {
+    delete chatTags[chatKey];
+    saveChatTags(chatTags);
+    return;
+  }
+
+  chatTags[chatKey] = {
+    label,
+    color: normalizeChatTagColor(tag.color)
+  };
+  saveChatTags(chatTags);
+}
+
+function hexToRgb(color) {
+  const normalized = normalizeChatTagColor(color).replace("#", "");
+  const value = normalized.length === 3
+    ? normalized.split("").map((part) => `${part}${part}`).join("")
+    : normalized;
+  return {
+    r: Number.parseInt(value.slice(0, 2), 16),
+    g: Number.parseInt(value.slice(2, 4), 16),
+    b: Number.parseInt(value.slice(4, 6), 16)
+  };
+}
+
+function getChatTagStyleVars(color) {
+  const { r, g, b } = hexToRgb(color);
+  const textR = Math.max(28, Math.round(r * 0.58));
+  const textG = Math.max(28, Math.round(g * 0.58));
+  const textB = Math.max(28, Math.round(b * 0.58));
+
+  return {
+    background: `rgba(${r}, ${g}, ${b}, 0.18)`,
+    border: `rgba(${r}, ${g}, ${b}, 0.34)`,
+    text: `rgb(${textR}, ${textG}, ${textB})`,
+    solid: `rgb(${r}, ${g}, ${b})`
+  };
+}
+
+function getChatTagMarkup(chatId, chatType) {
+  const tag = getChatTag(chatId, chatType);
+  if (!tag) {
+    return "";
+  }
+
+  const styleVars = getChatTagStyleVars(tag.color);
+  return `
+    <span
+      class="chat-kind-label chat-custom-label"
+      style="--chat-tag-bg: ${styleVars.background}; --chat-tag-border: ${styleVars.border}; --chat-tag-text: ${styleVars.text}; --chat-tag-solid: ${styleVars.solid};"
+    >${escapeHtml(tag.label)}</span>
+  `;
 }
 
 function readChatListScroll() {
@@ -196,11 +295,18 @@ function setSidebarProfileStatus(factNode, message, type = "") {
   if (!status) {
     status = document.createElement("div");
     status.className = "sidebar-profile-inline-status";
+    status.innerHTML = `
+      <span class="sidebar-profile-inline-status-indicator" aria-hidden="true"></span>
+      <span class="sidebar-profile-inline-status-text"></span>
+    `;
     factNode.appendChild(status);
   }
 
   status.className = `sidebar-profile-inline-status ${type}`.trim();
-  status.textContent = message;
+  const textNode = status.querySelector(".sidebar-profile-inline-status-text");
+  if (textNode) {
+    textNode.textContent = message;
+  }
 }
 
 async function saveSidebarProfileField(field, value) {
@@ -290,7 +396,7 @@ function openSidebarProfileEditor(field) {
     const nextValue = input.value.trim();
     const saveButton = actions.querySelector(".save");
     if (saveButton) saveButton.disabled = true;
-    setSidebarProfileStatus(factNode, "Сохранение...");
+    setSidebarProfileStatus(factNode, "Сохранение...", "loading");
 
     try {
       await saveSidebarProfileField(field, nextValue);
@@ -420,10 +526,12 @@ function filterChats(query) {
   }
 
   return visibleChats.filter((chat) => {
+    const customTag = getChatTag(chat.id, chat.type || "direct");
     const haystack = [
       chat.title,
       chat.username,
-      chat.last_message?.text
+      chat.last_message?.text,
+      customTag?.label
     ]
       .filter(Boolean)
       .join(" ")
@@ -472,13 +580,46 @@ function buildChatListActionMenu() {
   const menu = document.createElement("div");
   menu.className = "chat-list-action-menu";
   menu.hidden = true;
-  menu.innerHTML = `
-    <button type="button" data-action="delete-me">Удалить у меня</button>
-    <button type="button" data-action="delete-all" class="danger">Удалить у всех</button>
-  `;
   document.body.appendChild(menu);
   chatListActionMenu = menu;
   return menu;
+}
+
+function buildChatTagEditorModal() {
+  if (chatTagEditorModal) {
+    return chatTagEditorModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "chat-tag-editor-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="chat-tag-editor-backdrop" data-chat-tag-close="true"></div>
+    <div class="chat-tag-editor-card" role="dialog" aria-modal="true" aria-label="Редактирование тега">
+      <div class="chat-tag-editor-header">
+        <h3>Тег чата</h3>
+        <button type="button" class="chat-tag-editor-close" data-chat-tag-close="true" aria-label="Закрыть">×</button>
+      </div>
+      <form class="chat-tag-editor-form">
+        <label class="label" for="chatTagLabelInput">Название</label>
+        <input class="input" id="chatTagLabelInput" name="label" type="text" maxlength="16" placeholder="Например, Работа">
+        <label class="label" for="chatTagColorInput">Цвет</label>
+        <div class="chat-tag-editor-color-row">
+          <input class="chat-tag-editor-color" id="chatTagColorInput" name="color" type="color" value="#3390ec">
+          <div class="chat-tag-editor-preview">
+            <span class="chat-kind-label chat-custom-label" id="chatTagPreviewLabel">Новый тег</span>
+          </div>
+        </div>
+        <div class="chat-tag-editor-actions">
+          <button class="button button-secondary" type="button" data-chat-tag-remove="true">Удалить тег</button>
+          <button class="button" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  chatTagEditorModal = modal;
+  return modal;
 }
 
 function buildChatDeleteUndoToast() {
@@ -591,9 +732,20 @@ function showChatListActionMenu(targetNode, clientX, clientY) {
   }
 
   activeChatListItem = targetNode;
+  const chatType = targetNode?.dataset.chatType || "direct";
+  menu.innerHTML = chatType === "direct"
+    ? `
+      <button type="button" data-action="edit-tag">Изменить тег</button>
+      <button type="button" data-action="delete-me">Удалить у меня</button>
+      <button type="button" data-action="delete-all" class="danger">Удалить у всех</button>
+    `
+    : `
+      <button type="button" data-action="edit-tag">Изменить тег</button>
+    `;
   menu.hidden = false;
-  const menuWidth = 180;
-  const menuHeight = 84;
+  const menuRect = menu.getBoundingClientRect();
+  const menuWidth = menuRect.width || 180;
+  const menuHeight = menuRect.height || 84;
   const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
   const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
   menu.style.left = `${Math.max(12, left)}px`;
@@ -601,6 +753,78 @@ function showChatListActionMenu(targetNode, clientX, clientY) {
   requestAnimationFrame(() => {
     menu.classList.add("visible");
   });
+}
+
+function closeChatTagEditorModal() {
+  if (!chatTagEditorModal) {
+    return;
+  }
+  chatTagEditorModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (chatTagEditorModal && !chatTagEditorModal.classList.contains("visible")) {
+      chatTagEditorModal.hidden = true;
+    }
+  }, 180);
+}
+
+function updateChatTagPreview(modal) {
+  const labelInput = modal.querySelector('#chatTagLabelInput');
+  const colorInput = modal.querySelector('#chatTagColorInput');
+  const preview = modal.querySelector('#chatTagPreviewLabel');
+  if (!labelInput || !colorInput || !preview) {
+    return;
+  }
+
+  const label = labelInput.value.trim() || "Новый тег";
+  const color = normalizeChatTagColor(colorInput.value);
+  const styleVars = getChatTagStyleVars(color);
+  preview.textContent = label;
+  preview.style.setProperty("--chat-tag-bg", styleVars.background);
+  preview.style.setProperty("--chat-tag-border", styleVars.border);
+  preview.style.setProperty("--chat-tag-text", styleVars.text);
+  preview.style.setProperty("--chat-tag-solid", styleVars.solid);
+}
+
+function openChatTagEditor(chatItem, listId = "chatList") {
+  const modal = buildChatTagEditorModal();
+  const labelInput = modal.querySelector('#chatTagLabelInput');
+  const colorInput = modal.querySelector('#chatTagColorInput');
+  const removeButton = modal.querySelector('[data-chat-tag-remove="true"]');
+  const form = modal.querySelector('.chat-tag-editor-form');
+  const chatId = chatItem?.dataset.chatId;
+  const chatType = chatItem?.dataset.chatType || "direct";
+
+  if (!modal || !labelInput || !colorInput || !removeButton || !form || !chatId) {
+    return;
+  }
+
+  const currentTag = getChatTag(chatId, chatType);
+  labelInput.value = currentTag?.label || "";
+  colorInput.value = currentTag?.color || "#3390ec";
+  removeButton.hidden = !currentTag;
+  updateChatTagPreview(modal);
+
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    setChatTag(chatId, chatType, {
+      label: labelInput.value,
+      color: colorInput.value
+    });
+    renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+    closeChatTagEditorModal();
+  };
+
+  removeButton.onclick = () => {
+    setChatTag(chatId, chatType, { label: "", color: colorInput.value });
+    renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+    closeChatTagEditorModal();
+  };
+
+  modal.hidden = false;
+  requestAnimationFrame(() => {
+    modal.classList.add("visible");
+  });
+  labelInput.focus();
 }
 
 function getActiveDirectChatContext() {
@@ -689,10 +913,11 @@ function bindChatListActions(listId = "chatList") {
 
   buildChatListActionMenu();
   buildChatDeleteUndoToast();
+  buildChatTagEditorModal();
   list.dataset.chatActionsBound = "true";
 
   list.addEventListener("contextmenu", (event) => {
-    const chatItem = event.target.closest(".chat-item[data-chat-type=\"direct\"]");
+    const chatItem = event.target.closest(".chat-item");
     if (!chatItem) {
       return;
     }
@@ -703,7 +928,7 @@ function bindChatListActions(listId = "chatList") {
 
   list.addEventListener("touchstart", (event) => {
     const touch = event.touches[0];
-    const chatItem = event.target.closest(".chat-item[data-chat-type=\"direct\"]");
+    const chatItem = event.target.closest(".chat-item");
     if (!touch || !chatItem) {
       chatListTouchTarget = null;
       return;
@@ -747,6 +972,11 @@ function bindChatListActions(listId = "chatList") {
       return;
     }
 
+    if (action === "edit-tag") {
+      openChatTagEditor(targetItem, listId);
+      return;
+    }
+
     try {
       await deleteDirectChatFromList(targetItem, action === "delete-all" ? "all" : "me", listId);
     } catch (error) {
@@ -765,8 +995,32 @@ function bindChatListActions(listId = "chatList") {
   });
 
   document.addEventListener("mousedown", (event) => {
-    if (!event.target.closest(".chat-list-action-menu") && !event.target.closest(".chat-item[data-chat-type=\"direct\"]")) {
+    if (
+      !event.target.closest(".chat-list-action-menu") &&
+      !event.target.closest(".chat-item") &&
+      !event.target.closest(".chat-tag-editor-card")
+    ) {
       hideChatListActionMenu();
+    }
+  });
+
+  chatTagEditorModal.addEventListener("click", (event) => {
+    if (event.target.closest('[data-chat-tag-close="true"]')) {
+      closeChatTagEditorModal();
+    }
+  });
+
+  chatTagEditorModal.querySelector('#chatTagLabelInput')?.addEventListener("input", () => {
+    updateChatTagPreview(chatTagEditorModal);
+  });
+
+  chatTagEditorModal.querySelector('#chatTagColorInput')?.addEventListener("input", () => {
+    updateChatTagPreview(chatTagEditorModal);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && chatTagEditorModal && !chatTagEditorModal.hidden) {
+      closeChatTagEditorModal();
     }
   });
 
@@ -825,6 +1079,7 @@ function renderChats(list, chats) {
       const preview = chat.last_message?.text || "Нет сообщений";
       const name = chat.title || chat.username || chat.name || "Чат";
       const isGroup = chat.type === "group";
+      const customTagMarkup = getChatTagMarkup(chat.id, chat.type || "direct");
       const active = currentPath === "group_chat.html"
         ? isGroup && String(chat.id) === currentId
         : currentPath === "chat.html"
@@ -841,7 +1096,7 @@ function renderChats(list, chats) {
             <div class="chat-topline">
               <div class="chat-title-row">
                 <h3 class="chat-name">${escapeHtml(name)}</h3>
-                ${isGroup ? '<span class="chat-kind-label">Группа</span>' : ""}
+                ${customTagMarkup}
               </div>
               <span class="time">${escapeHtml(formatDate(chat.updated_at || chat.last_message?.created_at))}</span>
             </div>

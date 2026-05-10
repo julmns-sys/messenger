@@ -119,6 +119,42 @@
             <div id="messageStatus" class="status thread-status"></div>
           </div>
         </div>
+        <aside class="thread-info-panel" id="threadInfoPanel" aria-hidden="true">
+          <div class="thread-info-panel-header">
+            <div>
+              <h2 class="thread-info-title">Информация</h2>
+              <p class="thread-info-subtitle">О группе</p>
+            </div>
+            <button class="icon-button" id="threadInfoClose" type="button" aria-label="Закрыть">×</button>
+          </div>
+          <div class="thread-info-panel-body">
+            <div class="thread-info-hero">
+              <div class="avatar group-avatar thread-info-avatar" id="threadInfoAvatar">?</div>
+              <h3 class="thread-info-name" id="threadInfoName">Группа</h3>
+              <p class="thread-info-handle" id="threadInfoHandle">group</p>
+            </div>
+            <div class="thread-info-facts">
+              <div class="thread-info-fact">
+                <span class="thread-info-label">Описание</span>
+                <strong id="threadInfoDescription">Нет описания</strong>
+              </div>
+              <div class="thread-info-fact">
+                <span class="thread-info-label">Тип</span>
+                <strong id="threadInfoType">Группа</strong>
+              </div>
+              <div class="thread-info-fact">
+                <span class="thread-info-label">ID</span>
+                <strong id="threadInfoId">-</strong>
+              </div>
+            </div>
+            <div class="thread-info-members" id="threadInfoMembersWrap">
+              <div class="thread-info-members-header">
+                <h4>Участники</h4>
+              </div>
+              <div class="member-list thread-info-members-list" id="threadInfoMembersList"></div>
+            </div>
+          </div>
+        </aside>
       </section>
     </main>
     <script src="assets/js/api.js"></script>

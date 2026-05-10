@@ -59,6 +59,27 @@ def serialize_user_profile(user):
     }
 
 
+def serialize_public_user(user):
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "username": user["username"],
+        "bio": user["bio"]
+    }
+
+
+def can_manage_group_admins(conn, user_id, group_id):
+    if not user_id:
+        return False
+
+    group = conn.execute("""
+        SELECT owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+    return bool(group and group["owner_id"] == user_id)
+
+
 def can_access_direct_chat(conn, user_id, chat_id):
     if not user_id:
         return False
@@ -528,6 +549,11 @@ def search_users():
             u.id,
             u.name,
             u.username,
+            EXISTS (
+                SELECT 1
+                FROM contacts ct
+                WHERE ct.owner_user_id = ? AND ct.contact_user_id = u.id
+            ) AS is_contact,
             c.id AS chat_id
         FROM users u
         LEFT JOIN chats c
@@ -546,10 +572,110 @@ def search_users():
             )
         WHERE u.username LIKE ? AND u.id != ?
         LIMIT 20
-    """, (user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
     conn.close()
 
     return jsonify([dict(u) for u in users])
+
+
+@app.get("/contacts")
+def get_contacts():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    contacts = conn.execute("""
+        SELECT
+            u.id,
+            u.name,
+            u.username,
+            c.id AS chat_id
+        FROM contacts ct
+        JOIN users u ON u.id = ct.contact_user_id
+        LEFT JOIN chats c
+            ON (
+                ((c.user1_id = ? AND c.user2_id = u.id) OR (c.user2_id = ? AND c.user1_id = u.id))
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM hidden_direct_chats hdc
+                    WHERE hdc.chat_id = c.id AND hdc.user_id = ?
+                )
+            )
+        WHERE ct.owner_user_id = ?
+        ORDER BY COALESCE(u.name, u.username), u.username
+    """, (user_id, user_id, user_id, user_id)).fetchall()
+    conn.close()
+
+    return jsonify([dict(contact) for contact in contacts])
+
+
+@app.post("/contacts")
+def add_contact():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    contact_user_id = data.get("user_id") or data.get("contact_user_id")
+
+    try:
+        contact_user_id = int(contact_user_id)
+    except (TypeError, ValueError):
+        return jsonify({"message": "Некорректный user_id"}), 400
+
+    if contact_user_id == user_id:
+        return jsonify({"message": "Нельзя добавить себя в контакты"}), 400
+
+    conn = get_db()
+    target_user = conn.execute("""
+        SELECT id, name, username
+        FROM users
+        WHERE id = ?
+    """, (contact_user_id,)).fetchone()
+
+    if not target_user:
+        conn.close()
+        return jsonify({"message": "Пользователь не найден"}), 404
+
+    conn.execute("""
+        INSERT OR IGNORE INTO contacts (owner_user_id, contact_user_id)
+        VALUES (?, ?)
+    """, (user_id, contact_user_id))
+    conn.commit()
+
+    chat = conn.execute("""
+        SELECT id
+        FROM chats
+        WHERE (user1_id = ? AND user2_id = ?) OR (user1_id = ? AND user2_id = ?)
+        LIMIT 1
+    """, (user_id, contact_user_id, contact_user_id, user_id)).fetchone()
+    conn.close()
+
+    return jsonify({
+        "id": target_user["id"],
+        "name": target_user["name"],
+        "username": target_user["username"],
+        "chat_id": chat["id"] if chat else None,
+        "is_contact": True
+    }), 201
+
+
+@app.delete("/contacts/<int:contact_user_id>")
+def remove_contact(contact_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    conn.execute("""
+        DELETE FROM contacts
+        WHERE owner_user_id = ? AND contact_user_id = ?
+    """, (user_id, contact_user_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"ok": True, "contact_user_id": contact_user_id})
 
 
 @app.get("/users/<int:target_user_id>")
@@ -560,7 +686,7 @@ def get_user(target_user_id):
 
     conn = get_db()
     user = conn.execute("""
-        SELECT id, name, username
+        SELECT id, name, username, bio
         FROM users
         WHERE id = ? AND id != ?
     """, (target_user_id, user_id)).fetchone()
@@ -569,7 +695,7 @@ def get_user(target_user_id):
     if not user:
         return jsonify({"message": "Пользователь не найден"}), 404
 
-    return jsonify(dict(user))
+    return jsonify(serialize_public_user(user))
 
 
 @app.get("/chats")
@@ -749,7 +875,10 @@ def get_chat(chat_id):
     chat = conn.execute("""
         SELECT
             c.id,
-            u.username
+            u.id AS user_id,
+            u.username,
+            u.name,
+            u.bio
         FROM chats c
         JOIN users u
             ON u.id = CASE
@@ -777,8 +906,11 @@ def get_chat(chat_id):
 
     return jsonify({
         "id": chat["id"],
-        "title": chat["username"],
+        "user_id": chat["user_id"],
+        "title": chat["name"] or chat["username"],
+        "name": chat["name"],
         "username": chat["username"],
+        "bio": chat["bio"],
         "has_more_messages": has_more_messages,
         "messages": [
             serialize_direct_message(message)
@@ -1094,6 +1226,9 @@ def create_group():
     if not title:
         return jsonify({"message": "Название группы обязательно"}), 400
 
+    if len(title) > 16:
+        return jsonify({"message": "Название группы: максимум 16 символов"}), 400
+
     if not isinstance(member_ids, list):
         return jsonify({"message": "member_ids должен быть списком"}), 400
 
@@ -1107,14 +1242,14 @@ def create_group():
     group_id = cur.lastrowid
 
     cur.execute("""
-        INSERT OR IGNORE INTO group_members (group_id, user_id)
-        VALUES (?, ?)
+        INSERT OR IGNORE INTO group_members (group_id, user_id, is_admin)
+        VALUES (?, ?, 1)
     """, (group_id, user_id))
 
     for member_id in member_ids:
         cur.execute("""
-            INSERT OR IGNORE INTO group_members (group_id, user_id)
-            VALUES (?, ?)
+            INSERT OR IGNORE INTO group_members (group_id, user_id, is_admin)
+            VALUES (?, ?, 0)
         """, (group_id, member_id))
 
     conn.commit()
@@ -1141,7 +1276,7 @@ def get_group(group_id):
         return jsonify({"message": "Группа не найдена"}), 404
 
     group = conn.execute("""
-        SELECT id, title
+        SELECT id, title, description, owner_id
         FROM groups
         WHERE id = ?
     """, (group_id,)).fetchone()
@@ -1151,6 +1286,18 @@ def get_group(group_id):
         FROM group_members
         WHERE group_id = ?
     """, (group_id,)).fetchone()
+    members = conn.execute("""
+        SELECT
+            u.id,
+            u.name,
+            u.username,
+            u.bio,
+            gm.is_admin
+        FROM group_members gm
+        JOIN users u ON u.id = gm.user_id
+        WHERE gm.group_id = ?
+        ORDER BY COALESCE(u.name, u.username), u.username
+    """, (group_id,)).fetchall()
     limit = parse_limit_arg()
     messages, has_more_messages = fetch_group_messages_page(conn, group_id, user_id, limit)
     conn.close()
@@ -1159,7 +1306,18 @@ def get_group(group_id):
         "id": group["id"],
         "title": group["title"],
         "name": group["title"],
+        "description": group["description"],
+        "owner_id": group["owner_id"],
+        "can_manage_admins": group["owner_id"] == user_id,
         "members_count": members_count_row["members_count"],
+        "members": [
+            {
+                **serialize_public_user(member),
+                "is_admin": bool(member["is_admin"]),
+                "is_owner": member["id"] == group["owner_id"]
+            }
+            for member in members
+        ],
         "has_more_messages": has_more_messages,
         "messages": [
             serialize_group_message(message)
@@ -1188,6 +1346,60 @@ def get_group_messages(group_id):
     return jsonify({
         "messages": [serialize_group_message(message) for message in messages],
         "has_more_messages": has_more
+    })
+
+
+@app.patch("/groups/<int:group_id>/members/<int:member_user_id>")
+def update_group_member_role(group_id, member_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    if "is_admin" not in data:
+        return jsonify({"message": "is_admin обязателен"}), 400
+
+    conn = get_db()
+    if not can_manage_group_admins(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Недостаточно прав"}), 403
+
+    group = conn.execute("""
+        SELECT owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+    if not group:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    member = conn.execute("""
+        SELECT user_id
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, member_user_id)).fetchone()
+    if not member:
+        conn.close()
+        return jsonify({"message": "Участник не найден"}), 404
+
+    if member_user_id == group["owner_id"]:
+        conn.close()
+        return jsonify({"message": "Нельзя изменить права создателя группы"}), 400
+
+    is_admin = bool(data.get("is_admin"))
+    conn.execute("""
+        UPDATE group_members
+        SET is_admin = ?
+        WHERE group_id = ? AND user_id = ?
+    """, (1 if is_admin else 0, group_id, member_user_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "ok": True,
+        "group_id": group_id,
+        "member_user_id": member_user_id,
+        "is_admin": is_admin
     })
 
 
