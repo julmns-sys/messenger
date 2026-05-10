@@ -61,6 +61,13 @@ def init_db():
     if "edited_at" not in message_columns:
         cur.execute("ALTER TABLE messages ADD COLUMN edited_at TIMESTAMP")
 
+    user_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "bio" not in user_columns:
+        cur.execute("ALTER TABLE users ADD COLUMN bio TEXT")
+
     cur.execute("""
     CREATE TABLE IF NOT EXISTS groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

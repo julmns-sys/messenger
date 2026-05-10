@@ -1,7 +1,8 @@
 const API = {
   baseUrl: localStorage.getItem("messenger_api_base") || window.location.origin,
   tokenKey: "messenger_token",
-  userKey: "messenger_user"
+  userKey: "messenger_user",
+  emailBookKey: "messenger_user_emails"
 };
 
 function setApiBase(url) {
@@ -13,11 +14,66 @@ function getToken() {
   return localStorage.getItem(API.tokenKey);
 }
 
+function readEmailBook() {
+  const raw = localStorage.getItem(API.emailBookKey);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberUserEmail(user) {
+  const username = typeof user?.username === "string" ? user.username.trim() : "";
+  const email = typeof user?.email === "string" ? user.email.trim() : "";
+  if (!username || !email) {
+    return;
+  }
+
+  const emailBook = readEmailBook();
+  emailBook[username.toLowerCase()] = email;
+  localStorage.setItem(API.emailBookKey, JSON.stringify(emailBook));
+}
+
+function resolveRememberedEmail(user) {
+  if (!user || user.email) {
+    return user;
+  }
+
+  const username = typeof user.username === "string" ? user.username.trim().toLowerCase() : "";
+  if (!username) {
+    return user;
+  }
+
+  const emailBook = readEmailBook();
+  const rememberedEmail = emailBook[username];
+  if (!rememberedEmail) {
+    return user;
+  }
+
+  return {
+    ...user,
+    email: rememberedEmail
+  };
+}
+
 function setSession(token, user) {
   localStorage.setItem(API.tokenKey, token);
   if (user) {
-    localStorage.setItem(API.userKey, JSON.stringify(user));
+    const normalizedUser = resolveRememberedEmail(user);
+    localStorage.setItem(API.userKey, JSON.stringify(normalizedUser));
+    rememberUserEmail(normalizedUser);
   }
+}
+
+function setCurrentUser(user) {
+  const token = getToken();
+  if (!token || !user) {
+    return;
+  }
+  setSession(token, user);
 }
 
 function clearSession() {

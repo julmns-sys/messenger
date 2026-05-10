@@ -27,6 +27,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   requireAuth();
   bindLogout();
   fillUserBadge();
+  initSidebarProfile();
   await loadChats();
 
   const form = document.getElementById("searchForm");

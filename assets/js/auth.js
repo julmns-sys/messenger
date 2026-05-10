@@ -30,7 +30,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (data.token) {
-        setSession(data.token, data.user || payload);
+        setSession(data.token, {
+          ...payload,
+          ...(data.user || {})
+        });
       }
 
       setStatus(mode === "register" ? "Аккаунт создан" : "Вход выполнен", "success");

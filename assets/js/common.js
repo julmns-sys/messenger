@@ -54,6 +54,326 @@ function fillUserBadge(targetId = "currentUserBadge") {
   target.textContent = user.username ? `@${user.username}` : user.name || "User";
 }
 
+function getSidebarProfileFields() {
+  return {
+    name: document.getElementById("sidebarProfileNameField"),
+    email: document.getElementById("sidebarProfileEmail"),
+    username: document.getElementById("sidebarProfileHandle"),
+    bio: document.getElementById("sidebarProfileBio"),
+    id: document.getElementById("sidebarProfileId")
+  };
+}
+
+function getSidebarProfileFieldValue(field, user) {
+  if (!user) return "";
+
+  switch (field) {
+    case "name":
+      return user.name || "Не указано";
+    case "email":
+      return user.email || "Не указана";
+    case "username":
+      return user.username ? `@${user.username}` : "Не указан";
+    case "bio":
+      return user.bio || "Не указана";
+    case "id":
+      return user.id ? String(user.id) : "-";
+    default:
+      return "";
+  }
+}
+
+function fillSidebarProfile() {
+  const user = getCurrentUser();
+  const avatar = document.getElementById("sidebarProfileAvatar");
+  const name = document.getElementById("sidebarProfileName");
+  const username = document.getElementById("sidebarProfileUsername");
+  const fields = getSidebarProfileFields();
+
+  if (!user || !avatar || !name || !username || !fields.name || !fields.email || !fields.username || !fields.bio || !fields.id) {
+    return;
+  }
+
+  const fullName = user.name || user.username || "Пользователь";
+  const usernameValue = user.username ? `@${user.username}` : "Не указан";
+
+  avatar.textContent = initials(fullName);
+  name.textContent = fullName;
+  username.textContent = usernameValue;
+  fields.name.textContent = getSidebarProfileFieldValue("name", user);
+  fields.username.textContent = getSidebarProfileFieldValue("username", user);
+  fields.bio.textContent = getSidebarProfileFieldValue("bio", user);
+  fields.bio.classList.toggle("multiline", Boolean(user.bio));
+  fields.id.textContent = getSidebarProfileFieldValue("id", user);
+
+  fields.email.textContent = getSidebarProfileFieldValue("email", user);
+  fields.email.classList.toggle("is-blurred", Boolean(user.email));
+  fields.email.setAttribute("aria-label", user.email ? "Показать email" : "Email не указан");
+  fields.email.setAttribute("aria-pressed", "false");
+}
+
+function setSidebarProfileEditMode(sidebar, isActive) {
+  if (!sidebar) return;
+  const toggleButton = document.getElementById("sidebarProfileEditToggle");
+  sidebar.classList.toggle("profile-edit-mode", Boolean(isActive));
+  if (toggleButton) {
+    toggleButton.textContent = isActive ? "Готово" : "Изменить";
+    toggleButton.setAttribute("aria-pressed", isActive ? "true" : "false");
+  }
+  if (!isActive) {
+    document.querySelectorAll(".sidebar-profile-fact").forEach(hideSidebarProfileEditor);
+  }
+}
+
+async function syncSidebarProfile() {
+  try {
+    const user = await apiFetch("/users/me");
+    setCurrentUser(user);
+    fillUserBadge();
+    fillSidebarProfile();
+  } catch {
+    // Keep local session data if profile sync fails.
+  }
+}
+
+function getSidebarProfileEditConfig(field) {
+  return {
+    name: {
+      label: "Имя",
+      multiline: false,
+      maxLength: 80,
+      value: (user) => user?.name || ""
+    },
+    email: {
+      label: "Email",
+      multiline: false,
+      maxLength: 255,
+      value: (user) => user?.email || ""
+    },
+    username: {
+      label: "Username",
+      multiline: false,
+      maxLength: 32,
+      value: (user) => user?.username || ""
+    },
+    bio: {
+      label: "Bio",
+      multiline: true,
+      maxLength: 50,
+      value: (user) => user?.bio || ""
+    }
+  }[field];
+}
+
+function hideSidebarProfileEditor(factNode) {
+  const editor = factNode?.querySelector(".sidebar-profile-editor");
+  const line = factNode?.querySelector(".sidebar-profile-line");
+  const status = factNode?.querySelector(".sidebar-profile-inline-status");
+
+  if (editor) {
+    editor.remove();
+  }
+  if (line) {
+    line.classList.remove("editing");
+    line.querySelectorAll("[data-profile-line-item]").forEach((node) => {
+      node.hidden = false;
+    });
+  }
+  if (status) {
+    status.remove();
+  }
+}
+
+function setSidebarProfileStatus(factNode, message, type = "") {
+  if (!factNode) return;
+
+  let status = factNode.querySelector(".sidebar-profile-inline-status");
+  if (!message) {
+    if (status) status.remove();
+    return;
+  }
+
+  if (!status) {
+    status = document.createElement("div");
+    status.className = "sidebar-profile-inline-status";
+    factNode.appendChild(status);
+  }
+
+  status.className = `sidebar-profile-inline-status ${type}`.trim();
+  status.textContent = message;
+}
+
+async function saveSidebarProfileField(field, value) {
+  const updatedUser = await apiFetch("/users/me", {
+    method: "PATCH",
+    body: JSON.stringify({ [field]: value })
+  });
+
+  setCurrentUser(updatedUser);
+  fillUserBadge();
+  fillSidebarProfile();
+  return updatedUser;
+}
+
+function openSidebarProfileEditor(field) {
+  const sidebar = document.querySelector(".sidebar");
+  const button = document.querySelector(`[data-profile-edit="${field}"]`);
+  const factNode = button?.closest(".sidebar-profile-fact");
+  const line = factNode?.querySelector(".sidebar-profile-line");
+  const config = getSidebarProfileEditConfig(field);
+  const currentUser = getCurrentUser();
+
+  if (!sidebar || !factNode || !line || !config) {
+    return;
+  }
+
+  setSidebarProfileEditMode(sidebar, true);
+
+  document.querySelectorAll(".sidebar-profile-fact").forEach((node) => {
+    if (node !== factNode) {
+      hideSidebarProfileEditor(node);
+    }
+  });
+
+  hideSidebarProfileEditor(factNode);
+  line.classList.add("editing");
+  setSidebarProfileStatus(factNode, "");
+
+  line.querySelectorAll("strong, button").forEach((node) => {
+    if (!node.classList.contains("sidebar-profile-editor-button")) {
+      node.dataset.profileLineItem = "true";
+      node.hidden = true;
+    }
+  });
+
+  const editor = document.createElement("form");
+  editor.className = "sidebar-profile-editor";
+
+  const input = document.createElement("input");
+
+  input.className = "sidebar-profile-editor-input";
+  input.type = field === "email" ? "email" : "text";
+  if (config.maxLength) {
+    input.maxLength = config.maxLength;
+  }
+  input.value = config.value(currentUser);
+  input.placeholder = `Введите ${config.label.toLowerCase()}`;
+
+  const actions = document.createElement("div");
+  actions.className = "sidebar-profile-editor-actions";
+  actions.innerHTML = `
+    <button class="sidebar-profile-editor-button cancel" type="button">Отмена</button>
+    <button class="sidebar-profile-editor-button save" type="submit">Сохранить</button>
+  `;
+
+  editor.appendChild(input);
+  editor.appendChild(actions);
+  line.appendChild(editor);
+  input.focus();
+  if (typeof input.setSelectionRange === "function") {
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
+  actions.querySelector(".cancel")?.addEventListener("click", () => {
+    hideSidebarProfileEditor(factNode);
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideSidebarProfileEditor(factNode);
+    }
+  });
+
+  editor.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const nextValue = input.value.trim();
+    const saveButton = actions.querySelector(".save");
+    if (saveButton) saveButton.disabled = true;
+    setSidebarProfileStatus(factNode, "Сохранение...");
+
+    try {
+      await saveSidebarProfileField(field, nextValue);
+      hideSidebarProfileEditor(factNode);
+      setSidebarProfileStatus(factNode, "Сохранено", "success");
+      window.setTimeout(() => {
+        setSidebarProfileStatus(factNode, "");
+      }, 1200);
+    } catch (error) {
+      setSidebarProfileStatus(factNode, error.message, "error");
+      if (saveButton) saveButton.disabled = false;
+    }
+  });
+}
+
+function setSidebarProfileOpen(sidebar, isOpen) {
+  if (!sidebar) return;
+  const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
+  sidebar.classList.toggle("profile-open", Boolean(isOpen));
+  if (profilePanel) {
+    profilePanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  }
+}
+
+function initSidebarProfile() {
+  const sidebar = document.querySelector(".sidebar");
+  const badge = document.getElementById("currentUserBadge");
+  const backButton = document.getElementById("sidebarProfileBack");
+  const emailButton = document.getElementById("sidebarProfileEmail");
+  const editToggleButton = document.getElementById("sidebarProfileEditToggle");
+  const editButtons = document.querySelectorAll("[data-profile-edit]");
+
+  fillSidebarProfile();
+
+  if (!sidebar || !badge || !backButton || !editToggleButton || badge.dataset.profileBound === "true") {
+    return;
+  }
+
+  badge.dataset.profileBound = "true";
+  badge.addEventListener("click", () => {
+    setSidebarProfileOpen(sidebar, true);
+    setSidebarProfileEditMode(sidebar, false);
+    void syncSidebarProfile();
+  });
+
+  backButton.addEventListener("click", () => {
+    setSidebarProfileOpen(sidebar, false);
+    setSidebarProfileEditMode(sidebar, false);
+  });
+
+  editToggleButton.addEventListener("click", () => {
+    const nextState = !sidebar.classList.contains("profile-edit-mode");
+    setSidebarProfileEditMode(sidebar, nextState);
+  });
+
+  if (emailButton && !emailButton.dataset.toggleBound) {
+    emailButton.dataset.toggleBound = "true";
+    emailButton.addEventListener("click", () => {
+      if (!emailButton.textContent || emailButton.textContent === "Не указана") {
+        return;
+      }
+
+      const nextBlurState = !emailButton.classList.contains("is-blurred");
+      emailButton.classList.toggle("is-blurred", nextBlurState);
+      emailButton.setAttribute("aria-pressed", nextBlurState ? "false" : "true");
+      emailButton.setAttribute("aria-label", nextBlurState ? "Показать email" : "Скрыть email");
+    });
+  }
+
+  editButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      openSidebarProfileEditor(button.dataset.profileEdit);
+    });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && sidebar.classList.contains("profile-open")) {
+      setSidebarProfileOpen(sidebar, false);
+      setSidebarProfileEditMode(sidebar, false);
+    }
+  });
+}
+
 function getChatSearchQuery() {
   return document.querySelector(".sidebar-search .search-input")?.value.trim() || "";
 }

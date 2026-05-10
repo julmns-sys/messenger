@@ -49,6 +49,16 @@ def user_id_from_token(token):
     return lookup_user_id_by_token(token)
 
 
+def serialize_user_profile(user):
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "username": user["username"],
+        "email": user["email"],
+        "bio": user["bio"]
+    }
+
+
 def can_access_direct_chat(conn, user_id, chat_id):
     if not user_id:
         return False
@@ -385,7 +395,9 @@ def register():
         "user": {
             "id": user_id,
             "name": name,
-            "username": username
+            "username": username,
+            "email": email,
+            "bio": ""
         }
     })
 
@@ -412,12 +424,94 @@ def login():
 
     return jsonify({
         "token": token,
-        "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "username": user["username"]
-        }
+        "user": serialize_user_profile(user)
     })
+
+
+@app.get("/users/me")
+def get_me():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    user = conn.execute("""
+        SELECT id, name, username, email, bio
+        FROM users
+        WHERE id = ?
+    """, (user_id,)).fetchone()
+    conn.close()
+
+    if not user:
+        return jsonify({"message": "Пользователь не найден"}), 404
+
+    return jsonify(serialize_user_profile(user))
+
+
+@app.patch("/users/me")
+def update_me():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    allowed_fields = {
+        "name": (data.get("name", ""), 80),
+        "username": (data.get("username", ""), 32),
+        "email": (data.get("email", ""), 255),
+        "bio": (data.get("bio", ""), 50)
+    }
+
+    updates = {}
+    for field, (raw_value, max_length) in allowed_fields.items():
+        if field not in data:
+            continue
+        value = str(raw_value or "").strip()
+        if field == "username":
+            value = value.replace("@", "")
+        if len(value) > max_length:
+            return jsonify({"message": f"{field} слишком длинный"}), 400
+        updates[field] = value
+
+    if not updates:
+        return jsonify({"message": "Нет данных для обновления"}), 400
+
+    if "name" in updates and not updates["name"]:
+        return jsonify({"message": "Имя не может быть пустым"}), 400
+
+    if "username" in updates and not updates["username"]:
+        return jsonify({"message": "Username не может быть пустым"}), 400
+
+    conn = get_db()
+
+    if "username" in updates:
+        existing_user = conn.execute("""
+            SELECT id
+            FROM users
+            WHERE username = ? AND id != ?
+        """, (updates["username"], user_id)).fetchone()
+        if existing_user:
+            conn.close()
+            return jsonify({"message": "Такой username уже занят"}), 400
+
+    assignments = ", ".join(f"{field} = ?" for field in updates.keys())
+    params = [*updates.values(), user_id]
+
+    conn.execute(f"""
+        UPDATE users
+        SET {assignments}
+        WHERE id = ?
+    """, params)
+    conn.commit()
+
+    user = conn.execute("""
+        SELECT id, name, username, email, bio
+        FROM users
+        WHERE id = ?
+    """, (user_id,)).fetchone()
+    conn.close()
+
+    return jsonify(serialize_user_profile(user))
 
 
 @app.get("/users/search")
