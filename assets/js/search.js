@@ -1,7 +1,8 @@
 const searchState = {
   results: [],
   contacts: [],
-  hasSearched: false
+  hasSearched: false,
+  activeProfileUserId: null
 };
 
 function renderActionButtonContent(icon, text) {
@@ -19,6 +20,50 @@ function getDirectChatHref(user) {
   return `chat.html?${user.chat_id ? `id=${encodeURIComponent(user.chat_id)}` : `user_id=${encodeURIComponent(user.id)}`}`;
 }
 
+function setSearchUserInfoOpen(isOpen) {
+  const contentNode = document.querySelector(".content");
+  const panel = document.getElementById("searchUserInfoPanel");
+  if (!contentNode || !panel) {
+    return;
+  }
+
+  contentNode.classList.toggle("thread-info-open", Boolean(isOpen));
+  panel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+}
+
+function fillSearchUserInfoPanel(user) {
+  const avatarNode = document.getElementById("searchUserInfoAvatar");
+  const nameNode = document.getElementById("searchUserInfoName");
+  const handleNode = document.getElementById("searchUserInfoHandle");
+  const bioNode = document.getElementById("searchUserInfoBio");
+
+  if (!avatarNode || !nameNode || !handleNode || !bioNode || !user) {
+    return;
+  }
+
+  const title = user.name || user.username || "Пользователь";
+  avatarNode.textContent = initials(title);
+  nameNode.textContent = title;
+  handleNode.textContent = user.username ? `@${user.username}` : "Пользователь";
+  bioNode.textContent = user.bio && String(user.bio).trim() ? user.bio : "Не указана";
+}
+
+async function openSearchUserInfo(userId) {
+  if (!userId) {
+    return;
+  }
+
+  const user = await apiFetch(`/users/${encodeURIComponent(userId)}`);
+  searchState.activeProfileUserId = String(user.id);
+  fillSearchUserInfoPanel(user);
+  setSearchUserInfoOpen(true);
+}
+
+function closeSearchUserInfo() {
+  searchState.activeProfileUserId = null;
+  setSearchUserInfoOpen(false);
+}
+
 function renderContacts(contacts) {
   const contactsList = document.getElementById("contactsList");
   if (!contactsList) return;
@@ -30,7 +75,7 @@ function renderContacts(contacts) {
 
   contactsList.innerHTML = contacts
     .map((user) => `
-      <article class="result-item">
+      <article class="result-item result-item-clickable" data-contact-user-id="${escapeHtml(String(user.id))}">
         <div class="avatar small">${escapeHtml(initials(user.name || user.username || "U"))}</div>
         <div class="result-meta">
           <div class="result-topline">
@@ -193,8 +238,27 @@ document.addEventListener("DOMContentLoaded", async () => {
   const form = document.getElementById("searchForm");
   const input = document.getElementById("searchInput");
   const status = document.getElementById("searchStatus");
+  const contactsList = document.getElementById("contactsList");
+  const infoCloseButton = document.getElementById("searchUserInfoClose");
 
   if (!form || !input) return;
+
+  infoCloseButton?.addEventListener("click", () => {
+    closeSearchUserInfo();
+  });
+
+  contactsList?.addEventListener("click", (event) => {
+    if (event.target.closest(".result-actions")) {
+      return;
+    }
+
+    const card = event.target.closest("[data-contact-user-id]");
+    if (!card) {
+      return;
+    }
+
+    void openSearchUserInfo(card.dataset.contactUserId);
+  });
 
   input.addEventListener("input", () => {
     if (input.value.trim()) {
@@ -236,6 +300,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       renderResults(searchState.results);
       status.textContent = error.message;
       status.className = "status error";
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      const panel = document.getElementById("searchUserInfoPanel");
+      if (panel?.getAttribute("aria-hidden") === "false") {
+        closeSearchUserInfo();
+      }
     }
   });
 });

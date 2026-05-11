@@ -904,8 +904,8 @@ def get_user(target_user_id):
     user = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ? AND id != ?
-    """, (target_user_id, user_id)).fetchone()
+        WHERE id = ?
+    """, (target_user_id,)).fetchone()
     conn.close()
 
     if not user:

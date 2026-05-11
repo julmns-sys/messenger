@@ -70,7 +70,7 @@ function renderMessageItem(message, currentUserId, chatType) {
 
   return `
     <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="text" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
-      ${!own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
+      ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : !own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
       <p class="message-text">${escapeHtml(message.text || "")}</p>
       <div class="message-meta">
         ${renderEditedIndicator(message)}
@@ -526,6 +526,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   let socket = null;
   let selectedUser = null;
   let currentThreadInfo = null;
+  let activeThreadInfoView = null;
+  let activeThreadInfoType = chatType;
   let pendingMessageState = null;
   let isSendingMessage = false;
   let isMarkingRead = false;
@@ -564,6 +566,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (panel) {
       panel.setAttribute("aria-hidden", isOpen ? "false" : "true");
     }
+  }
+
+  function setActiveThreadInfoView(info, infoType = chatType) {
+    activeThreadInfoView = info || null;
+    activeThreadInfoType = infoType || chatType;
   }
 
   function closeThreadInfoActionMenu() {
@@ -633,6 +640,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     selectedUser = await apiFetch(`/users/${encodeURIComponent(userId)}`);
     currentThreadInfo = selectedUser;
+    setActiveThreadInfoView(currentThreadInfo, chatType);
     return selectedUser;
   }
 
@@ -663,7 +671,30 @@ document.addEventListener("DOMContentLoaded", async () => {
         hideThreadMemberActionMenu();
       }
     }
-    fillThreadInfoPanel(currentThreadInfo, chatType);
+    if (!activeThreadInfoView || activeThreadInfoType === chatType) {
+      setActiveThreadInfoView(currentThreadInfo, chatType);
+    }
+    fillThreadInfoPanel(
+      activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
+      activeThreadInfoType === chatType ? chatType : activeThreadInfoType
+    );
+  }
+
+  async function openMessageAuthorProfile(authorUserId) {
+    if (!authorUserId) {
+      return;
+    }
+
+    const profile = await apiFetch(`/users/${encodeURIComponent(authorUserId)}`);
+    closeThreadInfoActionMenu();
+    closeThreadMemberAddModal();
+    closeThreadGroupEditModal();
+    setActiveThreadInfoView({
+      ...profile,
+      title: profile.name || profile.username || "Пользователь"
+    }, "direct");
+    fillThreadInfoPanel(activeThreadInfoView, activeThreadInfoType);
+    setThreadInfoOpen(true);
   }
 
   function hideThreadMemberActionMenu() {
@@ -815,6 +846,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const title = user?.name || user?.username || "Чат";
     const subtitle = user?.username ? `@${user.username}` : "";
     currentThreadInfo = user ? { ...user, title } : null;
+    setActiveThreadInfoView(currentThreadInfo, chatType);
     setChatTitle(title, subtitle);
     fillThreadInfoPanel(currentThreadInfo, chatType);
     renderMessages(messagesNode, [], currentUser.id, chatType);
@@ -1397,6 +1429,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       ...data,
       title
     };
+    setActiveThreadInfoView(currentThreadInfo, chatType);
     setChatTitle(title, subtitle);
     fillThreadInfoPanel(currentThreadInfo, chatType);
     const nextMessages = data.messages || [];
@@ -1599,7 +1632,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     closeThreadInfoActionMenu();
     closeThreadMemberAddModal();
-    fillThreadInfoPanel(currentThreadInfo, chatType);
+    setActiveThreadInfoView(currentThreadInfo, chatType);
+    fillThreadInfoPanel(activeThreadInfoView, activeThreadInfoType);
     setThreadInfoOpen(true);
   }
 
@@ -1626,6 +1660,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     const action = event.target.closest("button")?.dataset.threadInfoAction;
     if (action === "edit-group") {
       openThreadGroupEditModal();
+    }
+  });
+
+  messagesNode.addEventListener("click", (event) => {
+    const authorTrigger = event.target.closest("[data-message-author-id]");
+    if (authorTrigger && chatType === "group") {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMessageAuthorProfile(authorTrigger.dataset.messageAuthorId);
+      return;
     }
   });
 

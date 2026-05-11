@@ -919,6 +919,14 @@ textarea {
   box-shadow: 0 6px 16px rgba(31, 52, 79, 0.04);
 }
 
+.result-item-clickable {
+  cursor: pointer;
+}
+
+.result-item-clickable:active {
+  transform: translateY(1px);
+}
+
 .chat-item.active {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(228, 241, 255, 0.82));
   border-color: rgba(92, 157, 225, 0.16);
@@ -1815,6 +1823,31 @@ textarea {
   font-size: 13px;
   font-weight: 600;
   color: var(--accent);
+}
+
+.message-author-button {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
+}
+
+.message-author-button:hover {
+  color: var(--accent-dark);
+}
+
+.message-author-button:active {
+  transform: translateY(1px);
+}
+
+.message-author-button:focus-visible {
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .message-text {
@@ -3156,19 +3189,28 @@ textarea {
 }
 
 @media (max-width: 640px) {
+  .app {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .content {
+    border-radius: 24px;
+  }
+
   .auth-card,
   .panel {
-    padding: 20px;
+    padding: 16px;
     border-radius: 22px;
   }
 
   .page-header {
-    padding: 18px 18px 0;
+    padding: 14px 12px 0;
     align-items: flex-start;
   }
 
   .panel {
-    margin: 18px;
+    margin: 10px;
   }
 
   .message {
@@ -3231,7 +3273,17 @@ textarea {
     align-items: center;
   }
 
+  #resultList .result-item {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
   #contactsList .result-item .result-meta {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  #resultList .result-item .result-meta {
     min-width: 0;
     flex: 1 1 auto;
   }
@@ -3246,7 +3298,25 @@ textarea {
     gap: 6px;
   }
 
+  #resultList .result-actions {
+    width: auto;
+    margin-left: auto;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+  }
+
   #contactsList .result-actions .button {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    flex: 0 0 34px;
+  }
+
+  #resultList .result-actions .button {
     width: 34px;
     height: 34px;
     min-width: 34px;
