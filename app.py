@@ -77,10 +77,174 @@ def can_manage_group_admins(conn, user_id, group_id):
         FROM groups
         WHERE id = ?
     """, (group_id,)).fetchone()
-    return bool(group and group["owner_id"] == user_id)
+    if not group:
+        return False
+
+    if group["owner_id"] == user_id:
+        return True
+
+    member = conn.execute("""
+        SELECT is_admin
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+    return bool(member and member["is_admin"])
+
+
+def can_manage_group_member(conn, actor_user_id, group_id, target_user_id, group=None, actor_member=None, target_member=None):
+    if not actor_user_id or not target_user_id or actor_user_id == target_user_id:
+        return False
+
+    if group is None:
+        group = conn.execute("""
+            SELECT owner_id
+            FROM groups
+            WHERE id = ?
+        """, (group_id,)).fetchone()
+    if not group:
+        return False
+
+    if target_user_id == group["owner_id"]:
+        return False
+
+    if actor_member is None:
+        actor_member = conn.execute("""
+            SELECT user_id, is_admin
+            FROM group_members
+            WHERE group_id = ? AND user_id = ?
+        """, (group_id, actor_user_id)).fetchone()
+    if not actor_member:
+        return False
+
+    if target_member is None:
+        target_member = conn.execute("""
+            SELECT user_id, is_admin
+            FROM group_members
+            WHERE group_id = ? AND user_id = ?
+        """, (group_id, target_user_id)).fetchone()
+    if not target_member:
+        return False
+
+    if actor_user_id == group["owner_id"]:
+        return True
+
+    if not actor_member["is_admin"]:
+        return False
+
+    return not bool(target_member["is_admin"])
+
+
+def emit_group_members_updated(group_id):
+    socketio.emit("group_members_updated", {
+        "group_id": group_id
+    }, room=f"group_{group_id}")
+
+
+def build_group_response(conn, group_id, viewer_user_id, include_messages=False, limit=None):
+    group = conn.execute("""
+        SELECT id, title, description, owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+    if not group:
+        return None
+
+    viewer_member = conn.execute("""
+        SELECT user_id, is_admin
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, viewer_user_id)).fetchone()
+    if not viewer_member:
+        return None
+
+    members_count_row = conn.execute("""
+        SELECT COUNT(*) AS members_count
+        FROM group_members
+        WHERE group_id = ?
+    """, (group_id,)).fetchone()
+    member_rows = conn.execute("""
+        SELECT
+            u.id,
+            u.name,
+            u.username,
+            u.bio,
+            gm.is_admin
+        FROM group_members gm
+        JOIN users u ON u.id = gm.user_id
+        WHERE gm.group_id = ?
+        ORDER BY
+            CASE WHEN u.id = ? THEN 0 WHEN gm.is_admin = 1 THEN 1 ELSE 2 END,
+            COALESCE(u.name, u.username),
+            u.username
+    """, (group_id, group["owner_id"])).fetchall()
+
+    members = []
+    for member in member_rows:
+        is_owner = member["id"] == group["owner_id"]
+        members.append({
+            **serialize_public_user(member),
+            "is_admin": bool(member["is_admin"]),
+            "is_owner": is_owner,
+            "can_manage": can_manage_group_member(
+                conn,
+                viewer_user_id,
+                group_id,
+                member["id"],
+                group=group,
+                actor_member=viewer_member,
+                target_member=member
+            )
+        })
+
+    payload = {
+        "id": group["id"],
+        "title": group["title"],
+        "name": group["title"],
+        "description": group["description"],
+        "owner_id": group["owner_id"],
+        "can_edit_group": can_edit_group_details(conn, viewer_user_id, group_id),
+        "can_add_members": can_add_group_members(conn, viewer_user_id, group_id),
+        "can_manage_admins": can_manage_group_admins(conn, viewer_user_id, group_id),
+        "members_count": members_count_row["members_count"],
+        "members": members
+    }
+
+    if include_messages:
+        messages, has_more_messages = fetch_group_messages_page(conn, group_id, viewer_user_id, limit or parse_limit_arg())
+        payload["has_more_messages"] = has_more_messages
+        payload["messages"] = [
+            serialize_group_message(message)
+            for message in messages
+        ]
+
+    return payload
 
 
 def can_edit_group_details(conn, user_id, group_id):
+    if not user_id:
+        return False
+
+    group = conn.execute("""
+        SELECT owner_id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+
+    if not group:
+        return False
+
+    if group["owner_id"] == user_id:
+        return True
+
+    member = conn.execute("""
+        SELECT is_admin
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+    return bool(member and member["is_admin"])
+
+
+def can_add_group_members(conn, user_id, group_id):
     if not user_id:
         return False
 
@@ -1303,63 +1467,13 @@ def get_group(group_id):
         return jsonify({"message": "Не авторизован"}), 401
 
     conn = get_db()
-    member = can_access_group(conn, user_id, group_id)
-
-    if not member:
-        conn.close()
-        return jsonify({"message": "Группа не найдена"}), 404
-
-    group = conn.execute("""
-        SELECT id, title, description, owner_id
-        FROM groups
-        WHERE id = ?
-    """, (group_id,)).fetchone()
-
-    members_count_row = conn.execute("""
-        SELECT COUNT(*) AS members_count
-        FROM group_members
-        WHERE group_id = ?
-    """, (group_id,)).fetchone()
-    members = conn.execute("""
-        SELECT
-            u.id,
-            u.name,
-            u.username,
-            u.bio,
-            gm.is_admin
-        FROM group_members gm
-        JOIN users u ON u.id = gm.user_id
-        WHERE gm.group_id = ?
-        ORDER BY COALESCE(u.name, u.username), u.username
-    """, (group_id,)).fetchall()
-    can_edit_group = can_edit_group_details(conn, user_id, group_id)
-    limit = parse_limit_arg()
-    messages, has_more_messages = fetch_group_messages_page(conn, group_id, user_id, limit)
+    group_payload = build_group_response(conn, group_id, user_id, include_messages=True)
     conn.close()
 
-    return jsonify({
-        "id": group["id"],
-        "title": group["title"],
-        "name": group["title"],
-        "description": group["description"],
-        "owner_id": group["owner_id"],
-        "can_edit_group": can_edit_group,
-        "can_manage_admins": group["owner_id"] == user_id,
-        "members_count": members_count_row["members_count"],
-        "members": [
-            {
-                **serialize_public_user(member),
-                "is_admin": bool(member["is_admin"]),
-                "is_owner": member["id"] == group["owner_id"]
-            }
-            for member in members
-        ],
-        "has_more_messages": has_more_messages,
-        "messages": [
-            serialize_group_message(message)
-            for message in messages
-        ]
-    })
+    if not group_payload:
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    return jsonify(group_payload)
 
 
 @app.patch("/groups/<int:group_id>")
@@ -1399,29 +1513,10 @@ def update_group(group_id):
         WHERE id = ?
     """, (title, description, group_id))
     conn.commit()
-
-    updated_group = conn.execute("""
-        SELECT id, title, description, owner_id
-        FROM groups
-        WHERE id = ?
-    """, (group_id,)).fetchone()
-    members_count_row = conn.execute("""
-        SELECT COUNT(*) AS members_count
-        FROM group_members
-        WHERE group_id = ?
-    """, (group_id,)).fetchone()
+    updated_group = build_group_response(conn, group_id, user_id)
     conn.close()
 
-    return jsonify({
-        "id": updated_group["id"],
-        "title": updated_group["title"],
-        "name": updated_group["title"],
-        "description": updated_group["description"],
-        "owner_id": updated_group["owner_id"],
-        "can_edit_group": True,
-        "can_manage_admins": updated_group["owner_id"] == user_id,
-        "members_count": members_count_row["members_count"]
-    })
+    return jsonify(updated_group)
 
 
 @app.get("/groups/<int:group_id>/messages")
@@ -1534,6 +1629,7 @@ def leave_group(group_id):
     """, (group_id, user_id))
     conn.commit()
     conn.close()
+    emit_group_members_updated(group_id)
 
     return jsonify({
         "ok": True,
@@ -1649,6 +1745,7 @@ def transfer_group_owner(group_id):
     """, (group_id, user_id))
     conn.commit()
     conn.close()
+    emit_group_members_updated(group_id)
 
     return jsonify({
         "ok": True,
@@ -1686,7 +1783,7 @@ def add_group_members(group_id):
         return jsonify({"message": "Выберите хотя бы одного пользователя"}), 400
 
     conn = get_db()
-    if not can_manage_group_admins(conn, user_id, group_id):
+    if not can_add_group_members(conn, user_id, group_id):
         conn.close()
         return jsonify({"message": "Недостаточно прав"}), 403
 
@@ -1729,6 +1826,7 @@ def add_group_members(group_id):
     """, [(group_id, member_id) for member_id in new_member_ids])
     conn.commit()
     conn.close()
+    emit_group_members_updated(group_id)
 
     added_members = [
         {
@@ -1759,10 +1857,6 @@ def update_group_member_role(group_id, member_user_id):
         return jsonify({"message": "is_admin обязателен"}), 400
 
     conn = get_db()
-    if not can_manage_group_admins(conn, user_id, group_id):
-        conn.close()
-        return jsonify({"message": "Недостаточно прав"}), 403
-
     group = conn.execute("""
         SELECT owner_id
         FROM groups
@@ -1773,7 +1867,7 @@ def update_group_member_role(group_id, member_user_id):
         return jsonify({"message": "Группа не найдена"}), 404
 
     member = conn.execute("""
-        SELECT user_id
+        SELECT user_id, is_admin
         FROM group_members
         WHERE group_id = ? AND user_id = ?
     """, (group_id, member_user_id)).fetchone()
@@ -1781,9 +1875,26 @@ def update_group_member_role(group_id, member_user_id):
         conn.close()
         return jsonify({"message": "Участник не найден"}), 404
 
-    if member_user_id == group["owner_id"]:
+    actor_member = conn.execute("""
+        SELECT user_id, is_admin
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+    if not actor_member:
         conn.close()
-        return jsonify({"message": "Нельзя изменить права создателя группы"}), 400
+        return jsonify({"message": "Недостаточно прав"}), 403
+
+    if not can_manage_group_member(
+        conn,
+        user_id,
+        group_id,
+        member_user_id,
+        group=group,
+        actor_member=actor_member,
+        target_member=member
+    ):
+        conn.close()
+        return jsonify({"message": "Недостаточно прав"}), 403
 
     is_admin = bool(data.get("is_admin"))
     conn.execute("""
@@ -1793,6 +1904,7 @@ def update_group_member_role(group_id, member_user_id):
     """, (1 if is_admin else 0, group_id, member_user_id))
     conn.commit()
     conn.close()
+    emit_group_members_updated(group_id)
 
     return jsonify({
         "ok": True,
@@ -1809,10 +1921,6 @@ def remove_group_member(group_id, member_user_id):
         return jsonify({"message": "Не авторизован"}), 401
 
     conn = get_db()
-    if not can_manage_group_admins(conn, user_id, group_id):
-        conn.close()
-        return jsonify({"message": "Недостаточно прав"}), 403
-
     group = conn.execute("""
         SELECT owner_id
         FROM groups
@@ -1827,7 +1935,7 @@ def remove_group_member(group_id, member_user_id):
         return jsonify({"message": "Нельзя удалить создателя группы"}), 400
 
     member = conn.execute("""
-        SELECT user_id
+        SELECT user_id, is_admin
         FROM group_members
         WHERE group_id = ? AND user_id = ?
     """, (group_id, member_user_id)).fetchone()
@@ -1835,12 +1943,34 @@ def remove_group_member(group_id, member_user_id):
         conn.close()
         return jsonify({"message": "Участник не найден"}), 404
 
+    actor_member = conn.execute("""
+        SELECT user_id, is_admin
+        FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id)).fetchone()
+    if not actor_member:
+        conn.close()
+        return jsonify({"message": "Недостаточно прав"}), 403
+
+    if not can_manage_group_member(
+        conn,
+        user_id,
+        group_id,
+        member_user_id,
+        group=group,
+        actor_member=actor_member,
+        target_member=member
+    ):
+        conn.close()
+        return jsonify({"message": "Недостаточно прав"}), 403
+
     conn.execute("""
         DELETE FROM group_members
         WHERE group_id = ? AND user_id = ?
     """, (group_id, member_user_id))
     conn.commit()
     conn.close()
+    emit_group_members_updated(group_id)
 
     return jsonify({
         "ok": True,

@@ -1272,6 +1272,10 @@ textarea {
   border-radius: 12px;
 }
 
+.thread-member-add-trigger[hidden] {
+  display: none !important;
+}
+
 .thread-member-modal {
   position: fixed;
   inset: 0;
@@ -1758,6 +1762,31 @@ textarea {
   justify-content: flex-end;
   gap: 4px;
   margin-top: 8px;
+}
+
+.message-date-divider {
+  display: flex;
+  justify-content: center;
+  margin: 10px 0 14px;
+  pointer-events: none;
+}
+
+.message-date-divider-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 999px;
+  background: rgba(246, 249, 252, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 18px rgba(31, 52, 79, 0.08);
+  color: rgba(72, 84, 96, 0.9);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .message.pending {

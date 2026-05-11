@@ -41,10 +41,19 @@ function renderEditedIndicator(message) {
   return '<span class="message-edited" title="Сообщение изменено">(изм.)</span>';
 }
 
+function renderDateDivider(value) {
+  const label = formatChatDateDivider(value);
+  if (!label) {
+    return "";
+  }
+
+  return `<div class="message-date-divider" data-date-divider="true"><span class="message-date-divider-pill">${escapeHtml(label)}</span></div>`;
+}
+
 function renderMessageItem(message, currentUserId, chatType) {
   const own = String(message.sender_id) === String(currentUserId);
   return `
-    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-own="${own ? "true" : "false"}">
+    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
       <p class="message-text">${escapeHtml(message.text || "")}</p>
       <div class="message-meta">
@@ -58,7 +67,7 @@ function renderMessageItem(message, currentUserId, chatType) {
 
 function renderPendingMessageItem(text) {
   return `
-    <article class="message own pending" data-pending-message="true">
+    <article class="message own pending" data-pending-message="true" data-own="true">
       <p class="message-text">${escapeHtml(text || "")}</p>
       <div class="message-meta">
         <span class="message-status-indicator" aria-hidden="true">
@@ -69,6 +78,29 @@ function renderPendingMessageItem(text) {
       </div>
     </article>
   `;
+}
+
+function rebuildDateDividers(container) {
+  if (!container) {
+    return;
+  }
+
+  container.querySelectorAll('[data-date-divider="true"]').forEach((node) => node.remove());
+
+  let previousDateKey = "";
+  const messageNodes = [...container.querySelectorAll(".message:not(.pending)")];
+  for (const messageNode of messageNodes) {
+    const createdAt = messageNode.dataset.createdAt || "";
+    const dateKey = getLocalDateKey(createdAt);
+    if (!dateKey) {
+      continue;
+    }
+
+    if (dateKey !== previousDateKey) {
+      messageNode.insertAdjacentHTML("beforebegin", renderDateDivider(createdAt));
+      previousDateKey = dateKey;
+    }
+  }
 }
 
 function renderMessages(container, messages, currentUserId, chatType) {
@@ -85,6 +117,7 @@ function renderMessages(container, messages, currentUserId, chatType) {
       return renderMessageItem(message, currentUserId, chatType);
     })
     .join("");
+  rebuildDateDividers(container);
 }
 
 function appendMessage(container, message, currentUserId, chatType) {
@@ -100,6 +133,7 @@ function appendMessage(container, message, currentUserId, chatType) {
   }
 
   container.insertAdjacentHTML("beforeend", renderMessageItem(message, currentUserId, chatType));
+  rebuildDateDividers(container);
   return true;
 }
 
@@ -131,6 +165,7 @@ function prependMessages(container, messages, currentUserId, chatType) {
   }
 
   container.insertAdjacentHTML("afterbegin", nextHtml.join(""));
+  rebuildDateDividers(container);
   return insertedCount;
 }
 
@@ -172,6 +207,7 @@ function replaceMessageNode(container, message, currentUserId, chatType) {
   }
 
   messageNode.outerHTML = renderMessageItem(message, currentUserId, chatType);
+  rebuildDateDividers(container);
   return true;
 }
 
@@ -183,6 +219,7 @@ function removeMessageNode(container, messageId) {
 
   renderedMessages.delete(`id:${messageId}`);
   messageNode.remove();
+  rebuildDateDividers(container);
   ensureEmptyState(container);
   return true;
 }
@@ -329,13 +366,13 @@ function fillThreadInfoPanel(info, chatType) {
     if (chatType === "group") {
       const members = Array.isArray(info?.members) ? info.members : [];
       const canEditGroup = Boolean(info?.can_edit_group);
-      const canManageAdmins = Boolean(info?.can_manage_admins);
+      const canAddMembers = Boolean(info?.can_add_members);
       membersWrapNode.hidden = false;
       if (menuTriggerNode) {
         menuTriggerNode.hidden = !canEditGroup;
       }
       if (memberAddTriggerNode) {
-        memberAddTriggerNode.hidden = !canManageAdmins;
+        memberAddTriggerNode.hidden = !canAddMembers;
       }
       membersListNode.innerHTML = members.length
         ? members.map((member) => `
@@ -346,6 +383,7 @@ function fillThreadInfoPanel(info, chatType) {
             data-member-username="${escapeHtml(member.username || "")}"
             data-member-is-admin="${member.is_admin ? "true" : "false"}"
             data-member-is-owner="${member.is_owner ? "true" : "false"}"
+            data-member-can-manage="${member.can_manage ? "true" : "false"}"
           >
             <div class="avatar small">${escapeHtml(initials(member.name || member.username || "U"))}</div>
             <div class="result-meta">
@@ -355,7 +393,7 @@ function fillThreadInfoPanel(info, chatType) {
               </div>
               <p class="result-username">@${escapeHtml(member.username || "")}</p>
             </div>
-            ${canManageAdmins && !member.is_owner ? '<button type="button" class="thread-member-menu-hint" data-member-menu-trigger="true" aria-label="Действия с участником">⋯</button>' : ""}
+            ${member.can_manage ? '<button type="button" class="thread-member-menu-hint" data-member-menu-trigger="true" aria-label="Действия с участником">⋯</button>' : ""}
           </article>
         `).join("")
         : '<div class="empty-state">Участников пока нет</div>';
@@ -595,6 +633,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
     if (chatType === "group") {
       setChatTitle(title, `${data.members_count || data.members?.length || 0} участников`);
+      if (!currentThreadInfo.can_add_members) {
+        closeThreadMemberAddModal();
+      }
+      if (!currentThreadInfo.can_edit_group) {
+        closeThreadGroupEditModal();
+      }
+      if (activeThreadMemberItem) {
+        hideThreadMemberActionMenu();
+      }
     }
     fillThreadInfoPanel(currentThreadInfo, chatType);
   }
@@ -607,6 +654,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         threadMemberActionMenu.hidden = true;
       }
     }, 120);
+  }
+
+  function canManageThreadMember(memberItem) {
+    return memberItem?.dataset.memberCanManage === "true";
   }
 
   function setThreadMemberAddStatus(message, type = "") {
@@ -668,7 +719,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function openThreadMemberAddModal() {
-    if (!threadMemberAddModal || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
+    if (!threadMemberAddModal || chatType !== "group" || !currentThreadInfo?.can_add_members) {
       return;
     }
 
@@ -718,7 +769,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function showThreadMemberActionMenu(memberItem, clientX, clientY) {
-    if (!memberItem || memberItem.dataset.memberIsOwner === "true") {
+    if (!memberItem || !canManageThreadMember(memberItem)) {
       return;
     }
 
@@ -1473,6 +1524,18 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         window.location.href = "index.html";
       });
+
+      socket.on("group_members_updated", async (data) => {
+        if (chatType !== "group" || String(data?.group_id) !== String(chatId)) {
+          return;
+        }
+
+        try {
+          await refreshCurrentThreadInfo();
+        } catch {
+          window.location.href = "index.html";
+        }
+      });
     }
 
     socket.emit("join_chat", joinPayload);
@@ -1531,7 +1594,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   threadInfoMembersListNode?.addEventListener("contextmenu", (event) => {
     const memberItem = event.target.closest(".member-item[data-member-id]");
-    if (!memberItem || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
+    if (!memberItem || chatType !== "group" || !canManageThreadMember(memberItem)) {
       return;
     }
 
@@ -1541,12 +1604,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   threadInfoMembersListNode?.addEventListener("click", (event) => {
     const trigger = event.target.closest("[data-member-menu-trigger]");
-    if (!trigger || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
+    if (!trigger || chatType !== "group") {
       return;
     }
 
     const memberItem = trigger.closest(".member-item[data-member-id]");
-    if (!memberItem) {
+    if (!memberItem || !canManageThreadMember(memberItem)) {
       return;
     }
 
@@ -1559,7 +1622,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   threadInfoMembersListNode?.addEventListener("touchstart", (event) => {
     const touch = event.touches[0];
     const memberItem = event.target.closest(".member-item[data-member-id]");
-    if (!touch || !memberItem || chatType !== "group" || !currentThreadInfo?.can_manage_admins) {
+    if (!touch || !memberItem || chatType !== "group" || !canManageThreadMember(memberItem)) {
       return;
     }
 

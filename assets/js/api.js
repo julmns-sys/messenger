@@ -140,20 +140,120 @@ function initials(name = "") {
     .join("") || "?";
 }
 
+function getUserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Moscow";
+  } catch {
+    return "Europe/Moscow";
+  }
+}
+
+function parseUtcDate(value) {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) return null;
+
+  const isoCandidate = normalized.includes("T")
+    ? normalized
+    : normalized.replace(" ", "T");
+  const utcCandidate = /(?:Z|[+\-]\d{2}:\d{2})$/.test(isoCandidate)
+    ? isoCandidate
+    : `${isoCandidate}Z`;
+
+  const date = new Date(utcCandidate);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getLocalDateParts(value) {
+  const date = parseUtcDate(value);
+  if (!date) {
+    return null;
+  }
+
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: getUserTimeZone(),
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const parts = Object.fromEntries(
+    formatter
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+
+  return {
+    year: Number(parts.year || 0),
+    month: Number(parts.month || 0),
+    day: Number(parts.day || 0)
+  };
+}
+
+function getLocalDateKey(value) {
+  const parts = getLocalDateParts(value);
+  if (!parts) {
+    return "";
+  }
+
+  return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
 function formatTime(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const date = parseUtcDate(value);
+  if (!date) return "";
+  return date.toLocaleTimeString("ru-RU", {
+    timeZone: getUserTimeZone(),
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function formatDate(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
+  const date = parseUtcDate(value);
+  if (!date) return "";
   return date.toLocaleDateString([], {
+    timeZone: getUserTimeZone(),
     day: "numeric",
     month: "short"
+  });
+}
+
+function formatChatDateDivider(value) {
+  const date = parseUtcDate(value);
+  const parts = getLocalDateParts(value);
+  if (!date || !parts) {
+    return "";
+  }
+
+  const nowParts = getLocalDateParts(new Date());
+  if (!nowParts) {
+    return "";
+  }
+
+  const currentUtc = Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day);
+  const targetUtc = Date.UTC(parts.year, parts.month - 1, parts.day);
+  const dayDiff = Math.round((currentUtc - targetUtc) / 86400000);
+
+  if (dayDiff === 0) {
+    return "Сегодня";
+  }
+
+  if (dayDiff === 1) {
+    return "Вчера";
+  }
+
+  const sameYear = parts.year === nowParts.year;
+  return date.toLocaleDateString("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "long",
+    ...(sameYear ? {} : { year: "numeric" })
   });
 }
 
