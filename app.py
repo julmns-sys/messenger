@@ -140,6 +140,12 @@ def emit_group_members_updated(group_id):
     }, room=f"group_{group_id}")
 
 
+def emit_group_updated(group_id):
+    socketio.emit("group_updated", {
+        "group_id": group_id
+    }, room=f"group_{group_id}")
+
+
 def build_group_response(conn, group_id, viewer_user_id, include_messages=False, limit=None):
     group = conn.execute("""
         SELECT id, title, description, owner_id
@@ -310,6 +316,7 @@ def serialize_group_message(message):
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
+        "message_type": message["message_type"] or "text",
         "created_at": message["created_at"],
         "is_edited": bool(message["edited_at"])
     }
@@ -365,6 +372,7 @@ def get_group_message_for_group(conn, group_id, message_id):
             gm.sender_id,
             u.name AS sender_name,
             gm.text,
+            gm.message_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -470,6 +478,7 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             gm.sender_id,
             u.name AS sender_name,
             gm.text,
+            gm.message_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -489,6 +498,25 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
     page_rows = rows[:limit]
     page_rows = list(reversed(page_rows))
     return page_rows, has_more
+
+
+def get_user_display_name(user):
+    return user["name"] or user["username"] or "Пользователь"
+
+
+def create_group_message_record(conn, group_id, sender_id, text, message_type="text"):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO group_messages (group_id, sender_id, text, message_type)
+        VALUES (?, ?, ?, ?)
+    """, (group_id, sender_id, text, message_type))
+    return get_group_message_for_group(conn, group_id, cur.lastrowid)
+
+
+def emit_group_new_message(message, group_id):
+    socketio.emit("new_message", {
+        **serialize_group_message(message)
+    }, room=f"group_{group_id}")
 
 
 @socketio.on("connect")
@@ -1494,7 +1522,7 @@ def update_group(group_id):
 
     conn = get_db()
     group = conn.execute("""
-        SELECT id, owner_id
+        SELECT id, owner_id, title, description
         FROM groups
         WHERE id = ?
     """, (group_id,)).fetchone()
@@ -1507,14 +1535,48 @@ def update_group(group_id):
         conn.close()
         return jsonify({"message": "Редактировать группу может только владелец или администратор"}), 403
 
+    title_changed = title != (group["title"] or "")
+    previous_description = group["description"] or ""
+    description_changed = description != previous_description
+
+    if not title_changed and not description_changed:
+        payload = build_group_response(conn, group_id, user_id)
+        conn.close()
+        return jsonify(payload)
+
     conn.execute("""
         UPDATE groups
         SET title = ?, description = ?
         WHERE id = ?
     """, (title, description, group_id))
+    actor = conn.execute("""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id = ?
+    """, (user_id,)).fetchone()
+    system_messages = []
+    if title_changed:
+        system_messages.append(create_group_message_record(
+            conn,
+            group_id,
+            user_id,
+            f"{get_user_display_name(actor)} изменил название группы на «{title}»",
+            "system"
+        ))
+    if description_changed:
+        system_messages.append(create_group_message_record(
+            conn,
+            group_id,
+            user_id,
+            f"{get_user_display_name(actor)} {'изменил описание группы' if description else 'удалил описание группы'}",
+            "system"
+        ))
     conn.commit()
     updated_group = build_group_response(conn, group_id, user_id)
     conn.close()
+    for system_message in system_messages:
+        emit_group_new_message(system_message, group_id)
+    emit_group_updated(group_id)
 
     return jsonify(updated_group)
 
@@ -1627,8 +1689,21 @@ def leave_group(group_id):
         DELETE FROM group_members
         WHERE group_id = ? AND user_id = ?
     """, (group_id, user_id))
+    actor = conn.execute("""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id = ?
+    """, (user_id,)).fetchone()
+    system_message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        f"{get_user_display_name(actor)} вышел из группы",
+        "system"
+    )
     conn.commit()
     conn.close()
+    emit_group_new_message(system_message, group_id)
     emit_group_members_updated(group_id)
 
     return jsonify({
@@ -1743,8 +1818,21 @@ def transfer_group_owner(group_id):
         DELETE FROM group_members
         WHERE group_id = ? AND user_id = ?
     """, (group_id, user_id))
+    new_owner = conn.execute("""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id = ?
+    """, (new_owner_id,)).fetchone()
+    system_message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        f"{get_user_display_name(new_owner)} стал создателем группы",
+        "system"
+    )
     conn.commit()
     conn.close()
+    emit_group_new_message(system_message, group_id)
     emit_group_members_updated(group_id)
 
     return jsonify({
@@ -1824,8 +1912,22 @@ def add_group_members(group_id):
         INSERT INTO group_members (group_id, user_id, is_admin)
         VALUES (?, ?, 0)
     """, [(group_id, member_id) for member_id in new_member_ids])
+    added_user_ids = set(new_member_ids)
+    system_messages = [
+        create_group_message_record(
+            conn,
+            group_id,
+            user_id,
+            f"{get_user_display_name(user)} добавлен в группу",
+            "system"
+        )
+        for user in users
+        if user["id"] in added_user_ids
+    ]
     conn.commit()
     conn.close()
+    for system_message in system_messages:
+        emit_group_new_message(system_message, group_id)
     emit_group_members_updated(group_id)
 
     added_members = [
@@ -1896,14 +1998,27 @@ def update_group_member_role(group_id, member_user_id):
         conn.close()
         return jsonify({"message": "Недостаточно прав"}), 403
 
+    target_user = conn.execute("""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id = ?
+    """, (member_user_id,)).fetchone()
     is_admin = bool(data.get("is_admin"))
     conn.execute("""
         UPDATE group_members
         SET is_admin = ?
         WHERE group_id = ? AND user_id = ?
     """, (1 if is_admin else 0, group_id, member_user_id))
+    system_message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        f"{get_user_display_name(target_user)} {'стал администратором' if is_admin else 'больше не администратор'}",
+        "system"
+    )
     conn.commit()
     conn.close()
+    emit_group_new_message(system_message, group_id)
     emit_group_members_updated(group_id)
 
     return jsonify({
@@ -1964,12 +2079,30 @@ def remove_group_member(group_id, member_user_id):
         conn.close()
         return jsonify({"message": "Недостаточно прав"}), 403
 
+    actor_user = conn.execute("""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id = ?
+    """, (user_id,)).fetchone()
+    target_user = conn.execute("""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id = ?
+    """, (member_user_id,)).fetchone()
     conn.execute("""
         DELETE FROM group_members
         WHERE group_id = ? AND user_id = ?
     """, (group_id, member_user_id))
+    system_message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        f"{get_user_display_name(actor_user)} удалил {get_user_display_name(target_user)} из группы",
+        "system"
+    )
     conn.commit()
     conn.close()
+    emit_group_new_message(system_message, group_id)
     emit_group_members_updated(group_id)
 
     return jsonify({
@@ -1994,35 +2127,20 @@ def create_group_message(group_id):
 
     data = request.json or {}
     text = data.get("text", "").strip()
+    message_type = str(data.get("message_type", "text") or "text").strip().lower()
 
     if not text:
         conn.close()
         return jsonify({"message": "Текст сообщения обязателен"}), 400
+    if message_type != "text":
+        conn.close()
+        return jsonify({"message": "Нельзя отправлять системные сообщения вручную"}), 403
 
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO group_messages (group_id, sender_id, text)
-        VALUES (?, ?, ?)
-    """, (group_id, user_id, text))
+    message = create_group_message_record(conn, group_id, user_id, text, "text")
     conn.commit()
-
-    message = conn.execute("""
-        SELECT
-            gm.id,
-            gm.sender_id,
-            u.name AS sender_name,
-            gm.text,
-            gm.created_at,
-            gm.edited_at
-        FROM group_messages gm
-        JOIN users u ON u.id = gm.sender_id
-        WHERE gm.id = ?
-    """, (cur.lastrowid,)).fetchone()
     conn.close()
 
-    socketio.emit("new_message", {
-        **serialize_group_message(message)
-    }, room=f"group_{group_id}")
+    emit_group_new_message(message, group_id)
 
     return jsonify(serialize_group_message(message)), 201
 
@@ -2047,6 +2165,10 @@ def update_group_message(group_id, message_id):
     if not message:
         conn.close()
         return jsonify({"message": "Сообщение не найдено"}), 404
+
+    if (message["message_type"] or "text") != "text":
+        conn.close()
+        return jsonify({"message": "Системные сообщения нельзя редактировать"}), 403
 
     if message["sender_id"] != user_id:
         conn.close()
@@ -2089,6 +2211,10 @@ def delete_group_message(group_id, message_id):
     if not message:
         conn.close()
         return jsonify({"message": "Сообщение не найдено"}), 404
+
+    if scope == "all" and (message["message_type"] or "text") != "text":
+        conn.close()
+        return jsonify({"message": "Системные сообщения нельзя удалять у всех"}), 403
 
     if scope == "all":
         if message["sender_id"] != user_id:
@@ -2138,7 +2264,7 @@ def bulk_delete_group_messages(group_id):
 
     placeholders = ",".join("?" for _ in message_ids)
     message_rows = conn.execute(f"""
-        SELECT id, sender_id
+        SELECT id, sender_id, message_type
         FROM group_messages
         WHERE group_id = ? AND id IN ({placeholders})
     """, [group_id, *message_ids]).fetchall()
@@ -2150,6 +2276,11 @@ def bulk_delete_group_messages(group_id):
         return jsonify({"message": "Некоторые сообщения не найдены"}), 404
 
     if scope == "all":
+        system_ids = [row["id"] for row in message_rows if (row["message_type"] or "text") != "text"]
+        if system_ids:
+            conn.close()
+            return jsonify({"message": "Системные сообщения нельзя удалять у всех"}), 403
+
         foreign_ids = [row["id"] for row in message_rows if row["sender_id"] != user_id]
         if foreign_ids:
             conn.close()

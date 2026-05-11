@@ -11,6 +11,7 @@ function getMessageKey(message) {
   return [
     message.sender_id || "",
     message.sender_name || "",
+    message.message_type || "text",
     message.text || "",
     message.created_at || ""
   ].join("|");
@@ -51,9 +52,24 @@ function renderDateDivider(value) {
 }
 
 function renderMessageItem(message, currentUserId, chatType) {
-  const own = String(message.sender_id) === String(currentUserId);
+  const isSystem = (message.message_type || "text") === "system";
+  const own = !isSystem && String(message.sender_id) === String(currentUserId);
+  if (isSystem) {
+    return `
+      <article
+        class="message system"
+        ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""}
+        data-message-type="system"
+        data-created-at="${escapeHtml(String(message.created_at || ""))}"
+        data-own="false"
+      >
+        <span class="message-system-pill">${escapeHtml(message.text || "")}</span>
+      </article>
+    `;
+  }
+
   return `
-    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
+    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="text" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
       <p class="message-text">${escapeHtml(message.text || "")}</p>
       <div class="message-meta">
@@ -101,6 +117,10 @@ function rebuildDateDividers(container) {
       previousDateKey = dateKey;
     }
   }
+}
+
+function isSystemMessageNode(messageNode) {
+  return messageNode?.dataset.messageType === "system";
 }
 
 function renderMessages(container, messages, currentUserId, chatType) {
@@ -889,6 +909,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function toggleMessageSelection(messageNode) {
+    if (isSystemMessageNode(messageNode)) {
+      return;
+    }
+
     const messageId = Number(messageNode?.dataset.messageId || "0");
     if (!messageId) {
       return;
@@ -1536,6 +1560,19 @@ document.addEventListener("DOMContentLoaded", async () => {
           window.location.href = "index.html";
         }
       });
+
+      socket.on("group_updated", async (data) => {
+        if (chatType !== "group" || String(data?.group_id) !== String(chatId)) {
+          return;
+        }
+
+        try {
+          await refreshCurrentThreadInfo();
+          await loadChats("chatList", { showLoading: false });
+        } catch {
+          window.location.href = "index.html";
+        }
+      });
     }
 
     socket.emit("join_chat", joinPayload);
@@ -1829,7 +1866,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   messagesNode.addEventListener("contextmenu", (event) => {
     const messageNode = event.target.closest(".message[data-message-id]");
-    if (!messageNode || messageNode.classList.contains("pending")) {
+    if (!messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       return;
     }
 
@@ -1843,7 +1880,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   messagesNode.addEventListener("click", (event) => {
     const messageNode = event.target.closest(".message[data-message-id]");
-    if (!isSelectionMode || !messageNode || messageNode.classList.contains("pending")) {
+    if (!isSelectionMode || !messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       return;
     }
 
@@ -1854,7 +1891,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   messagesNode.addEventListener("touchstart", (event) => {
     const touch = event.touches[0];
     const messageNode = event.target.closest(".message[data-message-id]");
-    if (!touch || !messageNode || messageNode.classList.contains("pending")) {
+    if (!touch || !messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       touchMenuTarget = null;
       touchMenuPoint = null;
       return;

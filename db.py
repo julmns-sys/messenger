@@ -126,6 +126,8 @@ def init_db():
         row["name"]
         for row in conn.execute("PRAGMA table_info(group_messages)").fetchall()
     }
+    if "message_type" not in group_message_columns:
+        cur.execute("ALTER TABLE group_messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text'")
     if "edited_at" not in group_message_columns:
         cur.execute("ALTER TABLE group_messages ADD COLUMN edited_at TIMESTAMP")
 

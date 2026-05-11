@@ -503,6 +503,141 @@ function openSidebarProfileMenu(menuTrigger, menu) {
   });
 }
 
+function buildQuickActionsMenu() {
+  const menu = document.createElement("div");
+  menu.className = "quick-actions-menu";
+  menu.hidden = true;
+  menu.innerHTML = `
+    <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">Написать пользователю</button>
+    <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">Создать группу</button>
+  `;
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function closeQuickActionsMenu(trigger, menu) {
+  if (!menu) return;
+  if (trigger) {
+    trigger.setAttribute("aria-expanded", "false");
+  }
+  menu.classList.remove("visible");
+  window.setTimeout(() => {
+    if (!menu.classList.contains("visible")) {
+      menu.hidden = true;
+    }
+  }, 160);
+}
+
+function openQuickActionsMenu(trigger, menu) {
+  if (!trigger || !menu) return;
+  menu.hidden = false;
+  trigger.setAttribute("aria-expanded", "true");
+
+  const rect = trigger.getBoundingClientRect();
+  const menuWidth = Math.min(240, window.innerWidth - 24);
+  const menuHeight = 116;
+  const left = Math.max(12, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 12));
+  const top = Math.max(12, Math.min(rect.bottom + 10, window.innerHeight - menuHeight - 12));
+
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.width = `${menuWidth}px`;
+
+  requestAnimationFrame(() => {
+    menu.classList.add("visible");
+  });
+}
+
+function initQuickActionsMenu() {
+  const triggers = [...document.querySelectorAll("[data-quick-actions-trigger='true']")];
+  if (!triggers.length) {
+    return;
+  }
+
+  let menu = document.querySelector(".quick-actions-menu");
+  if (!menu) {
+    menu = buildQuickActionsMenu();
+  }
+
+  let activeTrigger = null;
+
+  const closeMenu = () => {
+    closeQuickActionsMenu(activeTrigger, menu);
+    activeTrigger = null;
+  };
+
+  const navigateForAction = (action) => {
+    if (action === "search-user") {
+      window.location.href = "search.html";
+      return;
+    }
+    if (action === "create-group") {
+      window.location.href = "create_group.html";
+    }
+  };
+
+  triggers.forEach((trigger) => {
+    if (trigger.dataset.quickActionsBound === "true") {
+      return;
+    }
+
+    trigger.dataset.quickActionsBound = "true";
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (activeTrigger === trigger && !menu.hidden) {
+        closeMenu();
+        return;
+      }
+
+      if (activeTrigger && activeTrigger !== trigger) {
+        activeTrigger.setAttribute("aria-expanded", "false");
+      }
+
+      activeTrigger = trigger;
+      openQuickActionsMenu(trigger, menu);
+    });
+  });
+
+  if (menu.dataset.quickActionsBound === "true") {
+    return;
+  }
+
+  menu.dataset.quickActionsBound = "true";
+
+  menu.addEventListener("click", (event) => {
+    const action = event.target.closest("[data-quick-action]")?.dataset.quickAction;
+    if (!action) {
+      return;
+    }
+    closeMenu();
+    navigateForAction(action);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (menu.hidden) {
+      return;
+    }
+    if (event.target.closest(".quick-actions-menu") || event.target.closest("[data-quick-actions-trigger='true']")) {
+      return;
+    }
+    closeMenu();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      closeMenu();
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    if (!menu.hidden) {
+      closeMenu();
+    }
+  });
+}
+
 function initSidebarProfile() {
   const sidebar = document.querySelector(".sidebar");
   const badge = document.getElementById("currentUserBadge");
@@ -517,6 +652,7 @@ function initSidebarProfile() {
 
   fillSidebarProfile();
   buildProfileLogoutModal();
+  initQuickActionsMenu();
 
   if (!sidebar || !badge || !backButton || !menuTrigger || !menu || badge.dataset.profileBound === "true") {
     return;

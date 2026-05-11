@@ -775,6 +775,57 @@ textarea {
   gap: 10px;
 }
 
+.quick-actions-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 14px 30px rgba(31, 52, 79, 0.14);
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+  transform-origin: top right;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  pointer-events: none;
+}
+
+.quick-actions-menu[hidden] {
+  display: none;
+}
+
+.quick-actions-menu.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.quick-actions-menu-item {
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.quick-actions-menu-item:hover {
+  background: rgba(227, 239, 251, 0.72);
+  color: var(--accent-dark);
+}
+
+.quick-actions-menu-item:active {
+  transform: translateY(1px);
+}
+
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -1685,6 +1736,32 @@ textarea {
   position: relative;
 }
 
+.message.system {
+  align-self: center;
+  max-width: min(88%, 520px);
+  padding: 0;
+  border: none;
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+.message-system-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(236, 240, 244, 0.74);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 6px 16px rgba(31, 52, 79, 0.07);
+  color: rgba(86, 96, 108, 0.96);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+}
+
 .selection-mode .message[data-message-id] {
   cursor: pointer;
   transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease;
@@ -1727,6 +1804,10 @@ textarea {
   border-color: rgba(111, 181, 247, 0.2);
   background: linear-gradient(180deg, rgba(225, 241, 255, 0.92), rgba(210, 235, 255, 0.78));
   box-shadow: 0 10px 20px rgba(51, 144, 236, 0.08);
+}
+
+.selection-mode .message.system[data-message-id] {
+  cursor: default;
 }
 
 .message-author {
