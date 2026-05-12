@@ -54,6 +54,14 @@ function renderDateDivider(value) {
 function renderMessageItem(message, currentUserId, chatType) {
   const isSystem = (message.message_type || "text") === "system";
   const own = !isSystem && String(message.sender_id) === String(currentUserId);
+  const messageClasses = ["message"];
+  if (own) {
+    messageClasses.push("own");
+  }
+  if (chatType === "direct") {
+    messageClasses.push("message-direct");
+  }
+
   if (isSystem) {
     return `
       <article
@@ -69,8 +77,8 @@ function renderMessageItem(message, currentUserId, chatType) {
   }
 
   return `
-    <article class="message ${own ? "own" : ""}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="text" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
-      ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : !own && message.sender_name ? `<p class="message-author">${escapeHtml(message.sender_name)}</p>` : ""}
+    <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="text" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
+      ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
       <p class="message-text">${escapeHtml(message.text || "")}</p>
       <div class="message-meta">
         ${renderEditedIndicator(message)}
@@ -81,9 +89,10 @@ function renderMessageItem(message, currentUserId, chatType) {
   `;
 }
 
-function renderPendingMessageItem(text) {
+function renderPendingMessageItem(text, chatType) {
+  const directClass = chatType === "direct" ? " message-direct" : "";
   return `
-    <article class="message own pending" data-pending-message="true" data-own="true">
+    <article class="message own pending${directClass}" data-pending-message="true" data-own="true">
       <p class="message-text">${escapeHtml(text || "")}</p>
       <div class="message-meta">
         <span class="message-status-indicator" aria-hidden="true">
@@ -197,12 +206,12 @@ function scrollMessagesToBottom(container) {
   container.scrollTop = container.scrollHeight;
 }
 
-function appendPendingMessage(container, text) {
+function appendPendingMessage(container, text, chatType) {
   if (container.querySelector(".empty-state")) {
     container.innerHTML = "";
   }
 
-  container.insertAdjacentHTML("beforeend", renderPendingMessageItem(text));
+  container.insertAdjacentHTML("beforeend", renderPendingMessageItem(text, chatType));
   return container.lastElementChild;
 }
 
@@ -2187,7 +2196,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     isSendingMessage = true;
     const shouldStickToBottom = isNearBottom(messagesNode);
-    const pendingMessageNode = appendPendingMessage(messagesNode, text);
+    const pendingMessageNode = appendPendingMessage(messagesNode, text, chatType);
     pendingMessageState = { text, node: pendingMessageNode };
     input.value = "";
     input.disabled = true;

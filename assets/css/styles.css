@@ -1744,6 +1744,12 @@ textarea {
   position: relative;
 }
 
+.message.message-direct {
+  max-width: min(70%, 500px);
+  padding: 12px 14px 10px;
+  border-radius: 20px;
+}
+
 .message.system {
   align-self: center;
   max-width: min(88%, 520px);
@@ -1858,6 +1864,10 @@ textarea {
   word-break: break-word;
 }
 
+.message.message-direct .message-text {
+  line-height: 1.38;
+}
+
 .message-time {
   font-size: 12px;
   color: var(--text-soft);
@@ -1876,6 +1886,11 @@ textarea {
   justify-content: flex-end;
   gap: 4px;
   margin-top: 8px;
+}
+
+.message.message-direct .message-meta {
+  gap: 3px;
+  margin-top: 6px;
 }
 
 .message-date-divider {
@@ -3116,6 +3131,12 @@ textarea {
     padding: 16px 14px 10px;
   }
 
+  .thread-page .message.message-direct {
+    max-width: min(82%, 440px);
+    padding: 11px 13px 9px;
+    border-radius: 18px;
+  }
+
   .thread-page .composer-wrap {
     position: sticky;
     bottom: 0;
@@ -3196,6 +3217,12 @@ textarea {
 
   .content {
     border-radius: 24px;
+  }
+
+  .thread-page .message.message-direct {
+    max-width: 84%;
+    padding: 10px 12px 8px;
+    border-radius: 17px;
   }
 
   .auth-card,
