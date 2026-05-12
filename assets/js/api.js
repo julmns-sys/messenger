@@ -2,7 +2,8 @@ const API = {
   baseUrl: localStorage.getItem("messenger_api_base") || window.location.origin,
   tokenKey: "messenger_token",
   userKey: "messenger_user",
-  emailBookKey: "messenger_user_emails"
+  emailBookKey: "messenger_user_emails",
+  postAuthRedirectKey: "messenger_post_auth_redirect"
 };
 
 function getChatsRoute() {
@@ -39,6 +40,10 @@ function getDirectChatDraftRoute(userId) {
 
 function getGroupChatRoute(groupId) {
   return `/group/${encodeURIComponent(String(groupId))}`;
+}
+
+function getInviteRoute(token) {
+  return `/invite/${encodeURIComponent(String(token))}`;
 }
 
 function getCurrentRouteInfo() {
@@ -79,6 +84,8 @@ function getCurrentRouteInfo() {
   } else if (segments[0] === "group" || segments[0] === "group_chat.html") {
     page = "group-chat";
     chatType = "group";
+  } else if (segments[0] === "invite" && segments[1]) {
+    page = "invite";
   }
 
   return {
@@ -179,8 +186,37 @@ function getCurrentUser() {
 
 function requireAuth() {
   if (!getToken()) {
+    setPostAuthRedirect(window.location.pathname + window.location.search + window.location.hash);
     window.location.href = getLoginRoute();
   }
+}
+
+function normalizeRedirectPath(path) {
+  const value = typeof path === "string" ? path.trim() : "";
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "";
+  }
+  return value;
+}
+
+function setPostAuthRedirect(path) {
+  const normalizedPath = normalizeRedirectPath(path);
+  if (!normalizedPath) {
+    return;
+  }
+  localStorage.setItem(API.postAuthRedirectKey, normalizedPath);
+}
+
+function getPostAuthRedirect() {
+  return normalizeRedirectPath(localStorage.getItem(API.postAuthRedirectKey) || "");
+}
+
+function consumePostAuthRedirect() {
+  const path = getPostAuthRedirect();
+  if (path) {
+    localStorage.removeItem(API.postAuthRedirectKey);
+  }
+  return path;
 }
 
 async function apiFetch(path, options = {}) {

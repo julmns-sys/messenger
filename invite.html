@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Приглашение в группу</title>
+    <link rel="stylesheet" href="/assets/css/styles.css">
+  </head>
+  <body class="invite-page">
+    <main class="invite-shell">
+      <section class="invite-card" aria-live="polite">
+        <div class="avatar group-avatar invite-avatar" id="inviteAvatar">?</div>
+        <p class="invite-eyebrow">Приглашение в группу</p>
+        <h1 class="invite-title" id="inviteTitle">Загрузка...</h1>
+        <p class="invite-subtitle" id="inviteSubtitle">Проверяем ссылку</p>
+        <p class="invite-description" id="inviteDescription">Подождите, пока мы загрузим информацию о группе.</p>
+        <div class="status invite-status" id="inviteStatus"></div>
+        <div class="invite-actions">
+          <button class="button invite-primary" id="inviteJoinButton" type="button" disabled>Вступить в группу</button>
+          <a class="button button-secondary invite-secondary" id="inviteOpenButton" href="/" hidden>Открыть группу</a>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/js/api.js"></script>
+    <script src="/assets/js/invite.js"></script>
+  </body>
+</html>

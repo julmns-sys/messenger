@@ -11,6 +11,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const mode = form.dataset.auth;
   const endpoint = mode === "register" ? "/auth/register" : "/auth/login";
+  const params = new URLSearchParams(window.location.search);
+  const nextPath = normalizeRedirectPath(params.get("next")) || getPostAuthRedirect();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -38,7 +40,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       setStatus(mode === "register" ? "Аккаунт создан" : "Вход выполнен", "success");
       window.setTimeout(() => {
-        window.location.href = getChatsRoute();
+        const redirectPath = nextPath || consumePostAuthRedirect() || getChatsRoute();
+        if (nextPath) {
+          consumePostAuthRedirect();
+        }
+        window.location.href = redirectPath;
       }, 300);
     } catch (error) {
       setStatus(error.message, "error");

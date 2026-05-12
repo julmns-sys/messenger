@@ -141,6 +141,17 @@
                 <span class="thread-info-label" id="threadInfoDescriptionLabel">Описание</span>
                 <strong id="threadInfoDescription">Нет описания</strong>
               </div>
+              <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
+                <span class="thread-info-label">Пригласительная ссылка</span>
+                <div class="thread-info-invite-body">
+                  <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer"></a>
+                  <div class="thread-info-invite-actions">
+                    <button class="button button-secondary thread-info-invite-button" id="threadInfoInviteCopy" type="button">Скопировать</button>
+                    <button class="button thread-info-invite-button" id="threadInfoInviteRegenerate" type="button">Обновить ссылку</button>
+                  </div>
+                  <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
+                </div>
+              </div>
               <div class="thread-info-fact">
                 <span class="thread-info-label">Тип</span>
                 <strong id="threadInfoType">Группа</strong>

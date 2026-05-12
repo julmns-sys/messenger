@@ -1,3 +1,4 @@
+import secrets
 import sqlite3
 
 DB_NAME = "messenger.db"
@@ -169,6 +170,40 @@ def init_db():
         UNIQUE(group_id, user_id)
     )
     """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS group_invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_by INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_group_invites_group_active
+    ON group_invites (group_id, is_active)
+    """)
+
+    groups_without_invites = conn.execute("""
+        SELECT id, owner_id
+        FROM groups
+        WHERE id NOT IN (
+            SELECT group_id
+            FROM group_invites
+            WHERE is_active = 1
+        )
+    """).fetchall()
+
+    for group in groups_without_invites:
+        token = secrets.token_urlsafe(18)
+        while conn.execute("SELECT 1 FROM group_invites WHERE token = ?", (token,)).fetchone():
+            token = secrets.token_urlsafe(18)
+        cur.execute("""
+            INSERT INTO group_invites (group_id, token, is_active, created_by)
+            VALUES (?, ?, 1, ?)
+        """, (group["id"], token, group["owner_id"]))
 
     conn.commit()
     conn.close()

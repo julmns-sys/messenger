@@ -1792,7 +1792,6 @@ function renderChats(list, chats) {
       const unreadMarkup = unreadCount > 0
         ? `
           <span class="chat-unread-wrap">
-            ${active ? "" : '<span class="chat-unread-dot" aria-hidden="true"></span>'}
             <span class="chat-unread-badge" aria-label="Непрочитанных сообщений: ${escapeHtml(unreadLabel)}">${escapeHtml(unreadLabel)}</span>
           </span>
         `
@@ -1805,17 +1804,17 @@ function renderChats(list, chats) {
             ${isGroup ? '<span class="chat-kind-badge" aria-hidden="true">👥</span>' : ""}
           </div>
           <div class="chat-meta">
-            <div class="chat-topline">
+            <div class="chat-main">
               <div class="chat-title-row">
                 <h3 class="chat-name">${escapeHtml(name)}</h3>
                 ${customTagMarkup}
               </div>
-              <div class="chat-side-meta">
-                <span class="time">${escapeHtml(formatDate(chat.updated_at || chat.last_message?.created_at))}</span>
-                ${unreadMarkup}
-              </div>
+              <p class="chat-preview">${escapeHtml(preview)}</p>
             </div>
-            <p class="chat-preview">${escapeHtml(preview)}</p>
+            <div class="chat-side${unreadCount > 0 ? " has-unread" : ""}">
+              <span class="time">${escapeHtml(formatDate(chat.updated_at || chat.last_message?.created_at))}</span>
+              ${unreadMarkup}
+            </div>
           </div>
         </a>
       `;

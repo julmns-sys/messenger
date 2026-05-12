@@ -56,6 +56,7 @@ textarea {
 }
 
 .auth-page,
+.invite-page,
 .page-shell {
   min-height: 100vh;
 }
@@ -69,6 +70,15 @@ textarea {
   display: grid;
   place-items: center;
   padding: 24px;
+}
+
+.invite-page {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(94, 178, 255, 0.2), transparent 36%),
+    radial-gradient(circle at bottom right, rgba(94, 199, 170, 0.16), transparent 34%);
 }
 
 .auth-card {
@@ -92,6 +102,70 @@ textarea {
   margin: 0 0 24px;
   color: var(--text-soft);
   line-height: 1.5;
+}
+
+.invite-shell {
+  width: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.invite-card {
+  width: min(100%, 460px);
+  display: grid;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 32px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+  text-align: center;
+}
+
+.invite-avatar {
+  width: 84px;
+  height: 84px;
+  margin: 0 auto;
+  font-size: 26px;
+}
+
+.invite-eyebrow {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.invite-title {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+.invite-subtitle,
+.invite-description {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+.invite-status {
+  min-height: 22px;
+  margin: 0;
+}
+
+.invite-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.invite-primary,
+.invite-secondary {
+  width: 100%;
 }
 
 .form-group {
@@ -981,6 +1055,13 @@ textarea {
   flex: 1;
 }
 
+.chat-item .chat-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .result-item {
   align-items: center;
   flex-wrap: nowrap;
@@ -1059,13 +1140,17 @@ textarea {
   padding: 10px 16px;
 }
 
-.chat-topline,
 .result-topline {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 4px;
+}
+
+.chat-main {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .chat-title-row {
@@ -1073,14 +1158,20 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+  overflow: hidden;
+  margin-bottom: 4px;
 }
 
-.chat-side-meta {
+.chat-side {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
+  justify-content: flex-start;
+  gap: 5px;
+  min-width: 54px;
+  max-width: 54px;
+  align-self: stretch;
 }
 
 .chat-name,
@@ -1088,6 +1179,13 @@ textarea {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
+}
+
+.chat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-kind-label {
@@ -1122,30 +1220,24 @@ textarea {
   flex: 0 0 auto;
   font-size: 12px;
   color: var(--text-soft);
+  white-space: nowrap;
+  text-align: right;
 }
 
 .chat-unread-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.chat-unread-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.98), rgba(134, 239, 255, 0.94) 42%, rgba(47, 182, 224, 0.94) 100%);
-  box-shadow: 0 0 0 4px rgba(98, 215, 255, 0.12), 0 0 14px rgba(55, 196, 232, 0.45);
-  animation: chat-unread-pulse 2s ease-in-out infinite;
+  justify-content: flex-end;
+  width: 100%;
 }
 
 .chat-unread-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
+  min-width: 30px;
   min-height: 22px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: 1px solid rgba(255, 255, 255, 0.36);
   border-radius: 999px;
   background:
@@ -1161,6 +1253,7 @@ textarea {
   font-weight: 800;
   line-height: 1;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .chat-item.active .chat-unread-badge {
@@ -1170,19 +1263,6 @@ textarea {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 5px 12px rgba(51, 144, 236, 0.12);
-}
-
-@keyframes chat-unread-pulse {
-  0%,
-  100% {
-    transform: scale(0.92);
-    opacity: 0.72;
-  }
-
-  50% {
-    transform: scale(1);
-    opacity: 1;
-  }
 }
 
 .content {
@@ -1367,6 +1447,44 @@ textarea {
   line-height: 1.35;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.thread-info-invite-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.thread-info-invite-link {
+  display: block;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.thread-info-invite-link:hover {
+  color: var(--accent-dark);
+}
+
+.thread-info-invite-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.thread-info-invite-button {
+  width: auto;
+  min-width: 0;
+  padding-inline: 14px;
+}
+
+.thread-info-invite-status {
+  min-height: 20px;
+  margin: 0;
 }
 
 .thread-info-members {
@@ -3300,6 +3418,15 @@ textarea {
     border-radius: 22px;
   }
 
+  .invite-card {
+    padding: 20px 16px;
+    border-radius: 22px;
+  }
+
+  .invite-title {
+    font-size: 24px;
+  }
+
   .page-header {
     padding: 14px 12px 0;
     align-items: flex-start;
@@ -3324,24 +3451,21 @@ textarea {
     border-radius: 14px;
   }
 
-  .chat-side-meta {
-    gap: 4px;
+  .chat-item .chat-meta {
+    gap: 10px;
   }
 
-  .chat-unread-wrap {
-    gap: 5px;
+  .chat-side {
+    gap: 4px;
+    min-width: 48px;
+    max-width: 48px;
   }
 
   .chat-unread-badge {
-    min-width: 24px;
+    min-width: 28px;
     min-height: 20px;
     padding: 0 8px;
     font-size: 10px;
-  }
-
-  .chat-unread-dot {
-    width: 6px;
-    height: 6px;
   }
 
   .result-item {
@@ -3481,6 +3605,14 @@ textarea {
     left: 20px;
     right: 20px;
     min-width: 0;
+  }
+
+  .thread-info-invite-actions {
+    display: grid;
+  }
+
+  .thread-info-invite-button {
+    width: 100%;
   }
 
   .thread-group-edit-card {

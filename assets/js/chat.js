@@ -361,6 +361,11 @@ function fillThreadInfoPanel(info, chatType) {
   const descriptionNode = document.getElementById("threadInfoDescription");
   const typeNode = document.getElementById("threadInfoType");
   const menuTriggerNode = document.getElementById("threadInfoMenuTrigger");
+  const inviteFactNode = document.getElementById("threadInfoInviteFact");
+  const inviteLinkNode = document.getElementById("threadInfoInviteLink");
+  const inviteCopyNode = document.getElementById("threadInfoInviteCopy");
+  const inviteRegenerateNode = document.getElementById("threadInfoInviteRegenerate");
+  const inviteStatusNode = document.getElementById("threadInfoInviteStatus");
   const membersWrapNode = document.getElementById("threadInfoMembersWrap");
   const membersListNode = document.getElementById("threadInfoMembersList");
   const memberAddTriggerNode = document.getElementById("threadMemberAddTrigger");
@@ -388,6 +393,24 @@ function fillThreadInfoPanel(info, chatType) {
       descriptionFactNode.hidden = !hasBio;
       descriptionLabelNode.textContent = "Bio";
       descriptionNode.textContent = hasBio ? info.bio : "";
+    }
+  }
+
+  if (inviteFactNode && inviteLinkNode && inviteCopyNode && inviteRegenerateNode && inviteStatusNode) {
+    if (chatType === "group" && info?.can_manage_invite && info?.invite?.url) {
+      inviteFactNode.hidden = false;
+      inviteLinkNode.textContent = info.invite.url;
+      inviteLinkNode.href = info.invite.url;
+      inviteCopyNode.hidden = false;
+      inviteRegenerateNode.hidden = false;
+    } else {
+      inviteFactNode.hidden = true;
+      inviteLinkNode.textContent = "";
+      inviteLinkNode.removeAttribute("href");
+      inviteCopyNode.hidden = true;
+      inviteRegenerateNode.hidden = true;
+      inviteStatusNode.textContent = "";
+      inviteStatusNode.className = "status thread-info-invite-status";
     }
   }
 
@@ -511,6 +534,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadInfoCloseButton = document.getElementById("threadInfoClose");
   const threadInfoMenuTrigger = document.getElementById("threadInfoMenuTrigger");
   const threadInfoActionMenu = document.getElementById("threadInfoActionMenu");
+  const threadInfoInviteFact = document.getElementById("threadInfoInviteFact");
+  const threadInfoInviteLink = document.getElementById("threadInfoInviteLink");
+  const threadInfoInviteCopy = document.getElementById("threadInfoInviteCopy");
+  const threadInfoInviteRegenerate = document.getElementById("threadInfoInviteRegenerate");
+  const threadInfoInviteStatus = document.getElementById("threadInfoInviteStatus");
   const threadInfoMembersListNode = document.getElementById("threadInfoMembersList");
   const threadMemberAddTrigger = document.getElementById("threadMemberAddTrigger");
   const threadMemberAddModal = document.getElementById("threadMemberAddModal");
@@ -552,6 +580,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let filteredThreadMemberCandidates = [];
   let isSubmittingThreadMembers = false;
   let isSavingGroupDetails = false;
+  let isRefreshingInviteLink = false;
   let oldestMessageId = null;
   let hasMoreMessages = false;
   let isLoadingOlder = false;
@@ -612,6 +641,29 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     threadGroupEditStatus.textContent = message;
     threadGroupEditStatus.className = `status thread-group-edit-status ${type}`.trim();
+  }
+
+  function setThreadInviteStatus(message, type = "") {
+    if (!threadInfoInviteStatus) {
+      return;
+    }
+    threadInfoInviteStatus.textContent = message;
+    threadInfoInviteStatus.className = `status thread-info-invite-status ${type}`.trim();
+  }
+
+  function updateThreadInviteControls() {
+    const canManageInvite = chatType === "group" && Boolean(currentThreadInfo?.can_manage_invite && currentThreadInfo?.invite?.url);
+    if (threadInfoInviteFact) {
+      threadInfoInviteFact.hidden = !canManageInvite;
+    }
+    if (threadInfoInviteCopy) {
+      threadInfoInviteCopy.disabled = !canManageInvite || isRefreshingInviteLink;
+      threadInfoInviteCopy.textContent = "Скопировать";
+    }
+    if (threadInfoInviteRegenerate) {
+      threadInfoInviteRegenerate.disabled = !canManageInvite || isRefreshingInviteLink;
+      threadInfoInviteRegenerate.textContent = isRefreshingInviteLink ? "Обновляем..." : "Обновить ссылку";
+    }
   }
 
   function closeThreadGroupEditModal() {
@@ -687,6 +739,67 @@ document.addEventListener("DOMContentLoaded", async () => {
       activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
       activeThreadInfoType === chatType ? chatType : activeThreadInfoType
     );
+    updateThreadInviteControls();
+  }
+
+  async function copyThreadInviteLink() {
+    const inviteUrl = currentThreadInfo?.invite?.url;
+    if (!inviteUrl) {
+      return;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      setThreadInviteStatus("Буфер обмена недоступен в этом браузере", "error");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      if (threadInfoInviteCopy) {
+        threadInfoInviteCopy.textContent = "Скопировано";
+      }
+      setThreadInviteStatus("Ссылка скопирована", "success");
+      window.setTimeout(() => {
+        if (!isRefreshingInviteLink) {
+          updateThreadInviteControls();
+        }
+      }, 1600);
+    } catch (error) {
+      setThreadInviteStatus("Не удалось скопировать ссылку", "error");
+    }
+  }
+
+  async function regenerateThreadInviteLink() {
+    if (!chatId || chatType !== "group" || !currentThreadInfo?.can_manage_invite || isRefreshingInviteLink) {
+      return;
+    }
+
+    isRefreshingInviteLink = true;
+    updateThreadInviteControls();
+    setThreadInviteStatus("Обновляем ссылку...", "");
+
+    try {
+      const data = await apiFetch(`/groups/${encodeURIComponent(chatId)}/invite/regenerate`, {
+        method: "POST"
+      });
+      currentThreadInfo = {
+        ...currentThreadInfo,
+        invite: data.invite || currentThreadInfo.invite
+      };
+      if (!activeThreadInfoView || activeThreadInfoType === chatType) {
+        setActiveThreadInfoView(currentThreadInfo, chatType);
+      }
+      fillThreadInfoPanel(
+        activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
+        activeThreadInfoType === chatType ? chatType : activeThreadInfoType
+      );
+      setThreadInviteStatus("Ссылка обновлена", "success");
+    } catch (error) {
+      setThreadInviteStatus(error.message, "error");
+    } finally {
+      isRefreshingInviteLink = false;
+      updateThreadInviteControls();
+    }
   }
 
   async function openMessageAuthorProfile(authorUserId) {
@@ -703,6 +816,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       title: profile.name || profile.username || "Пользователь"
     }, "direct");
     fillThreadInfoPanel(activeThreadInfoView, activeThreadInfoType);
+    updateThreadInviteControls();
     setThreadInfoOpen(true);
   }
 
@@ -858,6 +972,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setActiveThreadInfoView(currentThreadInfo, chatType);
     setChatTitle(title, subtitle);
     fillThreadInfoPanel(currentThreadInfo, chatType);
+    updateThreadInviteControls();
     renderMessages(messagesNode, [], currentUser.id, chatType);
     selectedMessageIds.clear();
     isSelectionMode = false;
@@ -1440,6 +1555,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setActiveThreadInfoView(currentThreadInfo, chatType);
     setChatTitle(title, subtitle);
     fillThreadInfoPanel(currentThreadInfo, chatType);
+    updateThreadInviteControls();
     const nextMessages = data.messages || [];
     exitSelectionMode();
     renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
@@ -1642,6 +1758,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     closeThreadMemberAddModal();
     setActiveThreadInfoView(currentThreadInfo, chatType);
     fillThreadInfoPanel(activeThreadInfoView, activeThreadInfoType);
+    updateThreadInviteControls();
     setThreadInfoOpen(true);
   }
 
@@ -1669,6 +1786,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (action === "edit-group") {
       openThreadGroupEditModal();
     }
+  });
+
+  threadInfoInviteCopy?.addEventListener("click", () => {
+    void copyThreadInviteLink();
+  });
+
+  threadInfoInviteRegenerate?.addEventListener("click", () => {
+    void regenerateThreadInviteLink();
   });
 
   messagesNode.addEventListener("click", (event) => {
@@ -1846,6 +1971,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       };
       setChatTitle(currentThreadInfo.title, `${currentThreadInfo.members_count || currentThreadInfo.members?.length || 0} участников`);
       fillThreadInfoPanel(currentThreadInfo, chatType);
+      updateThreadInviteControls();
       await loadChats("chatList", { showLoading: false });
       isSavingGroupDetails = false;
       closeThreadGroupEditModal();

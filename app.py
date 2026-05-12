@@ -159,6 +159,84 @@ def emit_group_updated(group_id):
     }, room=f"group_{group_id}")
 
 
+def generate_group_invite_token(conn):
+    token = secrets.token_urlsafe(18)
+    while conn.execute("SELECT 1 FROM group_invites WHERE token = ?", (token,)).fetchone():
+        token = secrets.token_urlsafe(18)
+    return token
+
+
+def create_group_invite(conn, group_id, created_by):
+    token = generate_group_invite_token(conn)
+    conn.execute("""
+        INSERT INTO group_invites (group_id, token, is_active, created_by)
+        VALUES (?, ?, 1, ?)
+    """, (group_id, token, created_by))
+    return conn.execute("""
+        SELECT group_id, token, created_at
+        FROM group_invites
+        WHERE token = ?
+    """, (token,)).fetchone()
+
+
+def ensure_active_group_invite(conn, group_id, created_by):
+    invite = conn.execute("""
+        SELECT group_id, token, created_at
+        FROM group_invites
+        WHERE group_id = ? AND is_active = 1
+        ORDER BY id DESC
+        LIMIT 1
+    """, (group_id,)).fetchone()
+    if invite:
+        return invite
+    return create_group_invite(conn, group_id, created_by)
+
+
+def regenerate_group_invite(conn, group_id, created_by):
+    conn.execute("""
+        UPDATE group_invites
+        SET is_active = 0
+        WHERE group_id = ? AND is_active = 1
+    """, (group_id,))
+    return create_group_invite(conn, group_id, created_by)
+
+
+def build_invite_url(token):
+    return f"{request.url_root.rstrip('/')}/invite/{token}"
+
+
+def serialize_group_invite(invite):
+    if not invite:
+        return None
+    return {
+        "token": invite["token"],
+        "url": build_invite_url(invite["token"]),
+        "path": f"/invite/{invite['token']}",
+        "created_at": invite["created_at"]
+    }
+
+
+def get_group_invite_by_token(conn, token):
+    return conn.execute("""
+        SELECT
+            gi.group_id,
+            gi.token,
+            gi.created_at,
+            g.title,
+            g.description,
+            g.owner_id
+        FROM group_invites gi
+        JOIN groups g ON g.id = gi.group_id
+        WHERE gi.token = ? AND gi.is_active = 1
+        LIMIT 1
+    """, (token,)).fetchone()
+
+
+def request_wants_json():
+    accept = (request.headers.get("Accept") or "").lower()
+    return "application/json" in accept and "text/html" not in accept
+
+
 def build_group_response(conn, group_id, viewer_user_id, include_messages=False, limit=None):
     group = conn.execute("""
         SELECT id, title, description, owner_id
@@ -227,6 +305,12 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
         "members_count": members_count_row["members_count"],
         "members": members
     }
+
+    can_manage_invite = can_edit_group_details(conn, viewer_user_id, group_id)
+    payload["can_manage_invite"] = can_manage_invite
+    payload["invite"] = serialize_group_invite(
+        ensure_active_group_invite(conn, group_id, viewer_user_id or group["owner_id"])
+    ) if can_manage_invite else None
 
     if include_messages:
         messages, has_more_messages = fetch_group_messages_page(conn, group_id, viewer_user_id, limit or parse_limit_arg())
@@ -713,6 +797,40 @@ def login_page():
 @app.get("/register")
 def register_page():
     return send_from_directory(".", "register.html")
+
+
+@app.get("/invite/<token>")
+def invite_page(token):
+    conn = get_db()
+    invite = get_group_invite_by_token(conn, token)
+    user_id = current_user_id()
+
+    if request_wants_json():
+        if not invite:
+            conn.close()
+            return jsonify({"message": "Ссылка приглашения недействительна"}), 404
+
+        members_count_row = conn.execute("""
+            SELECT COUNT(*) AS members_count
+            FROM group_members
+            WHERE group_id = ?
+        """, (invite["group_id"],)).fetchone()
+        already_member = bool(user_id and can_access_group(conn, user_id, invite["group_id"]))
+        payload = {
+            "token": invite["token"],
+            "group_id": invite["group_id"],
+            "title": invite["title"],
+            "description": invite["description"],
+            "members_count": members_count_row["members_count"] if members_count_row else 0,
+            "invite": serialize_group_invite(invite),
+            "already_member": already_member,
+            "redirect_url": f"/group/{invite['group_id']}" if already_member else None
+        }
+        conn.close()
+        return jsonify(payload)
+
+    conn.close()
+    return send_from_directory(".", "invite.html")
 
 
 @app.get("/index.html")
@@ -1690,6 +1808,8 @@ def create_group():
     for member_id in member_ids:
         initialize_group_read_state(conn, group_id, member_id)
 
+    create_group_invite(conn, group_id, user_id)
+
     conn.commit()
     conn.close()
 
@@ -1720,6 +1840,38 @@ def get_group(group_id):
         emit_chat_list_updated_for_users([user_id], "group", group_id)
 
     return jsonify(group_payload)
+
+
+@app.post("/groups/<int:group_id>/invite/regenerate")
+def regenerate_group_invite_endpoint(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    group = conn.execute("""
+        SELECT id
+        FROM groups
+        WHERE id = ?
+    """, (group_id,)).fetchone()
+
+    if not group:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    if not can_edit_group_details(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Обновить invite-ссылку может только создатель или администратор"}), 403
+
+    invite = regenerate_group_invite(conn, group_id, user_id)
+    conn.commit()
+    conn.close()
+    emit_group_updated(group_id)
+
+    return jsonify({
+        "ok": True,
+        "invite": serialize_group_invite(invite)
+    })
 
 
 @app.patch("/groups/<int:group_id>")
@@ -1797,6 +1949,59 @@ def update_group(group_id):
     emit_group_updated(group_id)
 
     return jsonify(updated_group)
+
+
+@app.post("/invite/<token>/join")
+def join_group_by_invite(token):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    invite = get_group_invite_by_token(conn, token)
+    if not invite:
+        conn.close()
+        return jsonify({"message": "Ссылка приглашения недействительна"}), 404
+
+    group_id = invite["group_id"]
+    if can_access_group(conn, user_id, group_id):
+        conn.close()
+        return jsonify({
+            "ok": True,
+            "already_member": True,
+            "group_id": group_id,
+            "redirect_url": f"/group/{group_id}"
+        })
+
+    conn.execute("""
+        INSERT OR IGNORE INTO group_members (group_id, user_id, is_admin)
+        VALUES (?, ?, 0)
+    """, (group_id, user_id))
+    initialize_group_read_state(conn, group_id, user_id)
+    actor = conn.execute("""
+        SELECT id, name, username, bio
+        FROM users
+        WHERE id = ?
+    """, (user_id,)).fetchone()
+    system_message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        f"{get_user_display_name(actor)} вступил в группу по ссылке",
+        "system"
+    )
+    conn.commit()
+    conn.close()
+
+    emit_group_new_message(system_message, group_id)
+    emit_group_members_updated(group_id)
+    emit_group_updated(group_id)
+
+    return jsonify({
+        "ok": True,
+        "group_id": group_id,
+        "redirect_url": f"/group/{group_id}"
+    })
 
 
 @app.get("/groups/<int:group_id>/messages")
@@ -1999,6 +2204,7 @@ def delete_group(group_id):
     conn.execute("DELETE FROM group_messages WHERE group_id = ?", (group_id,))
     conn.execute("DELETE FROM group_read_states WHERE group_id = ?", (group_id,))
     conn.execute("DELETE FROM group_members WHERE group_id = ?", (group_id,))
+    conn.execute("DELETE FROM group_invites WHERE group_id = ?", (group_id,))
     conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
     conn.commit()
     conn.close()
