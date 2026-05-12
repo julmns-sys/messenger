@@ -10,6 +10,9 @@ let activeChatListItem = null;
 let chatListMenuHideTimer = null;
 let chatListTouchTimer = null;
 let chatListTouchTarget = null;
+let chatListRealtimeSocket = null;
+let chatListRealtimeBoundListId = null;
+let chatListRefreshTimer = null;
 let chatDeleteUndoToast = null;
 let chatTagEditorModal = null;
 let groupOwnerLeaveModal = null;
@@ -765,6 +768,43 @@ function getVisibleChats() {
   return chatState.allChats.filter((chat) => !pendingDeletedChatKeys.has(getChatStateKey(chat.id, chat.type || "direct")));
 }
 
+function scheduleChatListRefresh(listId = "chatList", delayMs = 0) {
+  if (chatListRefreshTimer) {
+    window.clearTimeout(chatListRefreshTimer);
+  }
+
+  chatListRefreshTimer = window.setTimeout(() => {
+    chatListRefreshTimer = null;
+    loadChats(listId, { showLoading: false });
+  }, Math.max(0, delayMs));
+}
+
+function initChatListRealtime(listId = "chatList") {
+  chatListRealtimeBoundListId = listId;
+  if (typeof io !== "function") {
+    return;
+  }
+
+  if (chatListRealtimeSocket) {
+    return;
+  }
+
+  chatListRealtimeSocket = io(API.baseUrl, {
+    auth: {
+      token: getToken()
+    }
+  });
+
+  const refreshSidebar = () => {
+    scheduleChatListRefresh(chatListRealtimeBoundListId || listId, 20);
+  };
+
+  chatListRealtimeSocket.on("chat_list_updated", refreshSidebar);
+  chatListRealtimeSocket.on("chat_deleted", refreshSidebar);
+  chatListRealtimeSocket.on("group_updated", refreshSidebar);
+  chatListRealtimeSocket.on("group_members_updated", refreshSidebar);
+}
+
 async function loadChats(listId = "chatList", options = {}) {
   const { showLoading = true } = options;
   const list = document.getElementById(listId);
@@ -772,6 +812,7 @@ async function loadChats(listId = "chatList", options = {}) {
 
   bindChatListScrollPersistence(listId);
   bindChatListActions(listId);
+  initChatListRealtime(listId);
 
   if (showLoading) {
     list.innerHTML = '<div class="empty-state">Загрузка чатов...</div>';
@@ -1739,6 +1780,16 @@ function renderChats(list, chats) {
         : currentPath === "chat.html"
           ? !isGroup && String(chat.id) === currentId
           : false;
+      const unreadCount = Math.max(0, Number(chat.unread_count || 0));
+      const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
+      const unreadMarkup = unreadCount > 0
+        ? `
+          <span class="chat-unread-wrap">
+            ${active ? "" : '<span class="chat-unread-dot" aria-hidden="true"></span>'}
+            <span class="chat-unread-badge" aria-label="Непрочитанных сообщений: ${escapeHtml(unreadLabel)}">${escapeHtml(unreadLabel)}</span>
+          </span>
+        `
+        : "";
 
       return `
         <a class="chat-item ${active ? "active" : ""}" href="${href}" data-chat-id="${escapeHtml(String(chat.id))}" data-chat-type="${escapeHtml(chat.type || "direct")}">
@@ -1752,7 +1803,10 @@ function renderChats(list, chats) {
                 <h3 class="chat-name">${escapeHtml(name)}</h3>
                 ${customTagMarkup}
               </div>
-              <span class="time">${escapeHtml(formatDate(chat.updated_at || chat.last_message?.created_at))}</span>
+              <div class="chat-side-meta">
+                <span class="time">${escapeHtml(formatDate(chat.updated_at || chat.last_message?.created_at))}</span>
+                ${unreadMarkup}
+              </div>
             </div>
             <p class="chat-preview">${escapeHtml(preview)}</p>
           </div>

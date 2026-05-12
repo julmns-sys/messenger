@@ -49,6 +49,19 @@ def user_id_from_token(token):
     return lookup_user_id_by_token(token)
 
 
+def get_user_room(user_id):
+    return f"user_{int(user_id)}"
+
+
+def emit_chat_list_updated_for_users(user_ids, chat_type, chat_id):
+    payload = {
+        "chat_type": chat_type,
+        "chat_id": chat_id
+    }
+    for user_id in {int(user_id) for user_id in user_ids if user_id}:
+        socketio.emit("chat_list_updated", payload, room=get_user_room(user_id))
+
+
 def serialize_user_profile(user):
     return {
         "id": user["id"],
@@ -298,6 +311,28 @@ def can_access_group(conn, user_id, group_id):
     return member is not None
 
 
+def get_direct_chat_member_ids(conn, chat_id):
+    row = conn.execute("""
+        SELECT user1_id, user2_id
+        FROM chats
+        WHERE id = ?
+    """, (chat_id,)).fetchone()
+    if not row:
+        return []
+    return [row["user1_id"], row["user2_id"]]
+
+
+def get_group_member_ids(conn, group_id):
+    return [
+        row["user_id"]
+        for row in conn.execute("""
+            SELECT user_id
+            FROM group_members
+            WHERE group_id = ?
+        """, (group_id,)).fetchall()
+    ]
+
+
 def serialize_direct_message(message):
     return {
         "id": message["id"],
@@ -345,6 +380,52 @@ def mark_direct_chat_as_read(conn, chat_id, reader_id):
     conn.commit()
 
     return upto_message_id
+
+
+def mark_group_chat_as_read(conn, group_id, reader_id):
+    latest_row = conn.execute("""
+        SELECT MAX(gm.id) AS upto_message_id
+        FROM group_messages gm
+        WHERE gm.group_id = ?
+          AND gm.message_type = 'text'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM hidden_group_messages hgm
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+          )
+    """, (group_id, reader_id)).fetchone()
+
+    upto_message_id = latest_row["upto_message_id"] if latest_row else None
+    if not upto_message_id:
+        return None
+
+    conn.execute("""
+        INSERT INTO group_read_states (group_id, user_id, last_read_message_id, last_read_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(group_id, user_id) DO UPDATE SET
+            last_read_message_id = excluded.last_read_message_id,
+            last_read_at = CURRENT_TIMESTAMP
+    """, (group_id, reader_id, upto_message_id))
+    conn.commit()
+
+    return upto_message_id
+
+
+def initialize_group_read_state(conn, group_id, user_id):
+    latest_row = conn.execute("""
+        SELECT MAX(id) AS last_message_id
+        FROM group_messages
+        WHERE group_id = ?
+          AND message_type = 'text'
+    """, (group_id,)).fetchone()
+    last_message_id = latest_row["last_message_id"] if latest_row else None
+    if not last_message_id:
+        return
+
+    conn.execute("""
+        INSERT OR IGNORE INTO group_read_states (group_id, user_id, last_read_message_id, last_read_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    """, (group_id, user_id, last_message_id))
 
 
 def get_direct_message_for_chat(conn, chat_id, message_id):
@@ -517,6 +598,10 @@ def emit_group_new_message(message, group_id):
     socketio.emit("new_message", {
         **serialize_group_message(message)
     }, room=f"group_{group_id}")
+    conn = get_db()
+    member_ids = get_group_member_ids(conn, group_id)
+    conn.close()
+    emit_chat_list_updated_for_users(member_ids, "group", group_id)
 
 
 @socketio.on("connect")
@@ -525,7 +610,10 @@ def handle_connect(auth):
     if isinstance(auth, dict):
         token = auth.get("token")
 
-    socket_sessions[request.sid] = user_id_from_token(token)
+    user_id = user_id_from_token(token)
+    socket_sessions[request.sid] = user_id
+    if user_id:
+        join_room(get_user_room(user_id))
 
 
 @socketio.on("disconnect")
@@ -939,7 +1027,19 @@ def get_chats():
                 WHERE m.chat_id = c.id
                 ORDER BY m.created_at DESC, m.id DESC
                 LIMIT 1
-            ) AS updated_at
+            ) AS updated_at,
+            (
+                SELECT COUNT(*)
+                FROM messages m
+                WHERE m.chat_id = c.id
+                  AND m.sender_id != ?
+                  AND m.read_at IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_messages hm
+                      WHERE hm.message_id = m.id AND hm.user_id = ?
+                  )
+            ) AS unread_count
         FROM chats c
         JOIN users u
             ON u.id = CASE
@@ -957,7 +1057,7 @@ def get_chats():
               FROM hidden_direct_chats hdc
               WHERE hdc.chat_id = c.id AND hdc.user_id = ?
           )
-    """, (user_id, user_id, user_id, user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
 
     group_chats = conn.execute("""
         SELECT
@@ -986,11 +1086,28 @@ def get_chats():
                   )
                 ORDER BY gm.created_at DESC, gm.id DESC
                 LIMIT 1
-            ) AS updated_at
+            ) AS updated_at,
+            (
+                SELECT COUNT(*)
+                FROM group_messages gm
+                WHERE gm.group_id = g.id
+                  AND gm.message_type = 'text'
+                  AND gm.sender_id != ?
+                  AND gm.id > COALESCE((
+                      SELECT grs.last_read_message_id
+                      FROM group_read_states grs
+                      WHERE grs.group_id = g.id AND grs.user_id = ?
+                  ), 0)
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+                  )
+            ) AS unread_count
         FROM groups g
         JOIN group_members gmbr ON gmbr.group_id = g.id
         WHERE gmbr.user_id = ?
-    """, (user_id, user_id, user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
     conn.close()
 
     chats = [
@@ -1000,7 +1117,8 @@ def get_chats():
             "username": chat["username"],
             "title": chat["title"],
             "last_message": {"text": chat["last_message_text"]} if chat["last_message_text"] is not None else None,
-            "updated_at": chat["updated_at"]
+            "updated_at": chat["updated_at"],
+            "unread_count": chat["unread_count"] or 0
         }
         for chat in direct_chats
     ]
@@ -1012,7 +1130,8 @@ def get_chats():
             "username": None,
             "title": group["title"],
             "last_message": {"text": group["last_message_text"]} if group["last_message_text"] is not None else None,
-            "updated_at": group["updated_at"]
+            "updated_at": group["updated_at"],
+            "unread_count": group["unread_count"] or 0
         }
         for group in group_chats
     ])
@@ -1129,6 +1248,7 @@ def get_chat(chat_id):
             "reader_id": user_id,
             "upto_message_id": read_upto_message_id
         }, room=f"direct_{chat_id}")
+        emit_chat_list_updated_for_users([user_id], "direct", chat_id)
 
     return jsonify({
         "id": chat["id"],
@@ -1187,6 +1307,8 @@ def create_chat_message(chat_id):
         conn.close()
         return jsonify({"message": "Чат не найден"}), 404
 
+    member_ids = get_direct_chat_member_ids(conn, chat_id)
+
     cur = conn.cursor()
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = ?", (chat_id,))
     cur.execute("""
@@ -1213,6 +1335,7 @@ def create_chat_message(chat_id):
     message_data = serialize_direct_message(message)
 
     socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
+    emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
 
     return jsonify(message_data), 201
 
@@ -1280,6 +1403,7 @@ def mark_chat_read(chat_id):
             "reader_id": user_id,
             "upto_message_id": read_upto_message_id
         }, room=f"direct_{chat_id}")
+        emit_chat_list_updated_for_users([user_id], "direct", chat_id)
 
     return jsonify({
         "ok": True,
@@ -1478,6 +1602,10 @@ def create_group():
             VALUES (?, ?, 0)
         """, (group_id, member_id))
 
+    initialize_group_read_state(conn, group_id, user_id)
+    for member_id in member_ids:
+        initialize_group_read_state(conn, group_id, member_id)
+
     conn.commit()
     conn.close()
 
@@ -1496,10 +1624,16 @@ def get_group(group_id):
 
     conn = get_db()
     group_payload = build_group_response(conn, group_id, user_id, include_messages=True)
+    read_upto_message_id = None
+    if group_payload:
+        read_upto_message_id = mark_group_chat_as_read(conn, group_id, user_id)
     conn.close()
 
     if not group_payload:
         return jsonify({"message": "Группа не найдена"}), 404
+
+    if read_upto_message_id:
+        emit_chat_list_updated_for_users([user_id], "group", group_id)
 
     return jsonify(group_payload)
 
@@ -1604,6 +1738,30 @@ def get_group_messages(group_id):
     })
 
 
+@app.post("/groups/<int:group_id>/read")
+def mark_group_read(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    member = can_access_group(conn, user_id, group_id)
+    if not member:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    read_upto_message_id = mark_group_chat_as_read(conn, group_id, user_id)
+    conn.close()
+
+    if read_upto_message_id:
+        emit_chat_list_updated_for_users([user_id], "group", group_id)
+
+    return jsonify({
+        "ok": True,
+        "upto_message_id": read_upto_message_id
+    })
+
+
 @app.delete("/groups/<int:group_id>/messages")
 def clear_group_messages_for_user(group_id):
     user_id = current_user_id()
@@ -1689,6 +1847,10 @@ def leave_group(group_id):
         DELETE FROM group_members
         WHERE group_id = ? AND user_id = ?
     """, (group_id, user_id))
+    conn.execute("""
+        DELETE FROM group_read_states
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, user_id))
     actor = conn.execute("""
         SELECT id, name, username, bio
         FROM users
@@ -1751,6 +1913,7 @@ def delete_group(group_id):
         """, group_message_ids)
 
     conn.execute("DELETE FROM group_messages WHERE group_id = ?", (group_id,))
+    conn.execute("DELETE FROM group_read_states WHERE group_id = ?", (group_id,))
     conn.execute("DELETE FROM group_members WHERE group_id = ?", (group_id,))
     conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
     conn.commit()
@@ -1912,6 +2075,8 @@ def add_group_members(group_id):
         INSERT INTO group_members (group_id, user_id, is_admin)
         VALUES (?, ?, 0)
     """, [(group_id, member_id) for member_id in new_member_ids])
+    for member_id in new_member_ids:
+        initialize_group_read_state(conn, group_id, member_id)
     added_user_ids = set(new_member_ids)
     system_messages = [
         create_group_message_record(
@@ -1926,6 +2091,7 @@ def add_group_members(group_id):
     ]
     conn.commit()
     conn.close()
+    emit_chat_list_updated_for_users(new_member_ids, "group", group_id)
     for system_message in system_messages:
         emit_group_new_message(system_message, group_id)
     emit_group_members_updated(group_id)
@@ -2091,6 +2257,10 @@ def remove_group_member(group_id, member_user_id):
     """, (member_user_id,)).fetchone()
     conn.execute("""
         DELETE FROM group_members
+        WHERE group_id = ? AND user_id = ?
+    """, (group_id, member_user_id))
+    conn.execute("""
+        DELETE FROM group_read_states
         WHERE group_id = ? AND user_id = ?
     """, (group_id, member_user_id))
     system_message = create_group_message_record(

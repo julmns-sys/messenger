@@ -159,5 +159,16 @@ def init_db():
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS group_read_states (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        last_read_message_id INTEGER,
+        last_read_at TIMESTAMP,
+        UNIQUE(group_id, user_id)
+    )
+    """)
+
     conn.commit()
     conn.close()

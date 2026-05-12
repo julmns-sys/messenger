@@ -1249,9 +1249,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         committedDeleteEchoIds.add(item.messageId);
       });
       await loadChats("chatList", { showLoading: false });
-      if (chatType === "direct") {
-        await markCurrentDirectChatAsRead();
-      }
+      await markCurrentChatAsRead();
     } catch (error) {
       restoreRemovedMessages(messagesNode, state.removedItems);
       status.textContent = error.message;
@@ -1354,17 +1352,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     updateScrollDownButton(messagesNode, scrollDownButton);
   }
 
-  async function markCurrentDirectChatAsRead() {
-    if (chatType !== "direct" || !chatId || isMarkingRead) {
+  async function markCurrentChatAsRead() {
+    if (!chatId || isMarkingRead) {
       return;
     }
 
+    const readPath = chatType === "group" ? `/groups/${chatId}/read` : `/chats/${chatId}/read`;
     isMarkingRead = true;
     try {
-      const result = await apiFetch(`/chats/${chatId}/read`, {
+      const result = await apiFetch(readPath, {
         method: "POST"
       });
-      if (result?.upto_message_id) {
+      if (chatType === "direct" && result?.upto_message_id) {
         markOwnMessagesAsRead(messagesNode, Number(result.upto_message_id));
       }
     } catch {
@@ -1524,8 +1523,8 @@ document.addEventListener("DOMContentLoaded", async () => {
           scrollMessagesToBottom(messagesNode);
         }
 
-        if (chatType === "direct" && String(message.sender_id) !== String(currentUser.id)) {
-          markCurrentDirectChatAsRead();
+        if (String(message.sender_id) !== String(currentUser.id)) {
+          markCurrentChatAsRead();
         }
 
         updateScrollDownButton(messagesNode, scrollDownButton);
@@ -1623,7 +1622,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     if (chatId) {
       await loadThread();
-      await markCurrentDirectChatAsRead();
+      await markCurrentChatAsRead();
       connectRealtime();
     } else if (chatType !== "group" && userId) {
       const user = await loadSelectedUser();
@@ -2040,9 +2039,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       await loadChats("chatList", { showLoading: false });
-      if (chatType === "direct") {
-        await markCurrentDirectChatAsRead();
-      }
+      await markCurrentChatAsRead();
     } catch (error) {
       status.textContent = error.message;
       status.className = "status error";
@@ -2177,9 +2174,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         replaceMessageNode(messagesNode, updatedMessage, currentUser.id, chatType);
         syncMessageSelectionState(updatedMessage.id);
         await loadChats("chatList", { showLoading: false });
-        if (chatType === "direct") {
-          await markCurrentDirectChatAsRead();
-        }
+        await markCurrentChatAsRead();
       } catch (error) {
         status.textContent = error.message;
         status.className = "status error";
@@ -2234,7 +2229,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!hadChatId && chatType !== "group") {
         await loadChats("chatList", { showLoading: false });
         await loadThread();
-        await markCurrentDirectChatAsRead();
+        await markCurrentChatAsRead();
         connectRealtime();
       }
       status.textContent = "";
