@@ -17,7 +17,7 @@ function getContactIds() {
 }
 
 function getDirectChatHref(user) {
-  return `chat.html?${user.chat_id ? `id=${encodeURIComponent(user.chat_id)}` : `user_id=${encodeURIComponent(user.id)}`}`;
+  return user.chat_id ? getDirectChatRoute(user.chat_id) : getDirectChatDraftRoute(user.id);
 }
 
 function setSearchUserInfoOpen(isOpen) {

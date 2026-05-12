@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -672,7 +672,91 @@ def delete_direct_chat_for_user(conn, chat_id, user_id):
 
 @app.route("/")
 def home():
+    return send_from_directory(".", "index.html")
+
+
+@app.get("/search")
+def search_page():
+    return send_from_directory(".", "search.html")
+
+
+@app.get("/chat/<int:chat_id>")
+def direct_chat_page(chat_id):
+    return send_from_directory(".", "chat.html")
+
+
+@app.get("/chat/user/<int:user_id>")
+def direct_chat_draft_page(user_id):
+    return send_from_directory(".", "chat.html")
+
+
+@app.get("/group/<int:group_id>")
+def group_chat_page(group_id):
+    return send_from_directory(".", "group_chat.html")
+
+
+@app.get("/profile")
+def profile_page():
+    return send_from_directory(".", "index.html")
+
+
+@app.get("/create-group")
+def create_group_page():
+    return send_from_directory(".", "create_group.html")
+
+
+@app.get("/login")
+def login_page():
     return send_from_directory(".", "login.html")
+
+
+@app.get("/register")
+def register_page():
+    return send_from_directory(".", "register.html")
+
+
+@app.get("/index.html")
+def legacy_index_page():
+    return redirect("/", code=302)
+
+
+@app.get("/search.html")
+def legacy_search_page():
+    return redirect("/search", code=302)
+
+
+@app.get("/create_group.html")
+def legacy_create_group_page():
+    return redirect("/create-group", code=302)
+
+
+@app.get("/login.html")
+def legacy_login_page():
+    return redirect("/login", code=302)
+
+
+@app.get("/register.html")
+def legacy_register_page():
+    return redirect("/register", code=302)
+
+
+@app.get("/chat.html")
+def legacy_direct_chat_page():
+    chat_id = (request.args.get("id") or "").strip()
+    user_id = (request.args.get("user_id") or "").strip()
+    if chat_id:
+        return redirect(f"/chat/{chat_id}", code=302)
+    if user_id:
+        return redirect(f"/chat/user/{user_id}", code=302)
+    return redirect("/", code=302)
+
+
+@app.get("/group_chat.html")
+def legacy_group_chat_page():
+    group_id = (request.args.get("id") or "").strip()
+    if group_id:
+        return redirect(f"/group/{group_id}", code=302)
+    return redirect("/", code=302)
 
 
 @app.route("/<path:filename>")

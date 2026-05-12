@@ -38,7 +38,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       setStatus(mode === "register" ? "Аккаунт создан" : "Вход выполнен", "success");
       window.setTimeout(() => {
-        window.location.href = "index.html";
+        window.location.href = getChatsRoute();
       }, 300);
     } catch (error) {
       setStatus(error.message, "error");

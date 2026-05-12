@@ -5,6 +5,92 @@ const API = {
   emailBookKey: "messenger_user_emails"
 };
 
+function getChatsRoute() {
+  return "/";
+}
+
+function getSearchRoute() {
+  return "/search";
+}
+
+function getCreateGroupRoute() {
+  return "/create-group";
+}
+
+function getLoginRoute() {
+  return "/login";
+}
+
+function getRegisterRoute() {
+  return "/register";
+}
+
+function getProfileRoute() {
+  return "/profile";
+}
+
+function getDirectChatRoute(chatId) {
+  return `/chat/${encodeURIComponent(String(chatId))}`;
+}
+
+function getDirectChatDraftRoute(userId) {
+  return `/chat/user/${encodeURIComponent(String(userId))}`;
+}
+
+function getGroupChatRoute(groupId) {
+  return `/group/${encodeURIComponent(String(groupId))}`;
+}
+
+function getCurrentRouteInfo() {
+  const pathname = window.location.pathname || "/";
+  const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+  const segments = normalizedPath === "/"
+    ? []
+    : normalizedPath.replace(/^\/+/, "").split("/").filter(Boolean);
+  const params = new URLSearchParams(window.location.search);
+  const directChatId = segments[0] === "chat" && segments[1] && segments[1] !== "user"
+    ? segments[1]
+    : params.get("id");
+  const directUserId = segments[0] === "chat" && segments[1] === "user" && segments[2]
+    ? segments[2]
+    : params.get("user_id");
+  const groupId = segments[0] === "group" && segments[1]
+    ? segments[1]
+    : params.get("id");
+
+  let page = "unknown";
+  let chatType = null;
+
+  if (!segments.length || segments[0] === "index.html") {
+    page = "chats";
+  } else if (segments[0] === "search" || segments[0] === "search.html") {
+    page = "search";
+  } else if (segments[0] === "create-group" || segments[0] === "create_group.html") {
+    page = "create-group";
+  } else if (segments[0] === "login" || segments[0] === "login.html") {
+    page = "login";
+  } else if (segments[0] === "register" || segments[0] === "register.html") {
+    page = "register";
+  } else if (segments[0] === "profile") {
+    page = "profile";
+  } else if (segments[0] === "chat" || segments[0] === "chat.html") {
+    page = "direct-chat";
+    chatType = "direct";
+  } else if (segments[0] === "group" || segments[0] === "group_chat.html") {
+    page = "group-chat";
+    chatType = "group";
+  }
+
+  return {
+    page,
+    chatType,
+    pathname: normalizedPath,
+    segments,
+    chatId: page === "group-chat" ? groupId : directChatId,
+    userId: page === "direct-chat" ? directUserId : null
+  };
+}
+
 function setApiBase(url) {
   API.baseUrl = url.replace(/\/+$/, "");
   localStorage.setItem("messenger_api_base", API.baseUrl);
@@ -93,7 +179,7 @@ function getCurrentUser() {
 
 function requireAuth() {
   if (!getToken()) {
-    window.location.href = "login.html";
+    window.location.href = getLoginRoute();
   }
 }
 

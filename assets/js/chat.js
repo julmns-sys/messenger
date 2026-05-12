@@ -492,10 +492,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadChats();
   startChatsAutoRefresh();
 
-  const params = new URLSearchParams(window.location.search);
-  let chatId = params.get("id");
-  const userId = params.get("user_id");
-  const chatType = document.body.dataset.chatType || "direct";
+  const route = getCurrentRouteInfo();
+  let chatId = route.chatId;
+  const userId = route.userId;
+  const chatType = document.body.dataset.chatType || route.chatType || "direct";
   const currentUser = getCurrentUser() || {};
 
   const messagesNode = document.getElementById("messages");
@@ -1396,7 +1396,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         chatId = createdChatId;
-        window.history.replaceState({}, "", `chat.html?id=${encodeURIComponent(chatId)}`);
+        window.history.replaceState({}, "", getDirectChatRoute(chatId));
         return chatId;
       } catch {
         continue;
@@ -1587,7 +1587,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           return;
         }
 
-        window.location.href = "index.html";
+        window.location.href = getChatsRoute();
       });
 
       socket.on("group_members_updated", async (data) => {
@@ -1598,7 +1598,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         try {
           await refreshCurrentThreadInfo();
         } catch {
-          window.location.href = "index.html";
+          window.location.href = getChatsRoute();
         }
       });
 
@@ -1611,7 +1611,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           await refreshCurrentThreadInfo();
           await loadChats("chatList", { showLoading: false });
         } catch {
-          window.location.href = "index.html";
+          window.location.href = getChatsRoute();
         }
       });
     }

@@ -147,7 +147,7 @@ function bindLogout(buttonId = "logoutButton") {
 
   logoutButton.addEventListener("click", () => {
     clearSession();
-    window.location.href = "login.html";
+    window.location.href = getLoginRoute();
   });
 }
 
@@ -211,7 +211,7 @@ function openProfileLogoutModal() {
     confirmButton.textContent = "Выход...";
     status.textContent = "Завершение сессии...";
     clearSession();
-    window.location.href = "login.html";
+    window.location.href = getLoginRoute();
   };
 
   modal.hidden = false;
@@ -571,11 +571,11 @@ function initQuickActionsMenu() {
 
   const navigateForAction = (action) => {
     if (action === "search-user") {
-      window.location.href = "search.html";
+      window.location.href = getSearchRoute();
       return;
     }
     if (action === "create-group") {
-      window.location.href = "create_group.html";
+      window.location.href = getCreateGroupRoute();
     }
   };
 
@@ -656,6 +656,7 @@ function initSidebarProfile() {
   fillSidebarProfile();
   buildProfileLogoutModal();
   initQuickActionsMenu();
+  const route = getCurrentRouteInfo();
 
   if (!sidebar || !badge || !backButton || !menuTrigger || !menu || badge.dataset.profileBound === "true") {
     return;
@@ -670,6 +671,10 @@ function initSidebarProfile() {
   });
 
   backButton.addEventListener("click", () => {
+    if (route.page === "profile") {
+      window.location.href = getChatsRoute();
+      return;
+    }
     setSidebarProfileOpen(sidebar, false);
     setSidebarProfileEditMode(sidebar, false);
     closeSidebarProfileMenu(menuTrigger, menu);
@@ -758,6 +763,11 @@ function initSidebarProfile() {
       closeProfileLogoutModal();
     }
   });
+
+  if (route.page === "profile") {
+    setSidebarProfileOpen(sidebar, true);
+    setSidebarProfileEditMode(sidebar, false);
+  }
 }
 
 function getChatSearchQuery() {
@@ -1241,20 +1251,18 @@ function openChatTagEditor(chatItem, listId = "chatList") {
 }
 
 function getActiveDirectChatContext() {
-  const currentPath = window.location.pathname.split("/").pop() || "index.html";
-  const currentId = new URLSearchParams(window.location.search).get("id");
+  const route = getCurrentRouteInfo();
   return {
-    currentPath,
-    currentId
+    currentPath: route.page,
+    currentId: route.chatId
   };
 }
 
 function getActiveThreadContext() {
-  const currentPath = window.location.pathname.split("/").pop() || "index.html";
-  const currentId = new URLSearchParams(window.location.search).get("id");
+  const route = getCurrentRouteInfo();
   return {
-    currentPath,
-    currentId
+    currentPath: route.page,
+    currentId: route.chatId
   };
 }
 
@@ -1369,8 +1377,8 @@ function openGroupOwnerLeaveModal(groupContext, payload, listId = "chatList") {
         closeGroupDeleteConfirmModal();
         closeGroupOwnerLeaveModal();
         await loadChats(listId, { showLoading: false });
-        if (groupContext.currentPath === "group_chat.html" && String(groupContext.currentId) === String(groupContext.groupId)) {
-          window.location.href = "index.html";
+        if (groupContext.currentPath === "group-chat" && String(groupContext.currentId) === String(groupContext.groupId)) {
+          window.location.href = getChatsRoute();
         }
       } catch (error) {
         confirmSubmit.disabled = false;
@@ -1413,8 +1421,8 @@ function openGroupOwnerLeaveModal(groupContext, payload, listId = "chatList") {
       });
       closeGroupOwnerLeaveModal();
       await loadChats(listId, { showLoading: false });
-      if (groupContext.currentPath === "group_chat.html" && String(groupContext.currentId) === String(groupContext.groupId)) {
-        window.location.href = "index.html";
+      if (groupContext.currentPath === "group-chat" && String(groupContext.currentId) === String(groupContext.groupId)) {
+        window.location.href = getChatsRoute();
       }
     } catch (error) {
       setSubmittingState(false);
@@ -1486,8 +1494,8 @@ async function flushPendingChatDelete(reason = "commit", listId = "chatList") {
     await loadChats(state.listId || listId, { showLoading: false });
 
     const { currentPath, currentId } = getActiveDirectChatContext();
-    if (currentPath === "chat.html" && String(currentId) === String(state.chatId)) {
-      window.location.href = "index.html";
+    if (currentPath === "direct-chat" && String(currentId) === String(state.chatId)) {
+      window.location.href = getChatsRoute();
     }
   } catch (error) {
     pendingDeletedChatKeys.delete(state.chatKey);
@@ -1510,7 +1518,7 @@ async function clearGroupHistoryFromList(chatItem, listId = "chatList") {
   await loadChats(listId, { showLoading: false });
 
   const { currentPath, currentId } = getActiveThreadContext();
-  if (currentPath === "group_chat.html" && String(currentId) === String(groupId)) {
+  if (currentPath === "group-chat" && String(currentId) === String(groupId)) {
     window.location.reload();
   }
 }
@@ -1541,8 +1549,8 @@ async function leaveGroupFromList(chatItem, listId = "chatList") {
   if (response.ok) {
     await loadChats(listId, { showLoading: false });
     const { currentPath, currentId } = getActiveThreadContext();
-    if (currentPath === "group_chat.html" && String(currentId) === String(groupId)) {
-      window.location.href = "index.html";
+    if (currentPath === "group-chat" && String(currentId) === String(groupId)) {
+      window.location.href = getChatsRoute();
     }
     return;
   }
@@ -1765,20 +1773,19 @@ function renderChats(list, chats) {
     return;
   }
 
-  const currentPath = window.location.pathname.split("/").pop() || "index.html";
-  const currentId = new URLSearchParams(window.location.search).get("id");
+  const route = getCurrentRouteInfo();
 
   list.innerHTML = chats
     .map((chat) => {
-      const href = chat.type === "group" ? `group_chat.html?id=${chat.id}` : `chat.html?id=${chat.id}`;
+      const href = chat.type === "group" ? getGroupChatRoute(chat.id) : getDirectChatRoute(chat.id);
       const preview = chat.last_message?.text || "Нет сообщений";
       const name = chat.title || chat.username || chat.name || "Чат";
       const isGroup = chat.type === "group";
       const customTagMarkup = getChatTagMarkup(chat.id, chat.type || "direct");
-      const active = currentPath === "group_chat.html"
-        ? isGroup && String(chat.id) === currentId
-        : currentPath === "chat.html"
-          ? !isGroup && String(chat.id) === currentId
+      const active = route.page === "group-chat"
+        ? isGroup && String(chat.id) === String(route.chatId)
+        : route.page === "direct-chat"
+          ? !isGroup && String(chat.id) === String(route.chatId)
           : false;
       const unreadCount = Math.max(0, Number(chat.unread_count || 0));
       const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);

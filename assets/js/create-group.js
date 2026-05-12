@@ -255,7 +255,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           label: "Группа",
           color: "#5ec7aa"
         });
-        window.location.href = `group_chat.html?id=${encodeURIComponent(group.id)}`;
+        window.location.href = getGroupChatRoute(group.id);
       } catch (error) {
         if (groupStatus) {
           groupStatus.textContent = error.message;
