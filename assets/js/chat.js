@@ -551,6 +551,15 @@ function renderThreadSearchResults(results, chatType) {
   }).join("");
 }
 
+function setInviteButtonIcon(button, icon, label) {
+  if (!button) {
+    return;
+  }
+  button.innerHTML = `<span class="icon-symbol">${escapeHtml(icon)}</span>`;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("title", label);
+}
+
 function setMessageSearchTarget(messageId) {
   document.querySelectorAll(".message.search-target").forEach((node) => {
     node.classList.remove("search-target");
@@ -954,11 +963,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     if (threadInfoInviteCopy) {
       threadInfoInviteCopy.disabled = !canManageInvite || isRefreshingInviteLink;
-      threadInfoInviteCopy.textContent = "Скопировать";
+      setInviteButtonIcon(threadInfoInviteCopy, "⎘", "Скопировать ссылку");
     }
     if (threadInfoInviteRegenerate) {
       threadInfoInviteRegenerate.disabled = !canManageInvite || isRefreshingInviteLink;
-      threadInfoInviteRegenerate.textContent = isRefreshingInviteLink ? "Обновляем..." : "Обновить ссылку";
+      setInviteButtonIcon(
+        threadInfoInviteRegenerate,
+        isRefreshingInviteLink ? "↺" : "↻",
+        isRefreshingInviteLink ? "Обновляем ссылку" : "Обновить ссылку"
+      );
     }
   }
 
@@ -1052,7 +1065,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       await navigator.clipboard.writeText(inviteUrl);
       if (threadInfoInviteCopy) {
-        threadInfoInviteCopy.textContent = "Скопировано";
+        setInviteButtonIcon(threadInfoInviteCopy, "✓", "Ссылка скопирована");
       }
       setThreadInviteStatus("Ссылка скопирована", "success");
       window.setTimeout(() => {
