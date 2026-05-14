@@ -120,7 +120,7 @@
           <div class="thread-info-panel-header">
             <div>
               <h2 class="thread-info-title">Информация</h2>
-              <p class="thread-info-subtitle">О группе</p>
+              <p class="thread-info-subtitle">Панель чата</p>
             </div>
             <div class="thread-info-panel-actions">
               <button class="icon-button thread-info-menu-trigger" id="threadInfoMenuTrigger" type="button" aria-label="Действия группы" aria-haspopup="menu" aria-expanded="false" hidden>⋯</button>
@@ -131,39 +131,78 @@
             </div>
           </div>
           <div class="thread-info-panel-body">
-            <div class="thread-info-hero">
-              <div class="avatar group-avatar thread-info-avatar" id="threadInfoAvatar">?</div>
-              <h3 class="thread-info-name" id="threadInfoName">Группа</h3>
-              <p class="thread-info-handle" id="threadInfoHandle">group</p>
-            </div>
-            <div class="thread-info-facts">
-              <div class="thread-info-fact" id="threadInfoDescriptionFact">
-                <span class="thread-info-label" id="threadInfoDescriptionLabel">Описание</span>
-                <strong id="threadInfoDescription">Нет описания</strong>
+            <section class="thread-info-card thread-info-card-profile">
+              <div class="thread-info-card-eyebrow">Profile</div>
+              <div class="thread-info-hero">
+                <div class="avatar group-avatar thread-info-avatar" id="threadInfoAvatar">?</div>
+                <h3 class="thread-info-name" id="threadInfoName">Группа</h3>
+                <p class="thread-info-handle" id="threadInfoHandle">group</p>
+                <p class="thread-info-description" id="threadInfoDescription">Нет описания</p>
               </div>
-              <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
-                <span class="thread-info-label">Пригласительная ссылка</span>
-                <div class="thread-info-invite-body">
-                  <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer"></a>
-                  <div class="thread-info-invite-actions">
-                    <button class="button button-secondary thread-info-invite-button" id="threadInfoInviteCopy" type="button">Скопировать</button>
-                    <button class="button thread-info-invite-button" id="threadInfoInviteRegenerate" type="button">Обновить ссылку</button>
-                  </div>
-                  <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
+            </section>
+            <section class="thread-info-card thread-info-card-chat">
+              <div class="thread-info-card-head">
+                <div>
+                  <div class="thread-info-card-eyebrow">Chat Info</div>
+                  <h3 class="thread-info-card-title">О чате</h3>
                 </div>
               </div>
-              <div class="thread-info-fact">
-                <span class="thread-info-label">Тип</span>
-                <strong id="threadInfoType">Группа</strong>
+              <div class="thread-info-facts">
+                <button class="thread-info-search-action" id="threadInfoSearchAction" type="button">
+                  <span class="thread-info-search-icon" aria-hidden="true"></span>
+                  <span class="thread-info-search-copy">
+                    <strong>Поиск по сообщениям</strong>
+                    <span>Найти сообщение и перейти к нему</span>
+                  </span>
+                </button>
+                <div class="thread-info-search-panel" id="threadInfoSearchPanel" hidden>
+                  <div class="thread-info-search-panel-row">
+                    <input class="search-input thread-info-search-input" id="threadInfoSearchInput" type="search" placeholder="Поиск в сообщениях">
+                    <button class="button button-secondary thread-info-search-reset" id="threadInfoSearchReset" type="button">Последние</button>
+                  </div>
+                  <div class="status thread-info-search-status" id="threadInfoSearchStatus"></div>
+                  <div class="thread-info-search-results" id="threadInfoSearchResults"></div>
+                </div>
+                <div class="thread-info-fact">
+                  <span class="thread-info-label">Дата начала</span>
+                  <strong id="threadInfoStartedAt">Пока нет</strong>
+                </div>
+                <div class="thread-info-fact">
+                  <span class="thread-info-label">Количество сообщений</span>
+                  <strong id="threadInfoMessagesCount">0</strong>
+                </div>
+                <div class="thread-info-fact">
+                  <span class="thread-info-label">Медиа</span>
+                  <strong id="threadInfoMediaCount">Скоро</strong>
+                </div>
+                <div class="thread-info-fact">
+                  <span class="thread-info-label">Файлы</span>
+                  <strong id="threadInfoFilesCount">Скоро</strong>
+                </div>
+                <div class="thread-info-fact">
+                  <span class="thread-info-label">Тег чата</span>
+                  <strong id="threadInfoTag">Без тега</strong>
+                </div>
+                <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
+                  <span class="thread-info-label">Пригласительная ссылка</span>
+                  <div class="thread-info-invite-body">
+                    <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer"></a>
+                    <div class="thread-info-invite-actions">
+                      <button class="button button-secondary thread-info-invite-button" id="threadInfoInviteCopy" type="button">Скопировать</button>
+                      <button class="button thread-info-invite-button" id="threadInfoInviteRegenerate" type="button">Обновить ссылку</button>
+                    </div>
+                    <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="thread-info-members" id="threadInfoMembersWrap">
-              <div class="thread-info-members-header">
-                <h4>Участники</h4>
-                <button class="icon-button thread-member-add-trigger" id="threadMemberAddTrigger" type="button" aria-label="Добавить участников" hidden>+</button>
+              <div class="thread-info-members" id="threadInfoMembersWrap">
+                <div class="thread-info-members-header">
+                  <h4>Участники</h4>
+                  <button class="icon-button thread-member-add-trigger" id="threadMemberAddTrigger" type="button" aria-label="Добавить участников" hidden>+</button>
+                </div>
+                <div class="member-list thread-info-members-list" id="threadInfoMembersList"></div>
               </div>
-              <div class="member-list thread-info-members-list" id="threadInfoMembersList"></div>
-            </div>
+            </section>
           </div>
         </aside>
         <div class="thread-member-modal" id="threadMemberAddModal" hidden>

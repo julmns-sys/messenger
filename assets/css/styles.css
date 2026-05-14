@@ -20,8 +20,39 @@
   --radius-sm: 14px;
   --sidebar-width: 340px;
   --content-width: 1280px;
-  --font: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-ui: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: var(--font-ui);
+  --font: var(--font-ui);
+  --icon-size-sm: 16px;
+  --icon-size-md: 18px;
 }
+
+/*
+  Custom asset hooks
+
+  1. Drop your font files into /assets/fonts
+  2. Uncomment and update this block
+
+  @font-face {
+    font-family: "Your Sans";
+    src: url("/assets/fonts/YourSans-Regular.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "Your Display";
+    src: url("/assets/fonts/YourDisplay-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  Then switch variables in :root:
+  --font-ui: "Your Sans", sans-serif;
+  --font-display: "Your Display", "Your Sans", sans-serif;
+*/
 
 * {
   box-sizing: border-box;
@@ -837,6 +868,7 @@ textarea {
 }
 
 .brand {
+  font-family: var(--font-display);
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.03em;
@@ -912,6 +944,24 @@ textarea {
   color: var(--accent);
   backdrop-filter: blur(18px);
   box-shadow: 0 6px 14px rgba(31, 52, 79, 0.06);
+}
+
+.icon-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  font-size: var(--icon-size-md);
+  line-height: 1;
+}
+
+.icon-asset {
+  display: block;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  object-fit: contain;
+  flex: 0 0 auto;
 }
 
 .icon-button:hover {
@@ -1330,12 +1380,14 @@ textarea {
   top: 0;
   right: 0;
   z-index: 6;
-  width: 360px;
+  width: 392px;
   height: 100%;
-  border-left: 1px solid rgba(116, 139, 168, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(244, 249, 255, 0.78));
-  backdrop-filter: blur(18px);
-  box-shadow: -16px 0 30px rgba(30, 48, 72, 0.08);
+  border-left: 1px solid rgba(255, 255, 255, 0.24);
+  background:
+    radial-gradient(circle at top right, rgba(125, 180, 255, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(244, 248, 255, 0.9), rgba(235, 243, 252, 0.8));
+  backdrop-filter: blur(28px);
+  box-shadow: -24px 0 50px rgba(24, 42, 67, 0.12);
   transform: translateX(100%);
   opacity: 0;
   pointer-events: none;
@@ -1350,7 +1402,7 @@ textarea {
 
 .thread-info-panel-header,
 .thread-info-panel-body {
-  padding: 20px;
+  padding: 22px;
 }
 
 .thread-info-panel-header {
@@ -1359,7 +1411,7 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid rgba(116, 139, 168, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.28);
 }
 
 .thread-info-panel-actions {
@@ -1381,78 +1433,363 @@ textarea {
 
 .thread-info-panel-body {
   display: grid;
-  gap: 18px;
-  overflow: hidden;
+  gap: 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
   height: calc(100% - 85px);
+  align-content: start;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.thread-info-panel-body::-webkit-scrollbar {
+  display: none;
+}
+
+.thread-info-card {
+  position: relative;
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(246, 250, 255, 0.42)),
+    rgba(255, 255, 255, 0.24);
+  box-shadow:
+    0 22px 44px rgba(23, 41, 65, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(22px);
+}
+
+.thread-info-card::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 28%);
+  pointer-events: none;
+}
+
+.thread-info-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.thread-info-card-profile {
+  padding-top: 20px;
+}
+
+.thread-info-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thread-info-card-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(72, 97, 126, 0.72);
+}
+
+.thread-info-card-title {
+  margin: 8px 0 0;
+  font-size: 24px;
+  line-height: 1.1;
 }
 
 .thread-info-hero {
-  padding: 10px 8px 0;
+  padding: 8px 6px 4px;
   text-align: center;
 }
 
 .thread-info-avatar {
-  width: 92px;
-  height: 92px;
-  margin: 0 auto 16px;
-  font-size: 28px;
+  width: 108px;
+  height: 108px;
+  margin: 0 auto 20px;
+  font-size: 32px;
+  box-shadow:
+    0 18px 32px rgba(51, 144, 236, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
 .thread-info-name {
   margin: 0;
-  font-size: 26px;
+  font-size: 28px;
   line-height: 1.12;
 }
 
 .thread-info-handle {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   color: var(--text-soft);
   font-size: 15px;
 }
 
+.thread-info-description {
+  margin: 14px auto 0;
+  max-width: 260px;
+  color: rgba(49, 68, 92, 0.78);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thread-info-description:empty {
+  display: none;
+}
+
 .thread-info-facts {
   display: grid;
-  gap: 0;
-  padding: 8px 0;
-  border: 1px solid rgba(255, 255, 255, 0.44);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.46);
-  box-shadow: 0 10px 22px rgba(31, 52, 79, 0.05);
+  gap: 10px;
 }
 
 .thread-info-fact {
   display: grid;
-  gap: 2px;
-  padding: 12px 18px;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .thread-info-fact[hidden] {
   display: none !important;
 }
 
-.thread-info-fact + .thread-info-fact {
-  border-top: 1px solid rgba(116, 139, 168, 0.14);
+.thread-info-fact:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.46);
+  box-shadow:
+    0 12px 24px rgba(31, 52, 79, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .thread-info-label {
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-soft);
 }
 
 .thread-info-fact strong {
   font-size: 15px;
-  line-height: 1.35;
+  line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.thread-info-search-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.28));
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.46);
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.thread-info-search-action:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.34));
+  border-color: rgba(255, 255, 255, 0.48);
+  box-shadow:
+    0 16px 30px rgba(24, 42, 67, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.52);
+}
+
+.thread-info-search-icon {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 14px;
+  background: rgba(51, 144, 236, 0.12);
+}
+
+.thread-info-search-icon::before,
+.thread-info-search-icon::after {
+  content: "";
+  position: absolute;
+}
+
+.thread-info-search-icon::before {
+  top: 10px;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(51, 144, 236, 0.88);
+  border-radius: 50%;
+}
+
+.thread-info-search-icon::after {
+  right: 11px;
+  bottom: 10px;
+  width: 9px;
+  height: 2px;
+  background: rgba(51, 144, 236, 0.88);
+  border-radius: 999px;
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+.thread-info-search-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.thread-info-search-copy strong {
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.thread-info-search-copy span {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.thread-info-search-panel {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0 2px;
+}
+
+.thread-info-search-panel[hidden] {
+  display: none !important;
+}
+
+.thread-info-search-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.thread-info-search-input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.thread-info-search-reset {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding-inline: 14px;
+}
+
+.thread-info-search-status {
+  min-height: 18px;
+  margin: 0;
+}
+
+.thread-info-search-results {
+  display: grid;
+  gap: 8px;
+  max-height: min(320px, 34vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.thread-info-search-results::-webkit-scrollbar {
+  display: none;
+}
+
+.thread-info-search-result {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.3);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.thread-info-search-result:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.46);
+  box-shadow: 0 12px 24px rgba(31, 52, 79, 0.06);
+}
+
+.thread-info-search-result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.thread-info-search-result-name {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.thread-info-search-result-time {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.thread-info-search-result-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(49, 68, 92, 0.8);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.search-target {
+  box-shadow:
+    0 0 0 1px rgba(102, 194, 232, 0.62),
+    0 0 0 8px rgba(102, 194, 232, 0.14),
+    0 20px 34px rgba(75, 160, 233, 0.16);
+  animation: message-search-pulse 1.8s ease;
+}
+
+@keyframes message-search-pulse {
+  0% {
+    box-shadow:
+      0 0 0 1px rgba(102, 194, 232, 0.9),
+      0 0 0 0 rgba(102, 194, 232, 0.28),
+      0 16px 26px rgba(75, 160, 233, 0.2);
+  }
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(102, 194, 232, 0.62),
+      0 0 0 8px rgba(102, 194, 232, 0.14),
+      0 20px 34px rgba(75, 160, 233, 0.16);
+  }
 }
 
 .thread-info-invite-body {
   display: grid;
   gap: 10px;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .thread-info-invite-link {
@@ -1491,6 +1828,8 @@ textarea {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding-top: 2px;
 }
 
 .thread-info-members[hidden] {
@@ -1502,12 +1841,11 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
 }
 
 .thread-info-members-header h4 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .thread-member-add-trigger,
@@ -3295,15 +3633,8 @@ textarea {
   }
 
   .thread-info-panel-body {
-    height: calc(100% - 85px);
-    min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
+    gap: 16px;
+    padding: 18px 16px 20px;
   }
 
   .thread-info-members {
@@ -3317,7 +3648,7 @@ textarea {
     top: 0;
     z-index: 1;
     padding-bottom: 10px;
-    background: linear-gradient(180deg, rgba(247, 250, 255, 0.96), rgba(247, 250, 255, 0.82));
+    background: linear-gradient(180deg, rgba(247, 250, 255, 0.96), rgba(247, 250, 255, 0.86));
     backdrop-filter: blur(12px);
   }
 
@@ -3429,7 +3760,7 @@ textarea {
 
   .thread-page .content.thread-info-open .content-header,
   .thread-page .content.thread-info-open .content-body {
-    margin-right: 360px;
+    margin-right: 392px;
   }
 }
 
@@ -3441,6 +3772,36 @@ textarea {
 
   .content {
     border-radius: 24px;
+  }
+
+  .thread-info-panel-header,
+  .thread-info-panel-body {
+    padding-inline: 14px;
+  }
+
+  .thread-info-card {
+    padding: 18px;
+    border-radius: 22px;
+  }
+
+  .thread-info-avatar {
+    width: 96px;
+    height: 96px;
+    margin-bottom: 18px;
+    font-size: 28px;
+  }
+
+  .thread-info-name {
+    font-size: 24px;
+  }
+
+  .thread-info-search-panel-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .thread-info-search-reset {
+    width: 100%;
   }
 
   .thread-page .message.message-direct {

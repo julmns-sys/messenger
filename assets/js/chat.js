@@ -51,6 +51,29 @@ function renderDateDivider(value) {
   return `<div class="message-date-divider" data-date-divider="true"><span class="message-date-divider-pill">${escapeHtml(label)}</span></div>`;
 }
 
+function formatThreadInfoDate(value) {
+  const date = parseUtcDate(value);
+  if (!date) {
+    return "Пока нет";
+  }
+
+  return date.toLocaleDateString("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+}
+
+function formatThreadInfoCount(value) {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return "0";
+  }
+
+  return new Intl.NumberFormat("ru-RU").format(Math.round(numericValue));
+}
+
 function renderMessageItem(message, currentUserId, chatType) {
   const isSystem = (message.message_type || "text") === "system";
   const own = !isSystem && String(message.sender_id) === String(currentUserId);
@@ -356,10 +379,10 @@ function fillThreadInfoPanel(info, chatType) {
   const avatarNode = document.getElementById("threadInfoAvatar");
   const nameNode = document.getElementById("threadInfoName");
   const handleNode = document.getElementById("threadInfoHandle");
-  const descriptionFactNode = document.getElementById("threadInfoDescriptionFact");
-  const descriptionLabelNode = document.getElementById("threadInfoDescriptionLabel");
   const descriptionNode = document.getElementById("threadInfoDescription");
-  const typeNode = document.getElementById("threadInfoType");
+  const startedAtNode = document.getElementById("threadInfoStartedAt");
+  const messagesCountNode = document.getElementById("threadInfoMessagesCount");
+  const tagNode = document.getElementById("threadInfoTag");
   const menuTriggerNode = document.getElementById("threadInfoMenuTrigger");
   const inviteFactNode = document.getElementById("threadInfoInviteFact");
   const inviteLinkNode = document.getElementById("threadInfoInviteLink");
@@ -370,34 +393,42 @@ function fillThreadInfoPanel(info, chatType) {
   const membersListNode = document.getElementById("threadInfoMembersList");
   const memberAddTriggerNode = document.getElementById("threadMemberAddTrigger");
 
-  if (!avatarNode || !nameNode || !handleNode || !descriptionNode || !typeNode) {
+  if (!avatarNode || !nameNode || !handleNode || !descriptionNode || !startedAtNode || !messagesCountNode || !tagNode) {
     return;
   }
 
+  const threadInfoType = chatType || "direct";
   const title = info?.title || info?.name || info?.username || "Чат";
+  const customTag = info?.id != null ? getChatTag(info.id, threadInfoType) : null;
   avatarNode.textContent = initials(title);
-  avatarNode.classList.toggle("group-avatar", chatType === "group");
+  avatarNode.classList.toggle("group-avatar", threadInfoType === "group");
   nameNode.textContent = title;
-  handleNode.textContent = chatType === "group"
+  handleNode.textContent = threadInfoType === "group"
     ? `${info?.members_count || 0} участников`
     : info?.username ? `@${info.username}` : "Личный чат";
-  typeNode.textContent = chatType === "group" ? "Группа" : "Личный чат";
+  startedAtNode.textContent = formatThreadInfoDate(info?.started_at);
+  messagesCountNode.textContent = formatThreadInfoCount(info?.messages_count);
 
-  if (descriptionFactNode && descriptionLabelNode) {
-    if (chatType === "group") {
-      descriptionFactNode.hidden = false;
-      descriptionLabelNode.textContent = "Описание";
-      descriptionNode.textContent = info?.description || "Описание группы пока не добавлено";
-    } else {
-      const hasBio = Boolean(info?.bio && String(info.bio).trim());
-      descriptionFactNode.hidden = !hasBio;
-      descriptionLabelNode.textContent = "Bio";
-      descriptionNode.textContent = hasBio ? info.bio : "";
-    }
+  if (customTag) {
+    const styleVars = getChatTagStyleVars(customTag.color);
+    tagNode.innerHTML = `
+      <span
+        class="chat-kind-label chat-custom-label"
+        style="--chat-tag-bg: ${styleVars.background}; --chat-tag-border: ${styleVars.border}; --chat-tag-text: ${styleVars.text}; --chat-tag-solid: ${styleVars.solid};"
+      >${escapeHtml(customTag.label)}</span>
+    `;
+  } else {
+    tagNode.textContent = "Без тега";
+  }
+
+  if (threadInfoType === "group") {
+    descriptionNode.textContent = info?.description || "";
+  } else {
+    descriptionNode.textContent = info?.bio && String(info.bio).trim() ? info.bio : "";
   }
 
   if (inviteFactNode && inviteLinkNode && inviteCopyNode && inviteRegenerateNode && inviteStatusNode) {
-    if (chatType === "group" && info?.can_manage_invite && info?.invite?.url) {
+    if (threadInfoType === "group" && info?.can_manage_invite && info?.invite?.url) {
       inviteFactNode.hidden = false;
       inviteLinkNode.textContent = info.invite.url;
       inviteLinkNode.href = info.invite.url;
@@ -415,7 +446,7 @@ function fillThreadInfoPanel(info, chatType) {
   }
 
   if (membersWrapNode && membersListNode) {
-    if (chatType === "group") {
+    if (threadInfoType === "group") {
       const members = Array.isArray(info?.members) ? info.members : [];
       const canEditGroup = Boolean(info?.can_edit_group);
       const canAddMembers = Boolean(info?.can_add_members);
@@ -497,6 +528,47 @@ function buildThreadMemberActionMenu() {
   return menu;
 }
 
+function renderThreadSearchResults(results, chatType) {
+  if (!Array.isArray(results) || !results.length) {
+    return '<div class="empty-state">Ничего не найдено</div>';
+  }
+
+  return results.map((message) => `
+    <button
+      class="thread-info-search-result"
+      type="button"
+      data-thread-search-message-id="${escapeHtml(String(message.id || ""))}"
+    >
+      <span class="thread-info-search-result-head">
+        <strong class="thread-info-search-result-name">${escapeHtml(chatType === "group" ? (message.sender_name || "Участник") : "Сообщение")}</strong>
+        <span class="thread-info-search-result-time">${escapeHtml(formatChatDateDivider(message.created_at) || formatDate(message.created_at))}, ${escapeHtml(formatTime(message.created_at))}</span>
+      </span>
+      <span class="thread-info-search-result-text">${escapeHtml(message.text || "")}</span>
+    </button>
+  `).join("");
+}
+
+function setMessageSearchTarget(messageId) {
+  document.querySelectorAll(".message.search-target").forEach((node) => {
+    node.classList.remove("search-target");
+  });
+
+  if (!messageId) {
+    return null;
+  }
+
+  const targetNode = document.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+  if (!targetNode) {
+    return null;
+  }
+
+  targetNode.classList.add("search-target");
+  window.setTimeout(() => {
+    targetNode.classList.remove("search-target");
+  }, 2200);
+  return targetNode;
+}
+
 function syncGroupChatTitleInState(chatId, nextTitle) {
   if (!Array.isArray(chatState.allChats)) {
     return;
@@ -540,6 +612,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadInfoInviteRegenerate = document.getElementById("threadInfoInviteRegenerate");
   const threadInfoInviteStatus = document.getElementById("threadInfoInviteStatus");
   const threadInfoMembersListNode = document.getElementById("threadInfoMembersList");
+  const threadInfoSearchAction = document.getElementById("threadInfoSearchAction");
+  const threadInfoSearchPanel = document.getElementById("threadInfoSearchPanel");
+  const threadInfoSearchInput = document.getElementById("threadInfoSearchInput");
+  const threadInfoSearchStatus = document.getElementById("threadInfoSearchStatus");
+  const threadInfoSearchResults = document.getElementById("threadInfoSearchResults");
+  const threadInfoSearchReset = document.getElementById("threadInfoSearchReset");
   const threadMemberAddTrigger = document.getElementById("threadMemberAddTrigger");
   const threadMemberAddModal = document.getElementById("threadMemberAddModal");
   const threadMemberAddClose = document.getElementById("threadMemberAddClose");
@@ -587,6 +665,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   let pendingDeleteState = null;
   let deleteUndoCountdownTimer = null;
   let isSelectionMode = false;
+  let threadSearchDebounceTimer = null;
+  let activeThreadSearchRequestId = 0;
+  let isShowingSearchContext = false;
   const selectedMessageIds = new Set();
   const committedDeleteEchoIds = new Set();
 
@@ -603,6 +684,127 @@ document.addEventListener("DOMContentLoaded", async () => {
     const panel = document.getElementById("threadInfoPanel");
     if (panel) {
       panel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+    }
+  }
+
+  function setThreadSearchStatus(message, type = "") {
+    if (!threadInfoSearchStatus) {
+      return;
+    }
+    threadInfoSearchStatus.textContent = message;
+    threadInfoSearchStatus.className = `status thread-info-search-status ${type}`.trim();
+  }
+
+  function clearThreadSearchResults() {
+    if (threadInfoSearchResults) {
+      threadInfoSearchResults.innerHTML = "";
+    }
+  }
+
+  function openThreadSearchPanel() {
+    if (!threadInfoSearchPanel) {
+      return;
+    }
+    threadInfoSearchPanel.hidden = false;
+    if (!chatId) {
+      setThreadSearchStatus("Сообщений для поиска пока нет");
+      clearThreadSearchResults();
+      return;
+    }
+    setThreadSearchStatus("Введите текст для поиска");
+    threadInfoSearchInput?.focus();
+  }
+
+  function closeThreadSearchPanel() {
+    if (!threadInfoSearchPanel) {
+      return;
+    }
+    threadInfoSearchPanel.hidden = true;
+    if (threadSearchDebounceTimer) {
+      window.clearTimeout(threadSearchDebounceTimer);
+      threadSearchDebounceTimer = null;
+    }
+  }
+
+  async function restoreLatestThreadView() {
+    if (!chatId) {
+      return;
+    }
+    isShowingSearchContext = false;
+    await loadThread();
+    setThreadSearchStatus(threadInfoSearchInput?.value.trim() ? "Показаны последние сообщения" : "Введите текст для поиска", "");
+  }
+
+  async function focusMessageFromSearch(messageId) {
+    if (!messageId || !chatId) {
+      return;
+    }
+
+    const existingNode = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+    if (existingNode) {
+      existingNode.scrollIntoView({ block: "center", behavior: "smooth" });
+      setMessageSearchTarget(messageId);
+      setThreadSearchStatus("Сообщение найдено", "success");
+      return;
+    }
+
+    const contextPath = chatType === "group"
+      ? `/groups/${chatId}/messages/${messageId}/context?limit=12`
+      : `/chats/${chatId}/messages/${messageId}/context?limit=12`;
+
+    setThreadSearchStatus("Загружаем фрагмент переписки...");
+    const data = await apiFetch(contextPath);
+    const contextMessages = Array.isArray(data?.messages) ? data.messages : [];
+    renderMessages(messagesNode, contextMessages, currentUser.id, chatType);
+    oldestMessageId = contextMessages.length ? contextMessages[0].id : null;
+    hasMoreMessages = Boolean(data?.has_more_before) && contextMessages.length > 0;
+    isShowingSearchContext = true;
+    updateScrollDownButton(messagesNode, scrollDownButton);
+    requestAnimationFrame(() => {
+      const targetNode = setMessageSearchTarget(messageId);
+      targetNode?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    setThreadSearchStatus(data?.has_more_after ? "Показан фрагмент истории. Кнопка «Последние» вернёт к текущим сообщениям." : "Сообщение найдено", data?.has_more_after ? "" : "success");
+  }
+
+  async function runThreadMessageSearch(query) {
+    if (!threadInfoSearchResults) {
+      return;
+    }
+
+    if (!chatId) {
+      setThreadSearchStatus("Сообщений для поиска пока нет");
+      clearThreadSearchResults();
+      return;
+    }
+
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) {
+      setThreadSearchStatus("Введите текст для поиска");
+      clearThreadSearchResults();
+      return;
+    }
+
+    const requestId = ++activeThreadSearchRequestId;
+    setThreadSearchStatus("Ищем...");
+
+    try {
+      const searchPath = chatType === "group"
+        ? `/groups/${chatId}/messages/search?q=${encodeURIComponent(normalizedQuery)}&limit=20`
+        : `/chats/${chatId}/messages/search?q=${encodeURIComponent(normalizedQuery)}&limit=20`;
+      const data = await apiFetch(searchPath);
+      if (requestId !== activeThreadSearchRequestId) {
+        return;
+      }
+      const results = Array.isArray(data?.items) ? data.items : [];
+      threadInfoSearchResults.innerHTML = renderThreadSearchResults(results, chatType);
+      setThreadSearchStatus(results.length ? `Найдено: ${results.length}` : "Ничего не найдено", results.length ? "" : "error");
+    } catch (error) {
+      if (requestId !== activeThreadSearchRequestId) {
+        return;
+      }
+      clearThreadSearchResults();
+      setThreadSearchStatus(error.message, "error");
     }
   }
 
@@ -1560,6 +1762,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     exitSelectionMode();
     renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
     updatePaginationState(nextMessages, data.has_more_messages);
+    isShowingSearchContext = false;
     if (!options.preserveScroll) {
       scrollMessagesToBottom(messagesNode);
     }
@@ -1790,6 +1993,37 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   threadInfoInviteCopy?.addEventListener("click", () => {
     void copyThreadInviteLink();
+  });
+
+  threadInfoSearchAction?.addEventListener("click", () => {
+    if (threadInfoSearchPanel?.hidden) {
+      openThreadSearchPanel();
+      return;
+    }
+    closeThreadSearchPanel();
+  });
+
+  threadInfoSearchInput?.addEventListener("input", () => {
+    if (threadSearchDebounceTimer) {
+      window.clearTimeout(threadSearchDebounceTimer);
+    }
+    threadSearchDebounceTimer = window.setTimeout(() => {
+      threadSearchDebounceTimer = null;
+      void runThreadMessageSearch(threadInfoSearchInput.value || "");
+    }, 220);
+  });
+
+  threadInfoSearchResults?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-thread-search-message-id]");
+    const messageId = Number(button?.dataset.threadSearchMessageId || "0");
+    if (!messageId) {
+      return;
+    }
+    void focusMessageFromSearch(messageId);
+  });
+
+  threadInfoSearchReset?.addEventListener("click", () => {
+    void restoreLatestThreadView();
   });
 
   threadInfoInviteRegenerate?.addEventListener("click", () => {
