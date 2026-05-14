@@ -418,7 +418,7 @@ function fillThreadInfoPanel(info, chatType) {
       >${escapeHtml(customTag.label)}</span>
     `;
   } else {
-    tagNode.textContent = "Без тега";
+    tagNode.innerHTML = "";
   }
 
   if (threadInfoType === "group") {
@@ -533,19 +533,22 @@ function renderThreadSearchResults(results, chatType) {
     return '<div class="empty-state">Ничего не найдено</div>';
   }
 
-  return results.map((message) => `
+  return results.map((message) => {
+    const authorName = message.sender_name || (chatType === "group" ? "Участник" : "Пользователь");
+    return `
     <button
       class="thread-info-search-result"
       type="button"
       data-thread-search-message-id="${escapeHtml(String(message.id || ""))}"
     >
       <span class="thread-info-search-result-head">
-        <strong class="thread-info-search-result-name">${escapeHtml(chatType === "group" ? (message.sender_name || "Участник") : "Сообщение")}</strong>
+        <strong class="thread-info-search-result-name">${escapeHtml(authorName)}</strong>
         <span class="thread-info-search-result-time">${escapeHtml(formatChatDateDivider(message.created_at) || formatDate(message.created_at))}, ${escapeHtml(formatTime(message.created_at))}</span>
       </span>
       <span class="thread-info-search-result-text">${escapeHtml(message.text || "")}</span>
     </button>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function setMessageSearchTarget(messageId) {
@@ -618,6 +621,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadInfoSearchStatus = document.getElementById("threadInfoSearchStatus");
   const threadInfoSearchResults = document.getElementById("threadInfoSearchResults");
   const threadInfoSearchReset = document.getElementById("threadInfoSearchReset");
+  const threadMobileSearchTrigger = document.getElementById("threadMobileSearchTrigger");
+  const threadMobileSearch = document.getElementById("threadMobileSearch");
+  const threadMobileSearchClose = document.getElementById("threadMobileSearchClose");
+  const threadMobileSearchInput = document.getElementById("threadMobileSearchInput");
+  const threadMobileSearchClear = document.getElementById("threadMobileSearchClear");
+  const threadMobileSearchStatus = document.getElementById("threadMobileSearchStatus");
+  const threadMobileSearchResults = document.getElementById("threadMobileSearchResults");
   const threadMemberAddTrigger = document.getElementById("threadMemberAddTrigger");
   const threadMemberAddModal = document.getElementById("threadMemberAddModal");
   const threadMemberAddClose = document.getElementById("threadMemberAddClose");
@@ -668,6 +678,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let threadSearchDebounceTimer = null;
   let activeThreadSearchRequestId = 0;
   let isShowingSearchContext = false;
+  let isMobileThreadSearchOpen = false;
   const selectedMessageIds = new Set();
   const committedDeleteEchoIds = new Set();
 
@@ -687,32 +698,47 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  function setThreadSearchStatus(message, type = "") {
-    if (!threadInfoSearchStatus) {
-      return;
+  function getThreadSearchUI(kind = isMobileThreadSearchOpen ? "mobile" : "desktop") {
+    if (kind === "mobile") {
+      return {
+        panel: threadMobileSearch,
+        input: threadMobileSearchInput,
+        status: threadMobileSearchStatus,
+        results: threadMobileSearchResults
+      };
     }
-    threadInfoSearchStatus.textContent = message;
-    threadInfoSearchStatus.className = `status thread-info-search-status ${type}`.trim();
+
+    return {
+      panel: threadInfoSearchPanel,
+      input: threadInfoSearchInput,
+      status: threadInfoSearchStatus,
+      results: threadInfoSearchResults
+    };
   }
 
-  function clearThreadSearchResults() {
-    if (threadInfoSearchResults) {
-      threadInfoSearchResults.innerHTML = "";
+  function syncThreadSearchInputs(value = "", source = "") {
+    if (source !== "desktop" && threadInfoSearchInput && threadInfoSearchInput.value !== value) {
+      threadInfoSearchInput.value = value;
+    }
+    if (source !== "mobile" && threadMobileSearchInput && threadMobileSearchInput.value !== value) {
+      threadMobileSearchInput.value = value;
     }
   }
 
-  function openThreadSearchPanel() {
-    if (!threadInfoSearchPanel) {
+  function setThreadSearchStatus(message, type = "", kind = isMobileThreadSearchOpen ? "mobile" : "desktop") {
+    const ui = getThreadSearchUI(kind);
+    if (!ui?.status) {
       return;
     }
-    threadInfoSearchPanel.hidden = false;
-    if (!chatId) {
-      setThreadSearchStatus("Сообщений для поиска пока нет");
-      clearThreadSearchResults();
-      return;
+    ui.status.textContent = message;
+    ui.status.className = `status thread-info-search-status ${type}`.trim();
+  }
+
+  function clearThreadSearchResults(kind = isMobileThreadSearchOpen ? "mobile" : "desktop") {
+    const ui = getThreadSearchUI(kind);
+    if (ui?.results) {
+      ui.results.innerHTML = "";
     }
-    setThreadSearchStatus("Введите текст для поиска");
-    threadInfoSearchInput?.focus();
   }
 
   function closeThreadSearchPanel() {
@@ -726,16 +752,78 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  async function restoreLatestThreadView() {
+  function openThreadSearchPanel() {
+    if (!threadInfoSearchPanel) {
+      return;
+    }
+    threadInfoSearchPanel.hidden = false;
+    if (!chatId) {
+      setThreadSearchStatus("Сообщений для поиска пока нет", "", "desktop");
+      clearThreadSearchResults("desktop");
+      return;
+    }
+    setThreadSearchStatus("Введите текст для поиска", "", "desktop");
+    threadInfoSearchInput?.focus();
+  }
+
+  function closeMobileThreadSearchMode() {
+    if (!threadMobileSearch) {
+      return;
+    }
+    isMobileThreadSearchOpen = false;
+    document.body.classList.remove("thread-mobile-search-open");
+    threadMobileSearch.classList.remove("visible");
+    window.setTimeout(() => {
+      if (!threadMobileSearch.classList.contains("visible")) {
+        threadMobileSearch.hidden = true;
+      }
+    }, 180);
+    if (threadSearchDebounceTimer) {
+      window.clearTimeout(threadSearchDebounceTimer);
+      threadSearchDebounceTimer = null;
+    }
+  }
+
+  function openMobileThreadSearchMode() {
+    if (!threadMobileSearch) {
+      return;
+    }
+    isMobileThreadSearchOpen = true;
+    document.body.classList.add("thread-mobile-search-open");
+    threadMobileSearch.hidden = false;
+    syncThreadSearchInputs(threadInfoSearchInput?.value || threadMobileSearchInput?.value || "", "");
+    requestAnimationFrame(() => {
+      threadMobileSearch.classList.add("visible");
+    });
+
+    if (!chatId) {
+      setThreadSearchStatus("Сообщений для поиска пока нет", "", "mobile");
+      clearThreadSearchResults("mobile");
+      return;
+    }
+
+    const query = threadMobileSearchInput?.value.trim() || "";
+    if (query) {
+      void runThreadMessageSearch(query, "mobile");
+    } else {
+      setThreadSearchStatus("Введите текст для поиска", "", "mobile");
+      clearThreadSearchResults("mobile");
+    }
+    threadMobileSearchInput?.focus();
+  }
+
+  async function restoreLatestThreadView(kind = isMobileThreadSearchOpen ? "mobile" : "desktop") {
     if (!chatId) {
       return;
     }
     isShowingSearchContext = false;
     await loadThread();
-    setThreadSearchStatus(threadInfoSearchInput?.value.trim() ? "Показаны последние сообщения" : "Введите текст для поиска", "");
+    const ui = getThreadSearchUI(kind);
+    const query = ui?.input?.value.trim() || "";
+    setThreadSearchStatus(query ? "Показаны последние сообщения" : "Введите текст для поиска", "", kind);
   }
 
-  async function focusMessageFromSearch(messageId) {
+  async function focusMessageFromSearch(messageId, kind = isMobileThreadSearchOpen ? "mobile" : "desktop") {
     if (!messageId || !chatId) {
       return;
     }
@@ -744,7 +832,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (existingNode) {
       existingNode.scrollIntoView({ block: "center", behavior: "smooth" });
       setMessageSearchTarget(messageId);
-      setThreadSearchStatus("Сообщение найдено", "success");
+      setThreadSearchStatus("Сообщение найдено", "success", kind);
       return;
     }
 
@@ -752,7 +840,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       ? `/groups/${chatId}/messages/${messageId}/context?limit=12`
       : `/chats/${chatId}/messages/${messageId}/context?limit=12`;
 
-    setThreadSearchStatus("Загружаем фрагмент переписки...");
+    setThreadSearchStatus("Загружаем фрагмент переписки...", "", kind);
     const data = await apiFetch(contextPath);
     const contextMessages = Array.isArray(data?.messages) ? data.messages : [];
     renderMessages(messagesNode, contextMessages, currentUser.id, chatType);
@@ -764,29 +852,35 @@ document.addEventListener("DOMContentLoaded", async () => {
       const targetNode = setMessageSearchTarget(messageId);
       targetNode?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
-    setThreadSearchStatus(data?.has_more_after ? "Показан фрагмент истории. Кнопка «Последние» вернёт к текущим сообщениям." : "Сообщение найдено", data?.has_more_after ? "" : "success");
+    setThreadSearchStatus(
+      data?.has_more_after ? "Показан фрагмент истории. Кнопка «Последние» вернёт к текущим сообщениям." : "Сообщение найдено",
+      data?.has_more_after ? "" : "success",
+      kind
+    );
   }
 
-  async function runThreadMessageSearch(query) {
-    if (!threadInfoSearchResults) {
+  async function runThreadMessageSearch(query, kind = isMobileThreadSearchOpen ? "mobile" : "desktop") {
+    const ui = getThreadSearchUI(kind);
+    if (!ui?.results) {
       return;
     }
 
     if (!chatId) {
-      setThreadSearchStatus("Сообщений для поиска пока нет");
-      clearThreadSearchResults();
+      setThreadSearchStatus("Сообщений для поиска пока нет", "", kind);
+      clearThreadSearchResults(kind);
       return;
     }
 
     const normalizedQuery = query.trim();
+    syncThreadSearchInputs(normalizedQuery, kind);
     if (!normalizedQuery) {
-      setThreadSearchStatus("Введите текст для поиска");
-      clearThreadSearchResults();
+      setThreadSearchStatus("Введите текст для поиска", "", kind);
+      clearThreadSearchResults(kind);
       return;
     }
 
     const requestId = ++activeThreadSearchRequestId;
-    setThreadSearchStatus("Ищем...");
+    setThreadSearchStatus("Ищем...", "", kind);
 
     try {
       const searchPath = chatType === "group"
@@ -797,14 +891,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
       const results = Array.isArray(data?.items) ? data.items : [];
-      threadInfoSearchResults.innerHTML = renderThreadSearchResults(results, chatType);
-      setThreadSearchStatus(results.length ? `Найдено: ${results.length}` : "Ничего не найдено", results.length ? "" : "error");
+      ui.results.innerHTML = renderThreadSearchResults(results, chatType);
+      setThreadSearchStatus(results.length ? `Найдено: ${results.length}` : "Ничего не найдено", results.length ? "" : "error", kind);
     } catch (error) {
       if (requestId !== activeThreadSearchRequestId) {
         return;
       }
-      clearThreadSearchResults();
-      setThreadSearchStatus(error.message, "error");
+      clearThreadSearchResults(kind);
+      setThreadSearchStatus(error.message, "error", kind);
     }
   }
 
@@ -2004,12 +2098,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   threadInfoSearchInput?.addEventListener("input", () => {
+    syncThreadSearchInputs(threadInfoSearchInput.value || "", "desktop");
     if (threadSearchDebounceTimer) {
       window.clearTimeout(threadSearchDebounceTimer);
     }
     threadSearchDebounceTimer = window.setTimeout(() => {
       threadSearchDebounceTimer = null;
-      void runThreadMessageSearch(threadInfoSearchInput.value || "");
+      void runThreadMessageSearch(threadInfoSearchInput.value || "", "desktop");
     }, 220);
   });
 
@@ -2019,11 +2114,51 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!messageId) {
       return;
     }
-    void focusMessageFromSearch(messageId);
+    void focusMessageFromSearch(messageId, "desktop");
   });
 
   threadInfoSearchReset?.addEventListener("click", () => {
-    void restoreLatestThreadView();
+    void restoreLatestThreadView("desktop");
+  });
+
+  threadMobileSearchTrigger?.addEventListener("click", () => {
+    closeThreadInfoActionMenu();
+    closeThreadMemberAddModal();
+    closeThreadGroupEditModal();
+    setThreadInfoOpen(false);
+    openMobileThreadSearchMode();
+  });
+
+  threadMobileSearchClose?.addEventListener("click", () => {
+    closeMobileThreadSearchMode();
+  });
+
+  threadMobileSearchClear?.addEventListener("click", () => {
+    syncThreadSearchInputs("", "");
+    clearThreadSearchResults("mobile");
+    setThreadSearchStatus("Введите текст для поиска", "", "mobile");
+    threadMobileSearchInput?.focus();
+  });
+
+  threadMobileSearchInput?.addEventListener("input", () => {
+    syncThreadSearchInputs(threadMobileSearchInput.value || "", "mobile");
+    if (threadSearchDebounceTimer) {
+      window.clearTimeout(threadSearchDebounceTimer);
+    }
+    threadSearchDebounceTimer = window.setTimeout(() => {
+      threadSearchDebounceTimer = null;
+      void runThreadMessageSearch(threadMobileSearchInput.value || "", "mobile");
+    }, 220);
+  });
+
+  threadMobileSearchResults?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-thread-search-message-id]");
+    const messageId = Number(button?.dataset.threadSearchMessageId || "0");
+    if (!messageId) {
+      return;
+    }
+    closeMobileThreadSearchMode();
+    void focusMessageFromSearch(messageId, "mobile");
   });
 
   threadInfoInviteRegenerate?.addEventListener("click", () => {
@@ -2626,6 +2761,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && isMobileThreadSearchOpen) {
+      closeMobileThreadSearchMode();
+      return;
+    }
     if (event.key === "Escape" && threadInfoActionMenu && !threadInfoActionMenu.hidden) {
       closeThreadInfoActionMenu();
       return;

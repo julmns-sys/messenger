@@ -106,6 +106,15 @@
           </div>
         </header>
         <div class="content-body">
+          <div class="thread-mobile-search" id="threadMobileSearch" hidden>
+            <div class="thread-mobile-search-bar">
+              <button class="icon-button page-back thread-mobile-search-close" id="threadMobileSearchClose" type="button" aria-label="Закрыть поиск"></button>
+              <input class="search-input thread-mobile-search-input" id="threadMobileSearchInput" type="search" placeholder="Поиск в сообщениях">
+              <button class="icon-button thread-mobile-search-clear" id="threadMobileSearchClear" type="button" aria-label="Очистить поиск">×</button>
+            </div>
+            <div class="status thread-info-search-status thread-mobile-search-status" id="threadMobileSearchStatus"></div>
+            <div class="thread-info-search-results thread-mobile-search-results" id="threadMobileSearchResults"></div>
+          </div>
           <div class="messages" id="messages"></div>
           <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down">↓</button>
           <div class="composer-wrap">
@@ -123,6 +132,9 @@
               <p class="thread-info-subtitle">Панель чата</p>
             </div>
             <div class="thread-info-panel-actions">
+              <button class="icon-button mobile-only thread-mobile-search-trigger" id="threadMobileSearchTrigger" type="button" aria-label="Поиск по сообщениям">
+                <span class="icon-symbol">⌕</span>
+              </button>
               <button class="icon-button thread-info-menu-trigger" id="threadInfoMenuTrigger" type="button" aria-label="Действия группы" aria-haspopup="menu" aria-expanded="false" hidden>⋯</button>
               <button class="icon-button" id="threadInfoClose" type="button" aria-label="Закрыть">×</button>
             </div>
@@ -144,7 +156,10 @@
               <div class="thread-info-card-head">
                 <div>
                   <div class="thread-info-card-eyebrow">Chat Info</div>
-                  <h3 class="thread-info-card-title">О чате</h3>
+                  <div class="thread-info-card-title-row">
+                    <h3 class="thread-info-card-title">О чате</h3>
+                    <div class="thread-info-tag-slot" id="threadInfoTag"></div>
+                  </div>
                 </div>
               </div>
               <div class="thread-info-facts">
@@ -164,12 +179,16 @@
                   <div class="thread-info-search-results" id="threadInfoSearchResults"></div>
                 </div>
                 <div class="thread-info-fact">
-                  <span class="thread-info-label">Дата начала</span>
-                  <strong id="threadInfoStartedAt">Пока нет</strong>
-                </div>
-                <div class="thread-info-fact">
-                  <span class="thread-info-label">Количество сообщений</span>
-                  <strong id="threadInfoMessagesCount">0</strong>
+                  <div class="thread-info-fact-pair">
+                    <div class="thread-info-fact-item">
+                      <span class="thread-info-label">Дата начала</span>
+                      <strong id="threadInfoStartedAt">Пока нет</strong>
+                    </div>
+                    <div class="thread-info-fact-item">
+                      <span class="thread-info-label">Количество сообщений</span>
+                      <strong id="threadInfoMessagesCount">0</strong>
+                    </div>
+                  </div>
                 </div>
                 <div class="thread-info-fact">
                   <span class="thread-info-label">Медиа</span>
@@ -178,10 +197,6 @@
                 <div class="thread-info-fact">
                   <span class="thread-info-label">Файлы</span>
                   <strong id="threadInfoFilesCount">Скоро</strong>
-                </div>
-                <div class="thread-info-fact">
-                  <span class="thread-info-label">Тег чата</span>
-                  <strong id="threadInfoTag">Без тега</strong>
                 </div>
                 <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
                   <span class="thread-info-label">Пригласительная ссылка</span>

@@ -1487,6 +1487,28 @@ textarea {
   gap: 12px;
 }
 
+.thread-info-tag-slot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 24px;
+  min-width: 0;
+  text-align: right;
+}
+
+.thread-info-tag-slot:empty {
+  display: none;
+}
+
+.thread-info-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
 .thread-info-card-eyebrow {
   font-size: 11px;
   font-weight: 700;
@@ -1499,6 +1521,10 @@ textarea {
   margin: 8px 0 0;
   font-size: 24px;
   line-height: 1.1;
+}
+
+.thread-info-card-title-row .thread-info-card-title {
+  margin: 0;
 }
 
 .thread-info-hero {
@@ -1562,13 +1588,16 @@ textarea {
   display: none !important;
 }
 
-.thread-info-fact:hover {
-  transform: translateY(-1px);
-  background: rgba(255, 255, 255, 0.42);
-  border-color: rgba(255, 255, 255, 0.46);
-  box-shadow:
-    0 12px 24px rgba(31, 52, 79, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+.thread-info-fact-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.thread-info-fact-item {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
 }
 
 .thread-info-label {
@@ -1699,6 +1728,7 @@ textarea {
 .thread-info-search-results {
   display: grid;
   gap: 8px;
+  align-content: start;
   max-height: min(320px, 34vh);
   overflow-y: auto;
   overflow-x: hidden;
@@ -1745,6 +1775,9 @@ textarea {
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-info-search-result-time {
@@ -1761,6 +1794,10 @@ textarea {
   color: rgba(49, 68, 92, 0.8);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.thread-mobile-search {
+  display: none;
 }
 
 .message.search-target {
@@ -3332,6 +3369,11 @@ textarea {
   align-items: center;
 }
 
+.thread-header-side-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .thread-back {
   display: none;
 }
@@ -3627,6 +3669,115 @@ textarea {
     height: calc(100dvh - 69px);
   }
 
+  .thread-page .thread-header-side-actions {
+    flex: 0 0 auto;
+    min-width: 96px;
+  }
+
+  .thread-mobile-search {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px 14px 14px;
+    background:
+      linear-gradient(180deg, rgba(241, 247, 255, 0.9), rgba(236, 244, 252, 0.82)),
+      rgba(255, 255, 255, 0.32);
+    backdrop-filter: blur(22px);
+    opacity: 0;
+    transform: translateY(-8px);
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+
+  .thread-mobile-search.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .thread-mobile-search-bar {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding-top: 2px;
+  }
+
+  .thread-mobile-search-input {
+    min-width: 0;
+  }
+
+  .thread-mobile-search-clear {
+    font-size: 22px;
+    line-height: 1;
+    padding: 0;
+  }
+
+  .thread-mobile-search-status {
+    position: sticky;
+    top: 58px;
+    z-index: 1;
+    margin: 0;
+    padding: 0 4px;
+    background: transparent;
+  }
+
+  .thread-mobile-search-results {
+    align-content: start;
+    grid-auto-rows: max-content;
+    max-height: none;
+    padding-bottom: 18px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .thread-mobile-search-results .thread-info-search-result {
+    gap: 6px;
+    padding: 13px 14px;
+    border-radius: 16px;
+  }
+
+  .thread-mobile-search-results .thread-info-search-result-head {
+    display: grid;
+    gap: 3px;
+    justify-content: stretch;
+  }
+
+  .thread-mobile-search-results .thread-info-search-result-name {
+    font-size: 13px;
+    line-height: 1.3;
+  }
+
+  .thread-mobile-search-results .thread-info-search-result-time {
+    white-space: normal;
+    text-align: left;
+    line-height: 1.25;
+  }
+
+  .thread-mobile-search-results .thread-info-search-result-text {
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .thread-info-fact-pair {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .thread-info-card-head {
+    align-items: flex-start;
+  }
+
+  .thread-info-tag-slot {
+    max-width: 44%;
+  }
+
   .thread-info-panel {
     width: min(100%, 380px);
     overflow: hidden;
@@ -3676,6 +3827,11 @@ textarea {
 
   .thread-page .thread-header-side {
     flex: 0 0 44px;
+  }
+
+  .thread-page .thread-header-side.thread-header-side-actions {
+    flex: 0 0 auto;
+    min-width: 96px;
   }
 
   .thread-page .thread-back {
@@ -3749,6 +3905,21 @@ textarea {
     bottom: 88px;
     width: 44px;
     height: 44px;
+  }
+
+  .thread-page.thread-mobile-search-open .scroll-down-button,
+  .thread-page.thread-mobile-search-open .composer-wrap {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .thread-page.thread-mobile-search-open .content-header {
+    display: none;
+  }
+
+  .thread-page.thread-mobile-search-open .content-body {
+    min-height: 100dvh;
+    height: 100dvh;
   }
 }
 
