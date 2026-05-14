@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 from flask import Flask, request, jsonify, send_from_directory, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
@@ -12,11 +14,19 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 socket_sessions = {}
 
 
+def format_timestamp(value):
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ", timespec="seconds")
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
 def persist_token(token, user_id):
     conn = get_db()
     conn.execute("""
         INSERT OR REPLACE INTO auth_tokens (token, user_id)
-        VALUES (?, ?)
+        VALUES (%s, %s)
     """, (token, user_id))
     conn.commit()
     conn.close()
@@ -30,7 +40,7 @@ def lookup_user_id_by_token(token):
     row = conn.execute("""
         SELECT user_id
         FROM auth_tokens
-        WHERE token = ?
+        WHERE token = %s
     """, (token,)).fetchone()
     conn.close()
     return row["user_id"] if row else None
@@ -88,7 +98,7 @@ def can_manage_group_admins(conn, user_id, group_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
     if not group:
         return False
@@ -99,7 +109,7 @@ def can_manage_group_admins(conn, user_id, group_id):
     member = conn.execute("""
         SELECT is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id)).fetchone()
     return bool(member and member["is_admin"])
 
@@ -112,7 +122,7 @@ def can_manage_group_member(conn, actor_user_id, group_id, target_user_id, group
         group = conn.execute("""
             SELECT owner_id
             FROM groups
-            WHERE id = ?
+            WHERE id = %s
         """, (group_id,)).fetchone()
     if not group:
         return False
@@ -124,7 +134,7 @@ def can_manage_group_member(conn, actor_user_id, group_id, target_user_id, group
         actor_member = conn.execute("""
             SELECT user_id, is_admin
             FROM group_members
-            WHERE group_id = ? AND user_id = ?
+            WHERE group_id = %s AND user_id = %s
         """, (group_id, actor_user_id)).fetchone()
     if not actor_member:
         return False
@@ -133,7 +143,7 @@ def can_manage_group_member(conn, actor_user_id, group_id, target_user_id, group
         target_member = conn.execute("""
             SELECT user_id, is_admin
             FROM group_members
-            WHERE group_id = ? AND user_id = ?
+            WHERE group_id = %s AND user_id = %s
         """, (group_id, target_user_id)).fetchone()
     if not target_member:
         return False
@@ -161,7 +171,7 @@ def emit_group_updated(group_id):
 
 def generate_group_invite_token(conn):
     token = secrets.token_urlsafe(18)
-    while conn.execute("SELECT 1 FROM group_invites WHERE token = ?", (token,)).fetchone():
+    while conn.execute("SELECT 1 FROM group_invites WHERE token = %s", (token,)).fetchone():
         token = secrets.token_urlsafe(18)
     return token
 
@@ -170,12 +180,12 @@ def create_group_invite(conn, group_id, created_by):
     token = generate_group_invite_token(conn)
     conn.execute("""
         INSERT INTO group_invites (group_id, token, is_active, created_by)
-        VALUES (?, ?, 1, ?)
+        VALUES (%s, %s, 1, %s)
     """, (group_id, token, created_by))
     return conn.execute("""
         SELECT group_id, token, created_at
         FROM group_invites
-        WHERE token = ?
+        WHERE token = %s
     """, (token,)).fetchone()
 
 
@@ -183,7 +193,7 @@ def ensure_active_group_invite(conn, group_id, created_by):
     invite = conn.execute("""
         SELECT group_id, token, created_at
         FROM group_invites
-        WHERE group_id = ? AND is_active = 1
+        WHERE group_id = %s AND is_active = 1
         ORDER BY id DESC
         LIMIT 1
     """, (group_id,)).fetchone()
@@ -196,7 +206,7 @@ def regenerate_group_invite(conn, group_id, created_by):
     conn.execute("""
         UPDATE group_invites
         SET is_active = 0
-        WHERE group_id = ? AND is_active = 1
+        WHERE group_id = %s AND is_active = 1
     """, (group_id,))
     return create_group_invite(conn, group_id, created_by)
 
@@ -212,7 +222,7 @@ def serialize_group_invite(invite):
         "token": invite["token"],
         "url": build_invite_url(invite["token"]),
         "path": f"/invite/{invite['token']}",
-        "created_at": invite["created_at"]
+        "created_at": format_timestamp(invite["created_at"])
     }
 
 
@@ -227,7 +237,7 @@ def get_group_invite_by_token(conn, token):
             g.owner_id
         FROM group_invites gi
         JOIN groups g ON g.id = gi.group_id
-        WHERE gi.token = ? AND gi.is_active = 1
+        WHERE gi.token = %s AND gi.is_active = 1
         LIMIT 1
     """, (token,)).fetchone()
 
@@ -241,7 +251,7 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
     group = conn.execute("""
         SELECT id, title, description, owner_id, created_at
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
     if not group:
         return None
@@ -249,7 +259,7 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
     viewer_member = conn.execute("""
         SELECT user_id, is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, viewer_user_id)).fetchone()
     if not viewer_member:
         return None
@@ -257,16 +267,16 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
     members_count_row = conn.execute("""
         SELECT COUNT(*) AS members_count
         FROM group_members
-        WHERE group_id = ?
+        WHERE group_id = %s
     """, (group_id,)).fetchone()
     messages_count_row = conn.execute("""
         SELECT COUNT(*) AS messages_count
         FROM group_messages gm
-        WHERE gm.group_id = ?
+        WHERE gm.group_id = %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
     """, (group_id, viewer_user_id)).fetchone()
     member_rows = conn.execute("""
@@ -278,9 +288,9 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
             gm.is_admin
         FROM group_members gm
         JOIN users u ON u.id = gm.user_id
-        WHERE gm.group_id = ?
+        WHERE gm.group_id = %s
         ORDER BY
-            CASE WHEN u.id = ? THEN 0 WHEN gm.is_admin = 1 THEN 1 ELSE 2 END,
+            CASE WHEN u.id = %s THEN 0 WHEN gm.is_admin = 1 THEN 1 ELSE 2 END,
             COALESCE(u.name, u.username),
             u.username
     """, (group_id, group["owner_id"])).fetchall()
@@ -308,7 +318,7 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
         "title": group["title"],
         "name": group["title"],
         "description": group["description"],
-        "started_at": group["created_at"],
+        "started_at": format_timestamp(group["created_at"]),
         "owner_id": group["owner_id"],
         "can_edit_group": can_edit_group_details(conn, viewer_user_id, group_id),
         "can_add_members": can_add_group_members(conn, viewer_user_id, group_id),
@@ -342,7 +352,7 @@ def can_edit_group_details(conn, user_id, group_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
 
     if not group:
@@ -354,7 +364,7 @@ def can_edit_group_details(conn, user_id, group_id):
     member = conn.execute("""
         SELECT is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id)).fetchone()
     return bool(member and member["is_admin"])
 
@@ -366,7 +376,7 @@ def can_add_group_members(conn, user_id, group_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
 
     if not group:
@@ -378,7 +388,7 @@ def can_add_group_members(conn, user_id, group_id):
     member = conn.execute("""
         SELECT is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id)).fetchone()
     return bool(member and member["is_admin"])
 
@@ -390,7 +400,7 @@ def can_access_direct_chat(conn, user_id, chat_id):
     chat = conn.execute("""
         SELECT 1
         FROM chats
-        WHERE id = ? AND (user1_id = ? OR user2_id = ?)
+        WHERE id = %s AND (user1_id = %s OR user2_id = %s)
     """, (chat_id, user_id, user_id)).fetchone()
     return chat is not None
 
@@ -402,7 +412,7 @@ def can_access_group(conn, user_id, group_id):
     member = conn.execute("""
         SELECT 1
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id)).fetchone()
     return member is not None
 
@@ -411,7 +421,7 @@ def get_direct_chat_member_ids(conn, chat_id):
     row = conn.execute("""
         SELECT user1_id, user2_id
         FROM chats
-        WHERE id = ?
+        WHERE id = %s
     """, (chat_id,)).fetchone()
     if not row:
         return []
@@ -424,7 +434,7 @@ def get_group_member_ids(conn, group_id):
         for row in conn.execute("""
             SELECT user_id
             FROM group_members
-            WHERE group_id = ?
+            WHERE group_id = %s
         """, (group_id,)).fetchall()
     ]
 
@@ -435,7 +445,7 @@ def serialize_direct_message(message):
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
-        "created_at": message["created_at"],
+        "created_at": format_timestamp(message["created_at"]),
         "is_read": bool(message["read_at"]),
         "is_edited": bool(message["edited_at"])
     }
@@ -448,7 +458,7 @@ def serialize_group_message(message):
         "sender_name": message["sender_name"],
         "text": message["text"],
         "message_type": message["message_type"] or "text",
-        "created_at": message["created_at"],
+        "created_at": format_timestamp(message["created_at"]),
         "is_edited": bool(message["edited_at"])
     }
 
@@ -457,8 +467,8 @@ def mark_direct_chat_as_read(conn, chat_id, reader_id):
     unread_row = conn.execute("""
         SELECT MAX(id) AS upto_message_id
         FROM messages
-        WHERE chat_id = ?
-          AND sender_id != ?
+        WHERE chat_id = %s
+          AND sender_id != %s
           AND read_at IS NULL
     """, (chat_id, reader_id)).fetchone()
 
@@ -469,8 +479,8 @@ def mark_direct_chat_as_read(conn, chat_id, reader_id):
     conn.execute("""
         UPDATE messages
         SET read_at = CURRENT_TIMESTAMP
-        WHERE chat_id = ?
-          AND sender_id != ?
+        WHERE chat_id = %s
+          AND sender_id != %s
           AND read_at IS NULL
     """, (chat_id, reader_id))
     conn.commit()
@@ -482,12 +492,12 @@ def mark_group_chat_as_read(conn, group_id, reader_id):
     latest_row = conn.execute("""
         SELECT MAX(gm.id) AS upto_message_id
         FROM group_messages gm
-        WHERE gm.group_id = ?
+        WHERE gm.group_id = %s
           AND gm.message_type = 'text'
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
     """, (group_id, reader_id)).fetchone()
 
@@ -497,9 +507,9 @@ def mark_group_chat_as_read(conn, group_id, reader_id):
 
     conn.execute("""
         INSERT INTO group_read_states (group_id, user_id, last_read_message_id, last_read_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(group_id, user_id) DO UPDATE SET
-            last_read_message_id = excluded.last_read_message_id,
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON DUPLICATE KEY UPDATE
+            last_read_message_id = VALUES(last_read_message_id),
             last_read_at = CURRENT_TIMESTAMP
     """, (group_id, reader_id, upto_message_id))
     conn.commit()
@@ -511,7 +521,7 @@ def initialize_group_read_state(conn, group_id, user_id):
     latest_row = conn.execute("""
         SELECT MAX(id) AS last_message_id
         FROM group_messages
-        WHERE group_id = ?
+        WHERE group_id = %s
           AND message_type = 'text'
     """, (group_id,)).fetchone()
     last_message_id = latest_row["last_message_id"] if latest_row else None
@@ -520,7 +530,7 @@ def initialize_group_read_state(conn, group_id, user_id):
 
     conn.execute("""
         INSERT OR IGNORE INTO group_read_states (group_id, user_id, last_read_message_id, last_read_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
     """, (group_id, user_id, last_message_id))
 
 
@@ -537,7 +547,7 @@ def get_direct_message_for_chat(conn, chat_id, message_id):
             m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
-        WHERE m.id = ? AND m.chat_id = ?
+        WHERE m.id = %s AND m.chat_id = %s
     """, (message_id, chat_id)).fetchone()
 
 
@@ -554,7 +564,7 @@ def get_group_message_for_group(conn, group_id, message_id):
             gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
-        WHERE gm.id = ? AND gm.group_id = ?
+        WHERE gm.id = %s AND gm.group_id = %s
     """, (message_id, group_id)).fetchone()
 
 
@@ -616,7 +626,7 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
     params = [chat_id, user_id]
     before_clause = ""
     if before_id is not None:
-        before_clause = "AND m.id < ?"
+        before_clause = "AND m.id < %s"
         params.append(before_id)
     params.append(limit + 1)
 
@@ -631,15 +641,15 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
             m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
-        WHERE m.chat_id = ?
+        WHERE m.chat_id = %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
+              WHERE hm.message_id = m.id AND hm.user_id = %s
           )
           {before_clause}
         ORDER BY m.id DESC
-        LIMIT ?
+        LIMIT %s
     """, params).fetchall()
 
     has_more = len(rows) > limit
@@ -652,7 +662,7 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
     params = [group_id, user_id]
     before_clause = ""
     if before_id is not None:
-        before_clause = "AND gm.id < ?"
+        before_clause = "AND gm.id < %s"
         params.append(before_id)
     params.append(limit + 1)
 
@@ -667,15 +677,15 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
-        WHERE gm.group_id = ?
+        WHERE gm.group_id = %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
           {before_clause}
         ORDER BY gm.id DESC
-        LIMIT ?
+        LIMIT %s
     """, params).fetchall()
 
     has_more = len(rows) > limit
@@ -697,15 +707,15 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
             m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
-        WHERE m.chat_id = ?
-          AND m.text LIKE ?
+        WHERE m.chat_id = %s
+          AND m.text LIKE %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
+              WHERE hm.message_id = m.id AND hm.user_id = %s
           )
         ORDER BY m.id DESC
-        LIMIT ?
+        LIMIT %s
     """, (chat_id, pattern, user_id, limit)).fetchall()
 
 
@@ -722,15 +732,15 @@ def search_group_messages(conn, group_id, user_id, query, limit):
             gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
-        WHERE gm.group_id = ?
-          AND gm.text LIKE ?
+        WHERE gm.group_id = %s
+          AND gm.text LIKE %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
         ORDER BY gm.id DESC
-        LIMIT ?
+        LIMIT %s
     """, (group_id, pattern, user_id, limit)).fetchall()
 
 
@@ -746,11 +756,11 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
-        WHERE m.id = ? AND m.chat_id = ?
+        WHERE m.id = %s AND m.chat_id = %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
+              WHERE hm.message_id = m.id AND hm.user_id = %s
           )
     """, (message_id, chat_id, user_id)).fetchone()
     if not target:
@@ -767,15 +777,15 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
-        WHERE m.chat_id = ?
-          AND m.id < ?
+        WHERE m.chat_id = %s
+          AND m.id < %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
+              WHERE hm.message_id = m.id AND hm.user_id = %s
           )
         ORDER BY m.id DESC
-        LIMIT ?
+        LIMIT %s
     """, (chat_id, message_id, user_id, limit)).fetchall()
     after_rows = conn.execute("""
         SELECT
@@ -788,38 +798,38 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
-        WHERE m.chat_id = ?
-          AND m.id > ?
+        WHERE m.chat_id = %s
+          AND m.id > %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
+              WHERE hm.message_id = m.id AND hm.user_id = %s
           )
         ORDER BY m.id ASC
-        LIMIT ?
+        LIMIT %s
     """, (chat_id, message_id, user_id, limit)).fetchall()
 
     has_more_before = conn.execute("""
         SELECT 1
         FROM messages m
-        WHERE m.chat_id = ?
-          AND m.id < ?
+        WHERE m.chat_id = %s
+          AND m.id < %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
+              WHERE hm.message_id = m.id AND hm.user_id = %s
           )
         LIMIT 1
     """, (chat_id, before_rows[-1]["id"] if before_rows else message_id, user_id)).fetchone() is not None
     has_more_after = conn.execute("""
         SELECT 1
         FROM messages m
-        WHERE m.chat_id = ?
-          AND m.id > ?
+        WHERE m.chat_id = %s
+          AND m.id > %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_messages hm
-              WHERE hm.message_id = m.id AND hm.user_id = ?
+              WHERE hm.message_id = m.id AND hm.user_id = %s
           )
         LIMIT 1
     """, (chat_id, after_rows[-1]["id"] if after_rows else message_id, user_id)).fetchone() is not None
@@ -840,11 +850,11 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
-        WHERE gm.id = ? AND gm.group_id = ?
+        WHERE gm.id = %s AND gm.group_id = %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
     """, (message_id, group_id, user_id)).fetchone()
     if not target:
@@ -861,15 +871,15 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
-        WHERE gm.group_id = ?
-          AND gm.id < ?
+        WHERE gm.group_id = %s
+          AND gm.id < %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
         ORDER BY gm.id DESC
-        LIMIT ?
+        LIMIT %s
     """, (group_id, message_id, user_id, limit)).fetchall()
     after_rows = conn.execute("""
         SELECT
@@ -882,38 +892,38 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
-        WHERE gm.group_id = ?
-          AND gm.id > ?
+        WHERE gm.group_id = %s
+          AND gm.id > %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
         ORDER BY gm.id ASC
-        LIMIT ?
+        LIMIT %s
     """, (group_id, message_id, user_id, limit)).fetchall()
 
     has_more_before = conn.execute("""
         SELECT 1
         FROM group_messages gm
-        WHERE gm.group_id = ?
-          AND gm.id < ?
+        WHERE gm.group_id = %s
+          AND gm.id < %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
         LIMIT 1
     """, (group_id, before_rows[-1]["id"] if before_rows else message_id, user_id)).fetchone() is not None
     has_more_after = conn.execute("""
         SELECT 1
         FROM group_messages gm
-        WHERE gm.group_id = ?
-          AND gm.id > ?
+        WHERE gm.group_id = %s
+          AND gm.id > %s
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
-              WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+              WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
           )
         LIMIT 1
     """, (group_id, after_rows[-1]["id"] if after_rows else message_id, user_id)).fetchone() is not None
@@ -930,7 +940,7 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO group_messages (group_id, sender_id, text, message_type)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
     """, (group_id, sender_id, text, message_type))
     return get_group_message_for_group(conn, group_id, cur.lastrowid)
 
@@ -1000,13 +1010,13 @@ def handle_join_chat(data):
 def delete_direct_chat_for_user(conn, chat_id, user_id):
     conn.execute("""
         INSERT OR IGNORE INTO hidden_direct_chats (chat_id, user_id)
-        VALUES (?, ?)
+        VALUES (%s, %s)
     """, (chat_id, user_id))
     conn.execute("""
         INSERT OR IGNORE INTO hidden_messages (message_id, user_id)
-        SELECT id, ?
+        SELECT id, %s
         FROM messages
-        WHERE chat_id = ?
+        WHERE chat_id = %s
     """, (user_id, chat_id))
     conn.commit()
 
@@ -1070,7 +1080,7 @@ def invite_page(token):
         members_count_row = conn.execute("""
             SELECT COUNT(*) AS members_count
             FROM group_members
-            WHERE group_id = ?
+            WHERE group_id = %s
         """, (invite["group_id"],)).fetchone()
         already_member = bool(user_id and can_access_group(conn, user_id, invite["group_id"]))
         payload = {
@@ -1159,7 +1169,7 @@ def register():
 
         cur.execute("""
             INSERT INTO users (name, username, email, password_hash)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         """, (name, username, email, password_hash))
 
         conn.commit()
@@ -1195,7 +1205,7 @@ def login():
 
     conn = get_db()
     user = conn.execute(
-        "SELECT * FROM users WHERE username = ?",
+        "SELECT * FROM users WHERE username = %s",
         (username,)
     ).fetchone()
     conn.close()
@@ -1222,7 +1232,7 @@ def get_me():
     user = conn.execute("""
         SELECT id, name, username, email, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (user_id,)).fetchone()
     conn.close()
 
@@ -1272,26 +1282,26 @@ def update_me():
         existing_user = conn.execute("""
             SELECT id
             FROM users
-            WHERE username = ? AND id != ?
+            WHERE username = %s AND id != %s
         """, (updates["username"], user_id)).fetchone()
         if existing_user:
             conn.close()
             return jsonify({"message": "Такой username уже занят"}), 400
 
-    assignments = ", ".join(f"{field} = ?" for field in updates.keys())
+    assignments = ", ".join(f"{field} = %s" for field in updates.keys())
     params = [*updates.values(), user_id]
 
     conn.execute(f"""
         UPDATE users
         SET {assignments}
-        WHERE id = ?
+        WHERE id = %s
     """, params)
     conn.commit()
 
     user = conn.execute("""
         SELECT id, name, username, email, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (user_id,)).fetchone()
     conn.close()
 
@@ -1315,13 +1325,13 @@ def search_users():
             EXISTS (
                 SELECT 1
                 FROM contacts ct
-                WHERE ct.owner_user_id = ? AND ct.contact_user_id = u.id
+                WHERE ct.owner_user_id = %s AND ct.contact_user_id = u.id
             ) AS is_contact,
             c.id AS chat_id
         FROM users u
         LEFT JOIN chats c
             ON (
-                ((c.user1_id = ? AND c.user2_id = u.id) OR (c.user2_id = ? AND c.user1_id = u.id))
+                ((c.user1_id = %s AND c.user2_id = u.id) OR (c.user2_id = %s AND c.user1_id = u.id))
                 AND EXISTS (
                     SELECT 1
                     FROM messages m
@@ -1330,10 +1340,10 @@ def search_users():
                 AND NOT EXISTS (
                     SELECT 1
                     FROM hidden_direct_chats hdc
-                    WHERE hdc.chat_id = c.id AND hdc.user_id = ?
+                    WHERE hdc.chat_id = c.id AND hdc.user_id = %s
                 )
             )
-        WHERE u.username LIKE ? AND u.id != ?
+        WHERE u.username LIKE %s AND u.id != %s
         LIMIT 20
     """, (user_id, user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
     conn.close()
@@ -1358,14 +1368,14 @@ def get_contacts():
         JOIN users u ON u.id = ct.contact_user_id
         LEFT JOIN chats c
             ON (
-                ((c.user1_id = ? AND c.user2_id = u.id) OR (c.user2_id = ? AND c.user1_id = u.id))
+                ((c.user1_id = %s AND c.user2_id = u.id) OR (c.user2_id = %s AND c.user1_id = u.id))
                 AND NOT EXISTS (
                     SELECT 1
                     FROM hidden_direct_chats hdc
-                    WHERE hdc.chat_id = c.id AND hdc.user_id = ?
+                    WHERE hdc.chat_id = c.id AND hdc.user_id = %s
                 )
             )
-        WHERE ct.owner_user_id = ?
+        WHERE ct.owner_user_id = %s
         ORDER BY COALESCE(u.name, u.username), u.username
     """, (user_id, user_id, user_id, user_id)).fetchall()
     conn.close()
@@ -1394,7 +1404,7 @@ def add_contact():
     target_user = conn.execute("""
         SELECT id, name, username
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (contact_user_id,)).fetchone()
 
     if not target_user:
@@ -1403,14 +1413,14 @@ def add_contact():
 
     conn.execute("""
         INSERT OR IGNORE INTO contacts (owner_user_id, contact_user_id)
-        VALUES (?, ?)
+        VALUES (%s, %s)
     """, (user_id, contact_user_id))
     conn.commit()
 
     chat = conn.execute("""
         SELECT id
         FROM chats
-        WHERE (user1_id = ? AND user2_id = ?) OR (user1_id = ? AND user2_id = ?)
+        WHERE (user1_id = %s AND user2_id = %s) OR (user1_id = %s AND user2_id = %s)
         LIMIT 1
     """, (user_id, contact_user_id, contact_user_id, user_id)).fetchone()
     conn.close()
@@ -1433,7 +1443,7 @@ def remove_contact(contact_user_id):
     conn = get_db()
     conn.execute("""
         DELETE FROM contacts
-        WHERE owner_user_id = ? AND contact_user_id = ?
+        WHERE owner_user_id = %s AND contact_user_id = %s
     """, (user_id, contact_user_id))
     conn.commit()
     conn.close()
@@ -1451,7 +1461,7 @@ def get_user(target_user_id):
     user = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (target_user_id,)).fetchone()
     conn.close()
 
@@ -1491,21 +1501,21 @@ def get_chats():
                 SELECT COUNT(*)
                 FROM messages m
                 WHERE m.chat_id = c.id
-                  AND m.sender_id != ?
+                  AND m.sender_id != %s
                   AND m.read_at IS NULL
                   AND NOT EXISTS (
                       SELECT 1
                       FROM hidden_messages hm
-                      WHERE hm.message_id = m.id AND hm.user_id = ?
+                      WHERE hm.message_id = m.id AND hm.user_id = %s
                   )
             ) AS unread_count
         FROM chats c
         JOIN users u
             ON u.id = CASE
-                WHEN c.user1_id = ? THEN c.user2_id
+                WHEN c.user1_id = %s THEN c.user2_id
                 ELSE c.user1_id
             END
-        WHERE (c.user1_id = ? OR c.user2_id = ?)
+        WHERE (c.user1_id = %s OR c.user2_id = %s)
           AND EXISTS (
               SELECT 1
               FROM messages m
@@ -1514,7 +1524,7 @@ def get_chats():
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_direct_chats hdc
-              WHERE hdc.chat_id = c.id AND hdc.user_id = ?
+              WHERE hdc.chat_id = c.id AND hdc.user_id = %s
           )
     """, (user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
 
@@ -1529,7 +1539,7 @@ def get_chats():
                   AND NOT EXISTS (
                       SELECT 1
                       FROM hidden_group_messages hgm
-                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
                   )
                 ORDER BY gm.created_at DESC, gm.id DESC
                 LIMIT 1
@@ -1541,7 +1551,7 @@ def get_chats():
                   AND NOT EXISTS (
                       SELECT 1
                       FROM hidden_group_messages hgm
-                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
                   )
                 ORDER BY gm.created_at DESC, gm.id DESC
                 LIMIT 1
@@ -1551,21 +1561,21 @@ def get_chats():
                 FROM group_messages gm
                 WHERE gm.group_id = g.id
                   AND gm.message_type = 'text'
-                  AND gm.sender_id != ?
+                  AND gm.sender_id != %s
                   AND gm.id > COALESCE((
                       SELECT grs.last_read_message_id
                       FROM group_read_states grs
-                      WHERE grs.group_id = g.id AND grs.user_id = ?
+                      WHERE grs.group_id = g.id AND grs.user_id = %s
                   ), 0)
                   AND NOT EXISTS (
                       SELECT 1
                       FROM hidden_group_messages hgm
-                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = ?
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
                   )
             ) AS unread_count
         FROM groups g
         JOIN group_members gmbr ON gmbr.group_id = g.id
-        WHERE gmbr.user_id = ?
+        WHERE gmbr.user_id = %s
     """, (user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
     conn.close()
 
@@ -1576,7 +1586,7 @@ def get_chats():
             "username": chat["username"],
             "title": chat["title"],
             "last_message": {"text": chat["last_message_text"]} if chat["last_message_text"] is not None else None,
-            "updated_at": chat["updated_at"],
+            "updated_at": format_timestamp(chat["updated_at"]),
             "unread_count": chat["unread_count"] or 0
         }
         for chat in direct_chats
@@ -1589,7 +1599,7 @@ def get_chats():
             "username": None,
             "title": group["title"],
             "last_message": {"text": group["last_message_text"]} if group["last_message_text"] is not None else None,
-            "updated_at": group["updated_at"],
+            "updated_at": format_timestamp(group["updated_at"]),
             "unread_count": group["unread_count"] or 0
         }
         for group in group_chats
@@ -1632,7 +1642,7 @@ def create_direct_chat():
 
     conn = get_db()
     participant = conn.execute(
-        "SELECT id, username, name FROM users WHERE id = ?",
+        "SELECT id, username, name FROM users WHERE id = %s",
         (participant_id,)
     ).fetchone()
 
@@ -1643,14 +1653,14 @@ def create_direct_chat():
     chat = conn.execute("""
         SELECT id
         FROM chats
-        WHERE user1_id = ? AND user2_id = ?
+        WHERE user1_id = %s AND user2_id = %s
     """, (user1_id, user2_id)).fetchone()
 
     if not chat:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO chats (user1_id, user2_id)
-            VALUES (?, ?)
+            VALUES (%s, %s)
         """, (user1_id, user2_id))
         conn.commit()
         chat_id = cur.lastrowid
@@ -1693,16 +1703,16 @@ def get_chat(chat_id):
                   AND NOT EXISTS (
                       SELECT 1
                       FROM hidden_messages hm
-                      WHERE hm.message_id = m.id AND hm.user_id = ?
+                      WHERE hm.message_id = m.id AND hm.user_id = %s
                   )
             ) AS messages_count
         FROM chats c
         JOIN users u
             ON u.id = CASE
-                WHEN c.user1_id = ? THEN c.user2_id
+                WHEN c.user1_id = %s THEN c.user2_id
                 ELSE c.user1_id
             END
-        WHERE c.id = ? AND (c.user1_id = ? OR c.user2_id = ?)
+        WHERE c.id = %s AND (c.user1_id = %s OR c.user2_id = %s)
     """, (user_id, user_id, chat_id, user_id, user_id)).fetchone()
 
     if not chat:
@@ -1729,7 +1739,7 @@ def get_chat(chat_id):
         "name": chat["name"],
         "username": chat["username"],
         "bio": chat["bio"],
-        "started_at": chat["created_at"],
+        "started_at": format_timestamp(chat["created_at"]),
         "messages_count": chat["messages_count"] or 0,
         "has_more_messages": has_more_messages,
         "messages": [
@@ -1842,10 +1852,10 @@ def create_chat_message(chat_id):
     member_ids = get_direct_chat_member_ids(conn, chat_id)
 
     cur = conn.cursor()
-    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = ?", (chat_id,))
+    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
     cur.execute("""
         INSERT INTO messages (chat_id, sender_id, text)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
     """, (chat_id, user_id, text))
     conn.commit()
 
@@ -1860,7 +1870,7 @@ def create_chat_message(chat_id):
             m.edited_at
         FROM messages m
         JOIN users u ON u.id = m.sender_id
-        WHERE m.id = ?
+        WHERE m.id = %s
     """, (cur.lastrowid,)).fetchone()
     conn.close()
 
@@ -1890,16 +1900,16 @@ def delete_direct_chat(chat_id):
     if scope == "all":
         message_ids = [
             row["id"]
-            for row in conn.execute("SELECT id FROM messages WHERE chat_id = ?", (chat_id,)).fetchall()
+            for row in conn.execute("SELECT id FROM messages WHERE chat_id = %s", (chat_id,)).fetchall()
         ]
 
         if message_ids:
-            placeholders = ",".join("?" for _ in message_ids)
+            placeholders = ",".join("%s" for _ in message_ids)
             conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
 
-        conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = ?", (chat_id,))
-        conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
-        conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
+        conn.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
+        conn.execute("DELETE FROM chats WHERE id = %s", (chat_id,))
         conn.commit()
         conn.close()
 
@@ -1970,8 +1980,8 @@ def update_chat_message(chat_id, message_id):
 
     conn.execute("""
         UPDATE messages
-        SET text = ?, edited_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND chat_id = ?
+        SET text = %s, edited_at = CURRENT_TIMESTAMP
+        WHERE id = %s AND chat_id = %s
     """, (text, message_id, chat_id))
     conn.commit()
 
@@ -2011,8 +2021,8 @@ def delete_chat_message(chat_id, message_id):
             conn.close()
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
-        conn.execute("DELETE FROM hidden_messages WHERE message_id = ?", (message_id,))
-        conn.execute("DELETE FROM messages WHERE id = ? AND chat_id = ?", (message_id, chat_id))
+        conn.execute("DELETE FROM hidden_messages WHERE message_id = %s", (message_id,))
+        conn.execute("DELETE FROM messages WHERE id = %s AND chat_id = %s", (message_id, chat_id))
         conn.commit()
         conn.close()
 
@@ -2025,7 +2035,7 @@ def delete_chat_message(chat_id, message_id):
 
     conn.execute("""
         INSERT OR IGNORE INTO hidden_messages (message_id, user_id)
-        VALUES (?, ?)
+        VALUES (%s, %s)
     """, (message_id, user_id))
     conn.commit()
     conn.close()
@@ -2052,11 +2062,11 @@ def bulk_delete_chat_messages(chat_id):
         conn.close()
         return jsonify({"message": "Чат не найден"}), 404
 
-    placeholders = ",".join("?" for _ in message_ids)
+    placeholders = ",".join("%s" for _ in message_ids)
     message_rows = conn.execute(f"""
         SELECT id, sender_id
         FROM messages
-        WHERE chat_id = ? AND id IN ({placeholders})
+        WHERE chat_id = %s AND id IN ({placeholders})
     """, [chat_id, *message_ids]).fetchall()
 
     found_ids = {row["id"] for row in message_rows}
@@ -2072,7 +2082,7 @@ def bulk_delete_chat_messages(chat_id):
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
         conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
-        conn.execute(f"DELETE FROM messages WHERE chat_id = ? AND id IN ({placeholders})", [chat_id, *message_ids])
+        conn.execute(f"DELETE FROM messages WHERE chat_id = %s AND id IN ({placeholders})", [chat_id, *message_ids])
         conn.commit()
         conn.close()
 
@@ -2087,7 +2097,7 @@ def bulk_delete_chat_messages(chat_id):
 
     conn.executemany("""
         INSERT OR IGNORE INTO hidden_messages (message_id, user_id)
-        VALUES (?, ?)
+        VALUES (%s, %s)
     """, [(message_id, user_id) for message_id in message_ids])
     conn.commit()
     conn.close()
@@ -2119,19 +2129,19 @@ def create_group():
 
     cur.execute("""
         INSERT INTO groups (title, description, owner_id)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
     """, (title, description, user_id))
     group_id = cur.lastrowid
 
     cur.execute("""
         INSERT OR IGNORE INTO group_members (group_id, user_id, is_admin)
-        VALUES (?, ?, 1)
+        VALUES (%s, %s, 1)
     """, (group_id, user_id))
 
     for member_id in member_ids:
         cur.execute("""
             INSERT OR IGNORE INTO group_members (group_id, user_id, is_admin)
-            VALUES (?, ?, 0)
+            VALUES (%s, %s, 0)
         """, (group_id, member_id))
 
     initialize_group_read_state(conn, group_id, user_id)
@@ -2182,7 +2192,7 @@ def regenerate_group_invite_endpoint(group_id):
     group = conn.execute("""
         SELECT id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
 
     if not group:
@@ -2224,7 +2234,7 @@ def update_group(group_id):
     group = conn.execute("""
         SELECT id, owner_id, title, description
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
 
     if not group:
@@ -2246,13 +2256,13 @@ def update_group(group_id):
 
     conn.execute("""
         UPDATE groups
-        SET title = ?, description = ?
-        WHERE id = ?
+        SET title = %s, description = %s
+        WHERE id = %s
     """, (title, description, group_id))
     actor = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (user_id,)).fetchone()
     system_messages = []
     if title_changed:
@@ -2305,13 +2315,13 @@ def join_group_by_invite(token):
 
     conn.execute("""
         INSERT OR IGNORE INTO group_members (group_id, user_id, is_admin)
-        VALUES (?, ?, 0)
+        VALUES (%s, %s, 0)
     """, (group_id, user_id))
     initialize_group_read_state(conn, group_id, user_id)
     actor = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (user_id,)).fetchone()
     system_message = create_group_message_record(
         conn,
@@ -2455,14 +2465,14 @@ def clear_group_messages_for_user(group_id):
         for row in conn.execute("""
             SELECT id
             FROM group_messages
-            WHERE group_id = ?
+            WHERE group_id = %s
         """, (group_id,)).fetchall()
     ]
 
     if message_ids:
         conn.executemany("""
             INSERT OR IGNORE INTO hidden_group_messages (group_message_id, user_id)
-            VALUES (?, ?)
+            VALUES (%s, %s)
         """, [(message_id, user_id) for message_id in message_ids])
 
     conn.commit()
@@ -2485,7 +2495,7 @@ def leave_group(group_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
 
     if not group:
@@ -2502,7 +2512,7 @@ def leave_group(group_id):
             SELECT u.id, u.name, u.username, u.bio, gm.is_admin
             FROM group_members gm
             JOIN users u ON u.id = gm.user_id
-            WHERE gm.group_id = ? AND gm.user_id != ?
+            WHERE gm.group_id = %s AND gm.user_id != %s
             ORDER BY COALESCE(u.name, u.username), u.username
         """, (group_id, user_id)).fetchall()
         conn.close()
@@ -2522,16 +2532,16 @@ def leave_group(group_id):
 
     conn.execute("""
         DELETE FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id))
     conn.execute("""
         DELETE FROM group_read_states
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id))
     actor = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (user_id,)).fetchone()
     system_message = create_group_message_record(
         conn,
@@ -2562,7 +2572,7 @@ def delete_group(group_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
 
     if not group:
@@ -2578,22 +2588,22 @@ def delete_group(group_id):
         for row in conn.execute("""
             SELECT id
             FROM group_messages
-            WHERE group_id = ?
+            WHERE group_id = %s
         """, (group_id,)).fetchall()
     ]
 
     if group_message_ids:
-        placeholders = ",".join("?" for _ in group_message_ids)
+        placeholders = ",".join("%s" for _ in group_message_ids)
         conn.execute(f"""
             DELETE FROM hidden_group_messages
             WHERE group_message_id IN ({placeholders})
         """, group_message_ids)
 
-    conn.execute("DELETE FROM group_messages WHERE group_id = ?", (group_id,))
-    conn.execute("DELETE FROM group_read_states WHERE group_id = ?", (group_id,))
-    conn.execute("DELETE FROM group_members WHERE group_id = ?", (group_id,))
-    conn.execute("DELETE FROM group_invites WHERE group_id = ?", (group_id,))
-    conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
+    conn.execute("DELETE FROM group_messages WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM group_read_states WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM group_members WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM group_invites WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM groups WHERE id = %s", (group_id,))
     conn.commit()
     conn.close()
 
@@ -2621,7 +2631,7 @@ def transfer_group_owner(group_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
 
     if not group:
@@ -2639,7 +2649,7 @@ def transfer_group_owner(group_id):
     target_member = conn.execute("""
         SELECT user_id
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, new_owner_id)).fetchone()
     if not target_member:
         conn.close()
@@ -2647,22 +2657,22 @@ def transfer_group_owner(group_id):
 
     conn.execute("""
         UPDATE groups
-        SET owner_id = ?
-        WHERE id = ?
+        SET owner_id = %s
+        WHERE id = %s
     """, (new_owner_id, group_id))
     conn.execute("""
         UPDATE group_members
         SET is_admin = 1
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, new_owner_id))
     conn.execute("""
         DELETE FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id))
     new_owner = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (new_owner_id,)).fetchone()
     system_message = create_group_message_record(
         conn,
@@ -2719,13 +2729,13 @@ def add_group_members(group_id):
     group = conn.execute("""
         SELECT id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
     if not group:
         conn.close()
         return jsonify({"message": "Группа не найдена"}), 404
 
-    placeholders = ",".join("?" for _ in member_ids)
+    placeholders = ",".join("%s" for _ in member_ids)
     users = conn.execute(f"""
         SELECT id, name, username, bio
         FROM users
@@ -2740,7 +2750,7 @@ def add_group_members(group_id):
     existing_rows = conn.execute(f"""
         SELECT user_id
         FROM group_members
-        WHERE group_id = ? AND user_id IN ({placeholders})
+        WHERE group_id = %s AND user_id IN ({placeholders})
     """, [group_id, *member_ids]).fetchall()
     existing_member_ids = {row["user_id"] for row in existing_rows}
     new_member_ids = [member_id for member_id in member_ids if member_id not in existing_member_ids]
@@ -2751,7 +2761,7 @@ def add_group_members(group_id):
 
     conn.executemany("""
         INSERT INTO group_members (group_id, user_id, is_admin)
-        VALUES (?, ?, 0)
+        VALUES (%s, %s, 0)
     """, [(group_id, member_id) for member_id in new_member_ids])
     for member_id in new_member_ids:
         initialize_group_read_state(conn, group_id, member_id)
@@ -2806,7 +2816,7 @@ def update_group_member_role(group_id, member_user_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
     if not group:
         conn.close()
@@ -2815,7 +2825,7 @@ def update_group_member_role(group_id, member_user_id):
     member = conn.execute("""
         SELECT user_id, is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, member_user_id)).fetchone()
     if not member:
         conn.close()
@@ -2824,7 +2834,7 @@ def update_group_member_role(group_id, member_user_id):
     actor_member = conn.execute("""
         SELECT user_id, is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id)).fetchone()
     if not actor_member:
         conn.close()
@@ -2845,13 +2855,13 @@ def update_group_member_role(group_id, member_user_id):
     target_user = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (member_user_id,)).fetchone()
     is_admin = bool(data.get("is_admin"))
     conn.execute("""
         UPDATE group_members
-        SET is_admin = ?
-        WHERE group_id = ? AND user_id = ?
+        SET is_admin = %s
+        WHERE group_id = %s AND user_id = %s
     """, (1 if is_admin else 0, group_id, member_user_id))
     system_message = create_group_message_record(
         conn,
@@ -2883,7 +2893,7 @@ def remove_group_member(group_id, member_user_id):
     group = conn.execute("""
         SELECT owner_id
         FROM groups
-        WHERE id = ?
+        WHERE id = %s
     """, (group_id,)).fetchone()
     if not group:
         conn.close()
@@ -2896,7 +2906,7 @@ def remove_group_member(group_id, member_user_id):
     member = conn.execute("""
         SELECT user_id, is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, member_user_id)).fetchone()
     if not member:
         conn.close()
@@ -2905,7 +2915,7 @@ def remove_group_member(group_id, member_user_id):
     actor_member = conn.execute("""
         SELECT user_id, is_admin
         FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, user_id)).fetchone()
     if not actor_member:
         conn.close()
@@ -2926,20 +2936,20 @@ def remove_group_member(group_id, member_user_id):
     actor_user = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (user_id,)).fetchone()
     target_user = conn.execute("""
         SELECT id, name, username, bio
         FROM users
-        WHERE id = ?
+        WHERE id = %s
     """, (member_user_id,)).fetchone()
     conn.execute("""
         DELETE FROM group_members
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, member_user_id))
     conn.execute("""
         DELETE FROM group_read_states
-        WHERE group_id = ? AND user_id = ?
+        WHERE group_id = %s AND user_id = %s
     """, (group_id, member_user_id))
     system_message = create_group_message_record(
         conn,
@@ -3024,8 +3034,8 @@ def update_group_message(group_id, message_id):
 
     conn.execute("""
         UPDATE group_messages
-        SET text = ?, edited_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND group_id = ?
+        SET text = %s, edited_at = CURRENT_TIMESTAMP
+        WHERE id = %s AND group_id = %s
     """, (text, message_id, group_id))
     conn.commit()
 
@@ -3069,8 +3079,8 @@ def delete_group_message(group_id, message_id):
             conn.close()
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
-        conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id = ?", (message_id,))
-        conn.execute("DELETE FROM group_messages WHERE id = ? AND group_id = ?", (message_id, group_id))
+        conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id = %s", (message_id,))
+        conn.execute("DELETE FROM group_messages WHERE id = %s AND group_id = %s", (message_id, group_id))
         conn.commit()
         conn.close()
 
@@ -3083,7 +3093,7 @@ def delete_group_message(group_id, message_id):
 
     conn.execute("""
         INSERT OR IGNORE INTO hidden_group_messages (group_message_id, user_id)
-        VALUES (?, ?)
+        VALUES (%s, %s)
     """, (message_id, user_id))
     conn.commit()
     conn.close()
@@ -3110,11 +3120,11 @@ def bulk_delete_group_messages(group_id):
         conn.close()
         return jsonify({"message": "Группа не найдена"}), 404
 
-    placeholders = ",".join("?" for _ in message_ids)
+    placeholders = ",".join("%s" for _ in message_ids)
     message_rows = conn.execute(f"""
         SELECT id, sender_id, message_type
         FROM group_messages
-        WHERE group_id = ? AND id IN ({placeholders})
+        WHERE group_id = %s AND id IN ({placeholders})
     """, [group_id, *message_ids]).fetchall()
 
     found_ids = {row["id"] for row in message_rows}
@@ -3135,7 +3145,7 @@ def bulk_delete_group_messages(group_id):
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
         conn.execute(f"DELETE FROM hidden_group_messages WHERE group_message_id IN ({placeholders})", message_ids)
-        conn.execute(f"DELETE FROM group_messages WHERE group_id = ? AND id IN ({placeholders})", [group_id, *message_ids])
+        conn.execute(f"DELETE FROM group_messages WHERE group_id = %s AND id IN ({placeholders})", [group_id, *message_ids])
         conn.commit()
         conn.close()
 
@@ -3150,7 +3160,7 @@ def bulk_delete_group_messages(group_id):
 
     conn.executemany("""
         INSERT OR IGNORE INTO hidden_group_messages (group_message_id, user_id)
-        VALUES (?, ?)
+        VALUES (%s, %s)
     """, [(message_id, user_id) for message_id in message_ids])
     conn.commit()
     conn.close()
