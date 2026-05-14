@@ -3291,6 +3291,43 @@ textarea {
 
   .thread-info-panel {
     width: min(100%, 380px);
+    overflow: hidden;
+  }
+
+  .thread-info-panel-body {
+    height: calc(100% - 85px);
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .thread-info-members {
+    flex: 0 0 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .thread-info-members-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-bottom: 10px;
+    background: linear-gradient(180deg, rgba(247, 250, 255, 0.96), rgba(247, 250, 255, 0.82));
+    backdrop-filter: blur(12px);
+  }
+
+  .thread-info-members-list {
+    max-height: 332px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 2px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
   .thread-page .content-header {
