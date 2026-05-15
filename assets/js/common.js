@@ -5,6 +5,7 @@ const chatState = {
 };
 const CHAT_LIST_SCROLL_KEY = "messenger:chat-list-scroll-top";
 const CHAT_TAGS_KEY = "messenger:chat-tags";
+const APP_SETTINGS_KEY = "messenger:settings";
 let chatListActionMenu = null;
 let activeChatListItem = null;
 let chatListMenuHideTimer = null;
@@ -20,9 +21,182 @@ let groupDeleteConfirmModal = null;
 let pendingChatDeleteState = null;
 let chatDeleteUndoCountdownTimer = null;
 const pendingDeletedChatKeys = new Set();
+const defaultAppSettings = {
+  theme: "light",
+  accentColor: "#3390ec",
+  textSize: 16,
+  surfaceMode: "glass",
+  animations: true,
+  chatWallpaper: "none",
+  transparency: 62,
+  uiRadius: 24,
+  enterToSend: true
+};
 
 function getChatStateKey(chatId, chatType = "direct") {
   return `${chatType}:${chatId}`;
+}
+
+function readAppSettings() {
+  const rawValue = window.localStorage.getItem(APP_SETTINGS_KEY);
+  if (!rawValue) return { ...defaultAppSettings };
+  try {
+    const parsed = JSON.parse(rawValue);
+    return {
+      ...defaultAppSettings,
+      ...(parsed && typeof parsed === "object" ? parsed : {})
+    };
+  } catch {
+    return { ...defaultAppSettings };
+  }
+}
+
+function saveAppSettings(settings) {
+  window.localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function getAppSetting(key) {
+  return Boolean(readAppSettings()[key]);
+}
+
+function clampSetting(value, min, max, fallback) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, numericValue));
+}
+
+function normalizeAccentColor(color) {
+  const value = typeof color === "string" ? color.trim() : "";
+  return /^#([0-9a-f]{6})$/i.test(value) ? value : defaultAppSettings.accentColor;
+}
+
+function darkenHexColor(color, amount = 0.14) {
+  const normalized = normalizeAccentColor(color).replace("#", "");
+  const adjust = (start) => {
+    const value = Number.parseInt(normalized.slice(start, start + 2), 16);
+    const nextValue = Math.max(0, Math.min(255, Math.round(value * (1 - amount))));
+    return nextValue.toString(16).padStart(2, "0");
+  };
+  return `#${adjust(0)}${adjust(2)}${adjust(4)}`;
+}
+
+function normalizeAppSettings(rawSettings = {}) {
+  return {
+    ...defaultAppSettings,
+    ...rawSettings,
+    theme: rawSettings.theme === "dark" ? "dark" : "light",
+    accentColor: normalizeAccentColor(rawSettings.accentColor || defaultAppSettings.accentColor),
+    textSize: clampSetting(rawSettings.textSize, 14, 20, defaultAppSettings.textSize),
+    surfaceMode: rawSettings.surfaceMode === "compact" ? "compact" : "glass",
+    animations: rawSettings.animations !== false,
+    chatWallpaper: ["none", "grid", "aurora", "paper"].includes(rawSettings.chatWallpaper) ? rawSettings.chatWallpaper : "none",
+    transparency: clampSetting(rawSettings.transparency, 35, 92, defaultAppSettings.transparency),
+    uiRadius: clampSetting(rawSettings.uiRadius, 12, 34, defaultAppSettings.uiRadius),
+    enterToSend: rawSettings.enterToSend !== false
+  };
+}
+
+function applyAppSettings(settings = readAppSettings()) {
+  const normalizedSettings = normalizeAppSettings(settings);
+  const root = document.documentElement;
+  const accentDark = darkenHexColor(normalizedSettings.accentColor, 0.14);
+
+  document.body.classList.toggle("settings-theme-dark", normalizedSettings.theme === "dark");
+  document.body.classList.toggle("settings-surface-compact", normalizedSettings.surfaceMode === "compact");
+  document.body.classList.toggle("settings-surface-glass", normalizedSettings.surfaceMode !== "compact");
+  document.body.classList.toggle("settings-reduced-motion", !normalizedSettings.animations);
+  document.body.dataset.chatWallpaper = normalizedSettings.chatWallpaper;
+
+  root.style.setProperty("--accent", normalizedSettings.accentColor);
+  root.style.setProperty("--accent-dark", accentDark);
+  root.style.setProperty("--settings-text-size", `${normalizedSettings.textSize}px`);
+  root.style.setProperty("--settings-surface-alpha", String(normalizedSettings.transparency / 100));
+  root.style.setProperty("--radius-lg", `${normalizedSettings.uiRadius}px`);
+  root.style.setProperty("--radius-md", `${Math.max(12, normalizedSettings.uiRadius - 6)}px`);
+  root.style.setProperty("--radius-sm", `${Math.max(10, normalizedSettings.uiRadius - 10)}px`);
+}
+
+function initSettingsControls() {
+  const settingsList = document.getElementById("settingsList");
+  const resetButton = document.querySelector("[data-settings-reset='appearance']");
+  const settings = normalizeAppSettings(readAppSettings());
+  applyAppSettings(settings);
+  if (!settingsList || settingsList.dataset.settingsBound === "true") {
+    return;
+  }
+
+  settingsList.dataset.settingsBound = "true";
+  const controlMap = new Map();
+
+  const updateValuePreview = (settingKey, value) => {
+    const valueNode = settingsList.querySelector(`[data-setting-value="${settingKey}"]`);
+    if (!valueNode) {
+      return;
+    }
+
+    if (settingKey === "textSize" || settingKey === "uiRadius") {
+      valueNode.textContent = `${value}px`;
+      return;
+    }
+
+    if (settingKey === "transparency") {
+      valueNode.textContent = `${value}%`;
+    }
+  };
+
+  settingsList.querySelectorAll("[data-setting-control]").forEach((input) => {
+    const settingKey = input.dataset.settingControl;
+    if (!settingKey) return;
+    controlMap.set(settingKey, input);
+
+    if (input.type === "checkbox") {
+      input.checked = Boolean(settings[settingKey]);
+    } else {
+      input.value = String(settings[settingKey]);
+    }
+    updateValuePreview(settingKey, settings[settingKey]);
+
+    input.addEventListener("input", () => {
+      const nextSettings = normalizeAppSettings({
+        ...readAppSettings(),
+        [settingKey]: input.type === "checkbox" ? input.checked : input.value
+      });
+      saveAppSettings(nextSettings);
+      applyAppSettings(nextSettings);
+      updateValuePreview(settingKey, nextSettings[settingKey]);
+    });
+  });
+
+  if (resetButton && resetButton.dataset.settingsResetBound !== "true") {
+    resetButton.dataset.settingsResetBound = "true";
+    resetButton.addEventListener("click", () => {
+      const nextSettings = normalizeAppSettings({
+        ...readAppSettings(),
+        theme: defaultAppSettings.theme,
+        accentColor: defaultAppSettings.accentColor,
+        textSize: defaultAppSettings.textSize,
+        surfaceMode: defaultAppSettings.surfaceMode,
+        animations: defaultAppSettings.animations,
+        chatWallpaper: defaultAppSettings.chatWallpaper,
+        transparency: defaultAppSettings.transparency,
+        uiRadius: defaultAppSettings.uiRadius
+      });
+
+      saveAppSettings(nextSettings);
+      applyAppSettings(nextSettings);
+
+      controlMap.forEach((input, settingKey) => {
+        if (input.type === "checkbox") {
+          input.checked = Boolean(nextSettings[settingKey]);
+        } else {
+          input.value = String(nextSettings[settingKey]);
+        }
+        updateValuePreview(settingKey, nextSettings[settingKey]);
+      });
+    });
+  }
 }
 
 function readChatTags() {
@@ -480,9 +654,28 @@ function openSidebarProfileEditor(field) {
 function setSidebarProfileOpen(sidebar, isOpen) {
   if (!sidebar) return;
   const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
+  const settingsPanel = sidebar.querySelector(".sidebar-panel-settings");
   sidebar.classList.toggle("profile-open", Boolean(isOpen));
+  sidebar.classList.toggle("settings-open", false);
   if (profilePanel) {
     profilePanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  }
+  if (settingsPanel) {
+    settingsPanel.setAttribute("aria-hidden", "true");
+  }
+}
+
+function setSidebarSettingsOpen(sidebar, isOpen) {
+  if (!sidebar) return;
+  const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
+  const settingsPanel = sidebar.querySelector(".sidebar-panel-settings");
+  sidebar.classList.toggle("profile-open", Boolean(isOpen));
+  sidebar.classList.toggle("settings-open", Boolean(isOpen));
+  if (profilePanel) {
+    profilePanel.setAttribute("aria-hidden", isOpen ? "true" : "false");
+  }
+  if (settingsPanel) {
+    settingsPanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
   }
 }
 
@@ -651,11 +844,14 @@ function initSidebarProfile() {
   const menu = document.getElementById("sidebarProfileMenu");
   const editActionButton = document.getElementById("sidebarProfileEditAction");
   const logoutButton = document.getElementById("sidebarProfileLogout");
+  const settingsButton = document.getElementById("sidebarSettingsOpen");
+  const settingsBackButton = document.getElementById("sidebarSettingsBack");
   const editButtons = document.querySelectorAll("[data-profile-edit]");
 
   fillSidebarProfile();
   buildProfileLogoutModal();
   initQuickActionsMenu();
+  initSettingsControls();
   const route = getCurrentRouteInfo();
 
   if (!sidebar || !badge || !backButton || !menuTrigger || !menu || badge.dataset.profileBound === "true") {
@@ -700,6 +896,15 @@ function initSidebarProfile() {
     openProfileLogoutModal();
   });
 
+  settingsButton?.addEventListener("click", () => {
+    closeSidebarProfileMenu(menuTrigger, menu);
+    setSidebarSettingsOpen(sidebar, true);
+  });
+
+  settingsBackButton?.addEventListener("click", () => {
+    setSidebarProfileOpen(sidebar, true);
+  });
+
   if (emailButton && !emailButton.dataset.toggleBound) {
     emailButton.dataset.toggleBound = "true";
     emailButton.addEventListener("click", () => {
@@ -727,6 +932,10 @@ function initSidebarProfile() {
     }
     if (event.key === "Escape" && profileLogoutModal && !profileLogoutModal.hidden) {
       closeProfileLogoutModal();
+      return;
+    }
+    if (event.key === "Escape" && sidebar.classList.contains("settings-open")) {
+      setSidebarProfileOpen(sidebar, true);
       return;
     }
     if (event.key === "Escape" && sidebar.classList.contains("profile-open")) {

@@ -85,9 +85,114 @@
               <div class="sidebar-profile-actions">
                 <div class="sidebar-profile-actions-header">
                   <h3>Настройки</h3>
-                  <p class="muted">Кнопки добавим следующим шагом.</p>
+                  <p class="muted">Откройте отдельную панель в sidebar.</p>
                 </div>
+                <button class="button settings-launch-button" id="sidebarSettingsOpen" type="button">Открыть настройки</button>
               </div>
+            </div>
+          </div>
+          <div class="sidebar-panel sidebar-panel-settings" aria-hidden="true">
+            <div class="sidebar-header"><div class="sidebar-profile-title"><button class="icon-button page-back" id="sidebarSettingsBack" type="button" aria-label="Назад"></button><div><div class="brand">Настройки</div><div class="muted">Разделы и заглушки</div></div></div></div>
+            <div class="sidebar-profile-body sidebar-settings-body">
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>1. Профиль</h3><p class="muted">Основные данные аккаунта</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">Фото профиля <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Имя <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Username <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Bio / статус <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Ссылка на профиль <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Дата рождения <span>Опционально</span></button><button class="sidebar-settings-item" type="button">Смена пароля <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Смена почты <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section">
+                <div class="sidebar-settings-section-head">
+                  <h3>2. Внешний вид</h3>
+                  <p class="muted">Тема и визуальный стиль</p>
+                </div>
+                <div class="settings-list" id="settingsList">
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Светлая / тёмная тема</strong>
+                      <span>Переключает общую тему интерфейса.</span>
+                    </div>
+                    <select class="settings-select" data-setting-control="theme">
+                      <option value="light">Светлая</option>
+                      <option value="dark">Тёмная</option>
+                    </select>
+                  </div>
+                  <div class="sidebar-settings-item">
+                    <span>AMOLED black theme</span>
+                    <span>Скоро</span>
+                  </div>
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Accent color</strong>
+                      <span>Основной цвет кнопок, ссылок и акцентов.</span>
+                    </div>
+                    <input class="settings-color" data-setting-control="accentColor" type="color" aria-label="Accent color">
+                  </div>
+                  <div class="settings-item settings-item-range">
+                    <div class="settings-copy">
+                      <strong>Размер текста</strong>
+                      <span>Базовый размер шрифта для интерфейса.</span>
+                    </div>
+                    <div class="settings-range-wrap">
+                      <span class="settings-range-value" data-setting-value="textSize">16px</span>
+                      <input class="settings-range" data-setting-control="textSize" type="range" min="14" max="20" step="1">
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Glassmorphism / compact mode</strong>
+                      <span>Выбор между мягкими стеклянными поверхностями и плотным режимом.</span>
+                    </div>
+                    <select class="settings-select" data-setting-control="surfaceMode">
+                      <option value="glass">Glassmorphism</option>
+                      <option value="compact">Compact</option>
+                    </select>
+                  </div>
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Анимации интерфейса</strong>
+                      <span>Отключает лишнее движение и переходы.</span>
+                    </div>
+                    <label class="settings-switch" aria-label="Анимации интерфейса">
+                      <input data-setting-control="animations" type="checkbox">
+                      <span class="settings-switch-ui"></span>
+                    </label>
+                  </div>
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Обои чата</strong>
+                      <span>Фоновый паттерн для области сообщений.</span>
+                    </div>
+                    <select class="settings-select" data-setting-control="chatWallpaper">
+                      <option value="none">Нет</option>
+                      <option value="grid">Grid</option>
+                      <option value="aurora">Aurora</option>
+                      <option value="paper">Paper</option>
+                    </select>
+                  </div>
+                  <div class="settings-item settings-item-range">
+                    <div class="settings-copy">
+                      <strong>Прозрачность интерфейса</strong>
+                      <span>Уровень прозрачности стеклянных поверхностей.</span>
+                    </div>
+                    <div class="settings-range-wrap">
+                      <span class="settings-range-value" data-setting-value="transparency">62%</span>
+                      <input class="settings-range" data-setting-control="transparency" type="range" min="35" max="92" step="1">
+                    </div>
+                  </div>
+                  <div class="settings-item settings-item-range">
+                    <div class="settings-copy">
+                      <strong>Скругления UI</strong>
+                      <span>Радиус карточек, полей и кнопок.</span>
+                    </div>
+                    <div class="settings-range-wrap">
+                      <span class="settings-range-value" data-setting-value="uiRadius">24px</span>
+                      <input class="settings-range" data-setting-control="uiRadius" type="range" min="12" max="34" step="1">
+                    </div>
+                  </div>
+                  <button class="button button-secondary settings-reset-button" data-settings-reset="appearance" type="button">
+                    Вернуть внешний вид по умолчанию
+                  </button>
+                </div>
+              </section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>3. Чаты</h3><p class="muted">Поведение сообщений и списка чатов</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">Enter для отправки <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Shift+Enter новая строка <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Автозагрузка медиа <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Показывать превью ссылок <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Формат времени 12/24 <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Плотность сообщений <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Показывать аватарки <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Скрывать системные сообщения <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Закреплённые чаты <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Архив чатов <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>4. Уведомления</h3><p class="muted">Звуки, mute и превью</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">Звук сообщений <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Вибрация <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Desktop notifications <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Preview текста уведомлений <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Mute отдельных чатов <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Не беспокоить <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Звук звонков <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>5. Приватность</h3><p class="muted">Кто и что может видеть</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">Кто видит онлайн <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Кто видит last seen <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Кто может писать <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Кто может добавлять в группы <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Read receipts <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Typing status <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Скриншот protection <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Заблокированные пользователи <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>6. Безопасность</h3><p class="muted">Сессии, входы и защита</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">2FA <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Активные сессии <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Завершить все сессии <span>Скоро</span></button><button class="sidebar-settings-item" type="button">История входов <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Login alerts <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Device management <span>Скоро</span></button><button class="sidebar-settings-item" type="button">PIN-код приложения <span>Скоро</span></button></div></section>
             </div>
           </div>
         </div>

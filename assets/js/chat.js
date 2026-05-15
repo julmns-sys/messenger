@@ -679,6 +679,7 @@ function syncGroupChatTitleInState(chatId, nextTitle) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  applyAppSettings();
   requireAuth();
   bindLogout();
   fillUserBadge();
@@ -2541,6 +2542,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    if (!getAppSetting("enterToSend")) {
       return;
     }
 
