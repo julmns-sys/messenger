@@ -12,6 +12,7 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 socket_sessions = {}
+user_last_seen = {}
 
 
 def format_timestamp(value):
@@ -63,6 +64,32 @@ def get_user_room(user_id):
     return f"user_{int(user_id)}"
 
 
+def get_online_user_ids():
+    return {int(user_id) for user_id in socket_sessions.values() if user_id}
+
+
+def is_user_online(user_id):
+    if not user_id:
+        return False
+    return int(user_id) in get_online_user_ids()
+
+
+def get_user_last_seen(user_id):
+    if not user_id:
+        return None
+    return user_last_seen.get(int(user_id))
+
+
+def emit_presence_updated(user_id):
+    if not user_id:
+        return
+    socketio.emit("presence_updated", {
+        "user_id": int(user_id),
+        "is_online": is_user_online(user_id),
+        "last_seen": format_timestamp(get_user_last_seen(user_id))
+    })
+
+
 def emit_chat_list_updated_for_users(user_ids, chat_type, chat_id):
     payload = {
         "chat_type": chat_type,
@@ -78,7 +105,9 @@ def serialize_user_profile(user):
         "name": user["name"],
         "username": user["username"],
         "email": user["email"],
-        "bio": user["bio"]
+        "bio": user["bio"],
+        "is_online": is_user_online(user["id"]),
+        "last_seen": format_timestamp(get_user_last_seen(user["id"]))
     }
 
 
@@ -87,7 +116,9 @@ def serialize_public_user(user):
         "id": user["id"],
         "name": user["name"],
         "username": user["username"],
-        "bio": user["bio"]
+        "bio": user["bio"],
+        "is_online": is_user_online(user["id"]),
+        "last_seen": format_timestamp(get_user_last_seen(user["id"]))
     }
 
 
@@ -962,14 +993,21 @@ def handle_connect(auth):
         token = auth.get("token")
 
     user_id = user_id_from_token(token)
+    was_online = is_user_online(user_id)
     socket_sessions[request.sid] = user_id
     if user_id:
+        user_last_seen.pop(int(user_id), None)
         join_room(get_user_room(user_id))
+        if not was_online:
+            emit_presence_updated(user_id)
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    socket_sessions.pop(request.sid, None)
+    user_id = socket_sessions.pop(request.sid, None)
+    if user_id and not is_user_online(user_id):
+        user_last_seen[int(user_id)] = datetime.utcnow()
+        emit_presence_updated(user_id)
 
 
 @socketio.on("join_chat")
@@ -1348,7 +1386,14 @@ def search_users():
     """, (user_id, user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
     conn.close()
 
-    return jsonify([dict(u) for u in users])
+    return jsonify([
+        {
+            **dict(user),
+            "is_online": is_user_online(user["id"]),
+            "last_seen": format_timestamp(get_user_last_seen(user["id"]))
+        }
+        for user in users
+    ])
 
 
 @app.get("/contacts")
@@ -1380,7 +1425,14 @@ def get_contacts():
     """, (user_id, user_id, user_id, user_id)).fetchall()
     conn.close()
 
-    return jsonify([dict(contact) for contact in contacts])
+    return jsonify([
+        {
+            **dict(contact),
+            "is_online": is_user_online(contact["id"]),
+            "last_seen": format_timestamp(get_user_last_seen(contact["id"]))
+        }
+        for contact in contacts
+    ])
 
 
 @app.post("/contacts")
@@ -1430,7 +1482,9 @@ def add_contact():
         "name": target_user["name"],
         "username": target_user["username"],
         "chat_id": chat["id"] if chat else None,
-        "is_contact": True
+        "is_contact": True,
+        "is_online": is_user_online(target_user["id"]),
+        "last_seen": format_timestamp(get_user_last_seen(target_user["id"]))
     }), 201
 
 
@@ -1481,6 +1535,7 @@ def get_chats():
     direct_chats = conn.execute("""
         SELECT
             c.id,
+            u.id AS user_id,
             u.username,
             u.name AS title,
             (
@@ -1583,8 +1638,11 @@ def get_chats():
         {
             "id": chat["id"],
             "type": "direct",
+            "user_id": chat["user_id"],
             "username": chat["username"],
             "title": chat["title"],
+            "is_online": is_user_online(chat["user_id"]),
+            "last_seen": format_timestamp(get_user_last_seen(chat["user_id"])),
             "last_message": {"text": chat["last_message_text"]} if chat["last_message_text"] is not None else None,
             "updated_at": format_timestamp(chat["updated_at"]),
             "unread_count": chat["unread_count"] or 0
@@ -1739,6 +1797,8 @@ def get_chat(chat_id):
         "name": chat["name"],
         "username": chat["username"],
         "bio": chat["bio"],
+        "is_online": is_user_online(chat["user_id"]),
+        "last_seen": format_timestamp(get_user_last_seen(chat["user_id"])),
         "started_at": format_timestamp(chat["created_at"]),
         "messages_count": chat["messages_count"] or 0,
         "has_more_messages": has_more_messages,

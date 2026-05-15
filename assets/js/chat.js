@@ -366,13 +366,98 @@ function buildDeleteUndoToast() {
   return toast;
 }
 
-function setChatTitle(title, subtitle = "") {
+function setChatTitle(title, subtitle = "", desktopSubtitle = "", desktopPresence = "") {
   const titleNode = document.getElementById("chatTitle");
   const subtitleNode = document.getElementById("chatSubtitle");
+  const desktopSubtitleNode = document.getElementById("chatSubtitleDesktop");
+  const desktopPresenceNode = document.getElementById("chatPresenceDesktop");
   const avatarNode = document.getElementById("chatAvatar");
   if (titleNode) titleNode.textContent = title;
-  if (subtitleNode) subtitleNode.textContent = subtitle;
+  if (subtitleNode) subtitleNode.innerHTML = subtitle;
+  if (desktopSubtitleNode) desktopSubtitleNode.textContent = desktopSubtitle;
+  if (desktopPresenceNode) desktopPresenceNode.innerHTML = desktopPresence;
   if (avatarNode) avatarNode.textContent = initials(title || "Чат");
+}
+
+function formatPresenceDate(value) {
+  const date = parseUtcDate(value);
+  if (!date) {
+    return "";
+  }
+
+  return date.toLocaleDateString("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "long"
+  });
+}
+
+function formatPresenceHours(hours) {
+  const value = Math.max(1, Math.floor(hours));
+  return `был(а) в сети ${value} ч назад`;
+}
+
+function formatPresenceText(info = {}) {
+  if (info?.is_online) {
+    return "в сети";
+  }
+
+  const lastSeenDate = parseUtcDate(info?.last_seen);
+  if (!lastSeenDate) {
+    return "не в сети";
+  }
+
+  const diffMs = Math.max(0, Date.now() - lastSeenDate.getTime());
+  const diffMinutes = Math.floor(diffMs / 60000);
+
+  if (diffMinutes < 1) {
+    return "был(а) в сети только что";
+  }
+
+  if (diffMinutes < 60) {
+    return `был(а) в сети ${diffMinutes} мин назад`;
+  }
+
+  if (diffMinutes < 24 * 60) {
+    return formatPresenceHours(diffMinutes / 60);
+  }
+
+  return `был(а) в сети ${formatPresenceDate(info.last_seen)}`;
+}
+
+function getPresenceState(info = {}) {
+  return info?.is_online ? "online" : "offline";
+}
+
+function renderPresenceBadge(info = {}, options = {}) {
+  const {
+    showDot = true,
+    compact = false,
+    includeUsername = false
+  } = options;
+  const state = getPresenceState(info);
+  const text = formatPresenceText(info);
+  const username = includeUsername && info?.username ? `<span class="presence-meta">@${escapeHtml(info.username)}</span>` : "";
+  const dot = showDot ? `<span class="presence-dot ${state}" aria-hidden="true"></span>` : "";
+  const compactClass = compact ? " compact" : "";
+
+  return `
+    <span class="presence-badge ${state}${compactClass}">
+      ${dot}${username}<span class="presence-label">${escapeHtml(text)}</span>
+    </span>
+  `;
+}
+
+function renderDirectChatSubtitle(info) {
+  return renderPresenceBadge(info, { compact: true, includeUsername: false, showDot: false });
+}
+
+function renderDirectChatDesktopPresence(info) {
+  return renderPresenceBadge(info, { compact: true, includeUsername: false, showDot: false });
+}
+
+function renderDirectChatDesktopSubtitle(info) {
+  return info?.username ? `@${info.username}` : "";
 }
 
 function fillThreadInfoPanel(info, chatType) {
@@ -403,9 +488,11 @@ function fillThreadInfoPanel(info, chatType) {
   avatarNode.textContent = initials(title);
   avatarNode.classList.toggle("group-avatar", threadInfoType === "group");
   nameNode.textContent = title;
-  handleNode.textContent = threadInfoType === "group"
-    ? `${info?.members_count || 0} участников`
-    : info?.username ? `@${info.username}` : "Личный чат";
+  if (threadInfoType === "group") {
+    handleNode.textContent = `${info?.members_count || 0} участников`;
+  } else {
+    handleNode.innerHTML = renderPresenceBadge(info, { includeUsername: true, showDot: false });
+  }
   startedAtNode.textContent = formatThreadInfoDate(info?.started_at);
   messagesCountNode.textContent = formatThreadInfoCount(info?.messages_count);
 
@@ -1276,10 +1363,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function renderPendingDirectChat(user) {
     const title = user?.name || user?.username || "Чат";
-    const subtitle = user?.username ? `@${user.username}` : "";
+    const subtitle = renderDirectChatSubtitle(user);
+    const desktopSubtitle = renderDirectChatDesktopSubtitle(user);
+    const desktopPresence = renderDirectChatDesktopPresence(user);
     currentThreadInfo = user ? { ...user, title } : null;
     setActiveThreadInfoView(currentThreadInfo, chatType);
-    setChatTitle(title, subtitle);
+    setChatTitle(title, subtitle, desktopSubtitle, desktopPresence);
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
     renderMessages(messagesNode, [], currentUser.id, chatType);
@@ -1855,14 +1944,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     const title = currentChat?.title || data.title || data.name || data.username || "Чат";
     const subtitle = chatType === "group"
       ? `${(data.members_count || data.members?.length || 0)} участников`
-      : data.username ? `@${data.username}` : "в сети";
+      : renderDirectChatSubtitle(data);
+    const desktopSubtitle = chatType === "group" ? "" : renderDirectChatDesktopSubtitle(data);
+    const desktopPresence = chatType === "group" ? "" : renderDirectChatDesktopPresence(data);
 
     currentThreadInfo = {
       ...data,
       title
     };
     setActiveThreadInfoView(currentThreadInfo, chatType);
-    setChatTitle(title, subtitle);
+    setChatTitle(title, subtitle, desktopSubtitle, desktopPresence);
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
     const nextMessages = data.messages || [];
@@ -2014,6 +2105,52 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         window.location.href = getChatsRoute();
+      });
+
+      socket.on("presence_updated", async (data) => {
+        const targetUserId = String(data?.user_id || "");
+        const isOnline = Boolean(data?.is_online);
+        const lastSeen = data?.last_seen || null;
+
+        let shouldRerender = false;
+
+        if (currentThreadInfo && String(currentThreadInfo.user_id || currentThreadInfo.id || "") === targetUserId) {
+          currentThreadInfo = {
+            ...currentThreadInfo,
+            is_online: isOnline,
+            last_seen: lastSeen
+          };
+          shouldRerender = true;
+        }
+
+        if (activeThreadInfoType === "direct" && activeThreadInfoView && String(activeThreadInfoView.user_id || activeThreadInfoView.id || "") === targetUserId) {
+          activeThreadInfoView = {
+            ...activeThreadInfoView,
+            is_online: isOnline,
+            last_seen: lastSeen
+          };
+          shouldRerender = true;
+        }
+
+        if (chatType === "direct" && shouldRerender && currentThreadInfo) {
+          const title = currentThreadInfo.title || currentThreadInfo.name || currentThreadInfo.username || "Чат";
+          setChatTitle(
+            title,
+            renderDirectChatSubtitle(currentThreadInfo),
+            renderDirectChatDesktopSubtitle(currentThreadInfo),
+            renderDirectChatDesktopPresence(currentThreadInfo)
+          );
+        }
+
+        if (shouldRerender) {
+          fillThreadInfoPanel(
+            activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
+            activeThreadInfoType === chatType ? chatType : activeThreadInfoType
+          );
+          updateThreadInviteControls();
+        }
+
+        await loadChats("chatList", { showLoading: false });
       });
 
       socket.on("group_members_updated", async (data) => {

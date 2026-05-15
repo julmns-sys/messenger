@@ -813,6 +813,7 @@ function initChatListRealtime(listId = "chatList") {
   chatListRealtimeSocket.on("chat_deleted", refreshSidebar);
   chatListRealtimeSocket.on("group_updated", refreshSidebar);
   chatListRealtimeSocket.on("group_members_updated", refreshSidebar);
+  chatListRealtimeSocket.on("presence_updated", refreshSidebar);
 }
 
 async function loadChats(listId = "chatList", options = {}) {
@@ -1782,6 +1783,7 @@ function renderChats(list, chats) {
       const name = chat.title || chat.username || chat.name || "Чат";
       const isGroup = chat.type === "group";
       const customTagMarkup = getChatTagMarkup(chat.id, chat.type || "direct");
+      const isOnline = !isGroup && Boolean(chat.is_online);
       const active = route.page === "group-chat"
         ? isGroup && String(chat.id) === String(route.chatId)
         : route.page === "direct-chat"
@@ -1801,7 +1803,7 @@ function renderChats(list, chats) {
         <a class="chat-item ${active ? "active" : ""}" href="${href}" data-chat-id="${escapeHtml(String(chat.id))}" data-chat-type="${escapeHtml(chat.type || "direct")}">
           <div class="avatar ${isGroup ? "group-avatar" : ""}">
             ${escapeHtml(initials(name))}
-            ${isGroup ? '<span class="chat-kind-badge" aria-hidden="true">👥</span>' : ""}
+            ${isGroup ? '<span class="chat-kind-badge" aria-hidden="true">👥</span>' : isOnline ? '<span class="presence-dot online" aria-hidden="true"></span>' : ""}
           </div>
           <div class="chat-meta">
             <div class="chat-main">
