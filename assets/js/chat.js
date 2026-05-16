@@ -2,6 +2,182 @@ const renderedMessages = new Set();
 const BOTTOM_THRESHOLD = 24;
 const PAGE_SIZE = 30;
 const TOP_LOAD_THRESHOLD = 80;
+const URL_PATTERN = /((?:https?:\/\/|www\.)[^\s<]+)/gi;
+const linkPreviewCache = new Map();
+const linkPreviewRequests = new Map();
+
+function normalizeExternalUrl(value = "") {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(rawValue)) {
+    return rawValue;
+  }
+
+  if (/^www\./i.test(rawValue)) {
+    return `https://${rawValue}`;
+  }
+
+  return "";
+}
+
+function renderMessageText(text = "") {
+  const source = String(text || "");
+  if (!source) {
+    return "";
+  }
+
+  let lastIndex = 0;
+  let html = "";
+
+  source.replace(URL_PATTERN, (match, _group, offset) => {
+    const safeUrl = normalizeExternalUrl(match);
+    html += escapeHtml(source.slice(lastIndex, offset));
+    if (safeUrl) {
+      html += `<a class="message-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(match)}</a>`;
+    } else {
+      html += escapeHtml(match);
+    }
+    lastIndex = offset + match.length;
+    return match;
+  });
+
+  html += escapeHtml(source.slice(lastIndex));
+  return html;
+}
+
+function extractFirstUrl(text = "") {
+  const source = String(text || "");
+  const match = source.match(URL_PATTERN);
+  if (!match?.length) {
+    return "";
+  }
+  return normalizeExternalUrl(match[0]);
+}
+
+function renderMessagePreviewPlaceholder(url = "") {
+  if (!url) {
+    return "";
+  }
+
+  return `
+    <a
+      class="message-link-preview is-loading"
+      href="${escapeHtml(url)}"
+      target="_blank"
+      rel="noopener noreferrer"
+      data-message-link-preview="true"
+      data-preview-url="${escapeHtml(url)}"
+    >
+      <span class="message-link-preview-domain">${escapeHtml(urlparseHost(url))}</span>
+      <strong class="message-link-preview-title">Загружаем preview...</strong>
+      <span class="message-link-preview-description">Подготавливаем карточку ссылки</span>
+    </a>
+  `;
+}
+
+function urlparseHost(url = "") {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
+function renderMessagePreviewCard(preview = {}, fallbackUrl = "") {
+  const url = preview?.url || fallbackUrl;
+  const domain = preview?.site_name || preview?.domain || urlparseHost(url);
+  const title = preview?.title || urlparseHost(url);
+  const description = preview?.description || "";
+
+  return `
+    <a
+      class="message-link-preview"
+      href="${escapeHtml(url)}"
+      target="_blank"
+      rel="noopener noreferrer"
+      data-message-link-preview="true"
+      data-preview-url="${escapeHtml(url)}"
+    >
+      <span class="message-link-preview-domain">${escapeHtml(domain)}</span>
+      <strong class="message-link-preview-title">${escapeHtml(title)}</strong>
+      ${description ? `<span class="message-link-preview-description">${escapeHtml(description)}</span>` : ""}
+    </a>
+  `;
+}
+
+async function fetchLinkPreview(url = "") {
+  if (!url) {
+    return null;
+  }
+  if (linkPreviewCache.has(url)) {
+    return linkPreviewCache.get(url);
+  }
+  if (linkPreviewRequests.has(url)) {
+    return linkPreviewRequests.get(url);
+  }
+
+  const request = apiFetch(`/link-preview?url=${encodeURIComponent(url)}`)
+    .then((preview) => {
+      linkPreviewCache.set(url, preview);
+      linkPreviewRequests.delete(url);
+      return preview;
+    })
+    .catch((error) => {
+      linkPreviewRequests.delete(url);
+      throw error;
+    });
+
+  linkPreviewRequests.set(url, request);
+  return request;
+}
+
+function hydrateLinkPreviews(container) {
+  if (!container) {
+    return;
+  }
+
+  container.querySelectorAll("[data-message-link-preview]").forEach((node) => {
+    const url = String(node.dataset.previewUrl || "").trim();
+    if (!url || node.dataset.previewResolved === "true") {
+      return;
+    }
+
+    const cachedPreview = linkPreviewCache.get(url);
+    if (cachedPreview) {
+      node.outerHTML = renderMessagePreviewCard(cachedPreview, url);
+      return;
+    }
+
+    node.dataset.previewResolved = "pending";
+    fetchLinkPreview(url)
+      .then((preview) => {
+        const targetNode = container.querySelector(`[data-message-link-preview][data-preview-url="${CSS.escape(url)}"]`);
+        if (!targetNode) {
+          return;
+        }
+        targetNode.outerHTML = renderMessagePreviewCard(preview, url);
+      })
+      .catch(() => {
+        const targetNode = container.querySelector(`[data-message-link-preview][data-preview-url="${CSS.escape(url)}"]`);
+        if (!targetNode) {
+          return;
+        }
+        targetNode.classList.remove("is-loading");
+        targetNode.dataset.previewResolved = "true";
+        const titleNode = targetNode.querySelector(".message-link-preview-title");
+        const descriptionNode = targetNode.querySelector(".message-link-preview-description");
+        if (titleNode) {
+          titleNode.textContent = urlparseHost(url);
+        }
+        if (descriptionNode) {
+          descriptionNode.textContent = "Открыть ссылку";
+        }
+      });
+  });
+}
 
 function getMessageKey(message) {
   if (message.id != null) {
@@ -99,10 +275,13 @@ function renderMessageItem(message, currentUserId, chatType) {
     `;
   }
 
+  const previewUrl = extractFirstUrl(message.text || "");
+
   return `
     <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="text" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
-      <p class="message-text">${escapeHtml(message.text || "")}</p>
+      ${renderMessagePreviewPlaceholder(previewUrl)}
+      <p class="message-text">${renderMessageText(message.text || "")}</p>
       <div class="message-meta">
         ${renderEditedIndicator(message)}
         <span class="message-time">${escapeHtml(formatTime(message.created_at))}</span>
@@ -116,7 +295,7 @@ function renderPendingMessageItem(text, chatType) {
   const directClass = chatType === "direct" ? " message-direct" : "";
   return `
     <article class="message own pending${directClass}" data-pending-message="true" data-own="true">
-      <p class="message-text">${escapeHtml(text || "")}</p>
+      <p class="message-text">${renderMessageText(text || "")}</p>
       <div class="message-meta">
         <span class="message-status-indicator" aria-hidden="true">
           <span></span>
@@ -170,6 +349,7 @@ function renderMessages(container, messages, currentUserId, chatType) {
     })
     .join("");
   rebuildDateDividers(container);
+  hydrateLinkPreviews(container);
 }
 
 function appendMessage(container, message, currentUserId, chatType) {
@@ -186,6 +366,7 @@ function appendMessage(container, message, currentUserId, chatType) {
 
   container.insertAdjacentHTML("beforeend", renderMessageItem(message, currentUserId, chatType));
   rebuildDateDividers(container);
+  hydrateLinkPreviews(container);
   return true;
 }
 
@@ -218,6 +399,7 @@ function prependMessages(container, messages, currentUserId, chatType) {
 
   container.insertAdjacentHTML("afterbegin", nextHtml.join(""));
   rebuildDateDividers(container);
+  hydrateLinkPreviews(container);
   return insertedCount;
 }
 
@@ -260,6 +442,7 @@ function replaceMessageNode(container, message, currentUserId, chatType) {
 
   messageNode.outerHTML = renderMessageItem(message, currentUserId, chatType);
   rebuildDateDividers(container);
+  hydrateLinkPreviews(container);
   return true;
 }
 

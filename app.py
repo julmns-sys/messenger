@@ -1,4 +1,8 @@
 from datetime import date, datetime
+from html import unescape
+import re
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from flask import Flask, request, jsonify, send_from_directory, redirect, render_template
 from flask_cors import CORS
@@ -14,6 +18,8 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 socket_sessions = {}
 user_last_seen = {}
 typing_sessions = {}
+link_preview_cache = {}
+LINK_PREVIEW_TIMEOUT = 4
 
 
 def format_timestamp(value):
@@ -22,6 +28,93 @@ def format_timestamp(value):
     if isinstance(value, date):
         return value.isoformat()
     return value
+
+
+def collapse_spaces(value):
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def strip_html_tags(value):
+    return re.sub(r"<[^>]+>", " ", str(value or ""))
+
+
+def extract_meta_content(html, names):
+    for name in names:
+        patterns = [
+            rf'<meta[^>]+property=["\']{re.escape(name)}["\'][^>]+content=["\']([^"\']+)["\']',
+            rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']{re.escape(name)}["\']',
+            rf'<meta[^>]+name=["\']{re.escape(name)}["\'][^>]+content=["\']([^"\']+)["\']',
+            rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']{re.escape(name)}["\']',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html, flags=re.IGNORECASE)
+            if match:
+                return collapse_spaces(unescape(strip_html_tags(match.group(1))))
+    return ""
+
+
+def extract_html_title(html):
+    match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    return collapse_spaces(unescape(strip_html_tags(match.group(1))))
+
+
+def normalize_preview_url(raw_url):
+    value = str(raw_url or "").strip()
+    if not value:
+        return ""
+    if value.startswith("www."):
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return value
+
+
+def build_link_preview(url):
+    normalized_url = normalize_preview_url(url)
+    if not normalized_url:
+        return None
+
+    cached = link_preview_cache.get(normalized_url)
+    if cached:
+        return cached
+
+    request_headers = {
+        "User-Agent": "ChatikLinkPreview/1.0",
+        "Accept-Language": "ru,en;q=0.8"
+    }
+    req = Request(normalized_url, headers=request_headers)
+    with urlopen(req, timeout=LINK_PREVIEW_TIMEOUT) as response:
+        content_type = response.headers.get("Content-Type", "")
+        if "text/html" not in content_type:
+            preview = {
+                "url": normalized_url,
+                "domain": urlparse(normalized_url).netloc,
+                "title": urlparse(normalized_url).netloc,
+                "description": "",
+                "site_name": ""
+            }
+            link_preview_cache[normalized_url] = preview
+            return preview
+
+        charset = response.headers.get_content_charset() or "utf-8"
+        raw_html = response.read(65536)
+        html = raw_html.decode(charset, errors="replace")
+
+    title = extract_meta_content(html, ["og:title", "twitter:title"]) or extract_html_title(html) or urlparse(normalized_url).netloc
+    description = extract_meta_content(html, ["og:description", "description", "twitter:description"])
+    site_name = extract_meta_content(html, ["og:site_name"])
+    preview = {
+        "url": normalized_url,
+        "domain": urlparse(normalized_url).netloc,
+        "title": title[:180],
+        "description": description[:280],
+        "site_name": site_name[:120]
+    }
+    link_preview_cache[normalized_url] = preview
+    return preview
 
 
 def persist_token(token, user_id):
@@ -1823,6 +1916,28 @@ def get_user(target_user_id):
         return jsonify({"message": "Пользователь не найден"}), 404
 
     return jsonify(serialize_user_panel_payload(user))
+
+
+@app.get("/link-preview")
+def get_link_preview():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    url = request.args.get("url", "")
+    normalized_url = normalize_preview_url(url)
+    if not normalized_url:
+        return jsonify({"message": "Некорректная ссылка"}), 400
+
+    try:
+        preview = build_link_preview(normalized_url)
+    except Exception:
+        return jsonify({"message": "Не удалось загрузить preview ссылки"}), 502
+
+    if not preview:
+        return jsonify({"message": "Preview недоступен"}), 404
+
+    return jsonify(preview)
 
 
 @app.get("/chats")
