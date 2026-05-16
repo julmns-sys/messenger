@@ -353,6 +353,14 @@ def emit_chat_list_updated_for_users(user_ids, chat_type, chat_id):
         socketio.emit("chat_list_updated", payload, room=get_user_room(user_id))
 
 
+def emit_inbox_message_for_users(user_ids, payload, *, exclude_user_id=None):
+    excluded = int(exclude_user_id) if exclude_user_id else None
+    for user_id in {int(user_id) for user_id in user_ids if user_id}:
+        if excluded is not None and user_id == excluded:
+            continue
+        socketio.emit("inbox_message", payload, room=get_user_room(user_id))
+
+
 def serialize_user_profile(user):
     return {
         "id": user["id"],
@@ -1462,6 +1470,13 @@ def emit_group_new_message(message, group_id):
     }, room=f"group_{group_id}")
     conn = get_db()
     member_ids = get_group_member_ids(conn, group_id)
+    group = conn.execute("SELECT title FROM groups WHERE id = %s", (group_id,)).fetchone()
+    emit_inbox_message_for_users(member_ids, {
+        **serialize_group_message(message),
+        "chat_type": "group",
+        "chat_id": int(group_id),
+        "thread_title": row_value(group, "title", "") or "Группа"
+    }, exclude_user_id=message["sender_id"])
     conn.close()
     emit_chat_list_updated_for_users(member_ids, "group", group_id)
 
@@ -2714,9 +2729,15 @@ def create_chat_message(chat_id):
         JOIN users u ON u.id = m.sender_id
         WHERE m.id = %s
     """, (cur.lastrowid,)).fetchone()
-    conn.close()
 
     message_data = serialize_direct_message(message)
+    emit_inbox_message_for_users(member_ids, {
+        **message_data,
+        "chat_type": "direct",
+        "chat_id": int(chat_id),
+        "thread_title": message["sender_name"] or "Чат"
+    }, exclude_user_id=user_id)
+    conn.close()
 
     socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
     emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
@@ -2794,9 +2815,15 @@ def create_chat_voice_message(chat_id):
         JOIN users u ON u.id = m.sender_id
         WHERE m.id = %s
     """, (cur.lastrowid,)).fetchone()
-    conn.close()
 
     message_data = serialize_direct_message(message)
+    emit_inbox_message_for_users(member_ids, {
+        **message_data,
+        "chat_type": "direct",
+        "chat_id": int(chat_id),
+        "thread_title": message["sender_name"] or "Чат"
+    }, exclude_user_id=user_id)
+    conn.close()
     socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
     emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
     return jsonify(message_data), 201

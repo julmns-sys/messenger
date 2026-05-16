@@ -14,6 +14,8 @@ let chatListTouchTarget = null;
 let chatListRealtimeSocket = null;
 let chatListRealtimeBoundListId = null;
 let chatListRefreshTimer = null;
+let incomingNotificationAudioContext = null;
+let lastIncomingNotificationSoundAt = 0;
 let chatDeleteUndoToast = null;
 let chatTagEditorModal = null;
 let groupOwnerLeaveModal = null;
@@ -575,6 +577,139 @@ function showAppToast(message, options = {}) {
       toast.remove();
     }, 180);
   }, options.duration || 1600);
+}
+
+function getLiveNotificationSettings() {
+  return normalizeAppSettings(readAppSettings());
+}
+
+function getIncomingNotificationTitle(payload = {}) {
+  const threadTitle = String(payload.thread_title || "").trim();
+  if ((payload.chat_type || "") === "group") {
+    const senderName = String(payload.sender_name || "Новый участник").trim() || "Новый участник";
+    return threadTitle ? `${senderName} • ${threadTitle}` : senderName;
+  }
+  return threadTitle || String(payload.sender_name || "Чат").trim() || "Чат";
+}
+
+function getIncomingNotificationBody(payload = {}, settings = getLiveNotificationSettings()) {
+  const messageType = String(payload.message_type || "text");
+  const fallbackLabel = messageType === "voice" ? "Голосовое сообщение" : "Новое сообщение";
+  if (!settings.notificationTextPreview) {
+    return fallbackLabel;
+  }
+
+  if (messageType === "voice") {
+    return "Голосовое сообщение";
+  }
+
+  const text = String(payload.text || "").trim();
+  return text || fallbackLabel;
+}
+
+function playIncomingNotificationSound() {
+  const settings = getLiveNotificationSettings();
+  if (settings.doNotDisturb || !settings.notificationSound) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastIncomingNotificationSoundAt < 220) {
+    return;
+  }
+  lastIncomingNotificationSoundAt = now;
+
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      return;
+    }
+
+    incomingNotificationAudioContext = incomingNotificationAudioContext || new AudioContextClass();
+    const audioContext = incomingNotificationAudioContext;
+    if (audioContext.state === "suspended") {
+      void audioContext.resume().catch(() => {});
+    }
+
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(660, audioContext.currentTime + 0.09);
+    gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.035, audioContext.currentTime + 0.015);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.14);
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.15);
+  } catch {
+    // Ignore browser autoplay or audio context failures.
+  }
+}
+
+function showIncomingDesktopNotification(payload = {}) {
+  const settings = getLiveNotificationSettings();
+  if (settings.doNotDisturb || !settings.desktopNotifications) {
+    return;
+  }
+
+  if (typeof window.Notification !== "function" || window.Notification.permission !== "granted") {
+    return;
+  }
+
+  if (document.visibilityState === "visible" && document.hasFocus()) {
+    return;
+  }
+
+  try {
+    const notification = new window.Notification(getIncomingNotificationTitle(payload), {
+      body: getIncomingNotificationBody(payload, settings),
+      tag: `${payload.chat_type || "chat"}:${payload.chat_id || "unknown"}`,
+      silent: true
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+
+    window.setTimeout(() => {
+      notification.close();
+    }, 5000);
+  } catch {
+    // Ignore notification API failures.
+  }
+}
+
+function handleGlobalIncomingNotification(payload = {}) {
+  const currentUser = getCurrentUser() || {};
+  if (!payload || String(payload.sender_id || "") === String(currentUser.id || "")) {
+    return;
+  }
+
+  if (String(payload.message_type || "text") === "system") {
+    return;
+  }
+
+  const route = getCurrentRouteInfo();
+  const payloadChatType = String(payload.chat_type || "direct");
+  const payloadChatId = String(payload.chat_id || "");
+  const currentRouteChatType = String(document.body.dataset.chatType || route.chatType || "direct");
+  const currentRouteChatId = String(route.chatId || "");
+
+  if (
+    route.chatType
+    && currentRouteChatId
+    && payloadChatId
+    && payloadChatId === currentRouteChatId
+    && payloadChatType === currentRouteChatType
+  ) {
+    return;
+  }
+
+  playIncomingNotificationSound();
+  showIncomingDesktopNotification(payload);
 }
 
 function closeUserProfileActionMenus() {
@@ -1505,6 +1640,10 @@ function initChatListRealtime(listId = "chatList") {
   chatListRealtimeSocket.on("group_updated", refreshSidebar);
   chatListRealtimeSocket.on("group_members_updated", refreshSidebar);
   chatListRealtimeSocket.on("presence_updated", refreshSidebar);
+  chatListRealtimeSocket.on("inbox_message", (payload) => {
+    handleGlobalIncomingNotification(payload);
+    refreshSidebar();
+  });
 }
 
 async function loadChats(listId = "chatList", options = {}) {

@@ -1204,8 +1204,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   };
   const selectedMessageIds = new Set();
   const committedDeleteEchoIds = new Set();
-  let incomingNotificationAudioContext = null;
-  let lastIncomingNotificationSoundAt = 0;
 
   if (!messagesNode || !composer || !input || !contentBody || !composerWrap || !contentNode) {
     return;
@@ -1214,129 +1212,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   composer.parentNode.insertBefore(editBanner, composer);
   contentBody.insertBefore(selectionToolbar, composerWrap);
   contentBody.appendChild(deleteUndoToast);
-
-  function shouldHandleIncomingMessageNotification(message) {
-    if (!message || String(message.sender_id || "") === String(currentUser.id)) {
-      return false;
-    }
-
-    if (String(message.message_type || "text") === "system") {
-      return false;
-    }
-
-    return true;
-  }
-
-  function getIncomingMessageNotificationTitle(message) {
-    const threadTitle = String(currentThreadInfo?.title || titleNode?.textContent || "Чат").trim() || "Чат";
-    if (chatType === "group") {
-      const senderName = String(message.sender_name || "Новый участник").trim() || "Новый участник";
-      return `${senderName} • ${threadTitle}`;
-    }
-    return threadTitle;
-  }
-
-  function getIncomingMessageNotificationBody(message, settings) {
-    const messageType = String(message?.message_type || "text");
-    const fallbackLabel = messageType === "voice" ? "Новое голосовое сообщение" : "Новое сообщение";
-    if (!settings.notificationTextPreview) {
-      return fallbackLabel;
-    }
-
-    if (messageType === "voice") {
-      return "Голосовое сообщение";
-    }
-
-    const text = String(message?.text || "").trim();
-    return text || fallbackLabel;
-  }
-
-  function playIncomingMessageSound() {
-    const settings = getLiveNotificationSettings();
-    if (settings.doNotDisturb || !settings.notificationSound) {
-      return;
-    }
-
-    const now = Date.now();
-    if (now - lastIncomingNotificationSoundAt < 220) {
-      return;
-    }
-    lastIncomingNotificationSoundAt = now;
-
-    try {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextClass) {
-        return;
-      }
-
-      incomingNotificationAudioContext = incomingNotificationAudioContext || new AudioContextClass();
-      const audioContext = incomingNotificationAudioContext;
-      if (audioContext.state === "suspended") {
-        void audioContext.resume().catch(() => {});
-      }
-
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(660, audioContext.currentTime + 0.09);
-      gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.035, audioContext.currentTime + 0.015);
-      gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.14);
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      oscillator.start(audioContext.currentTime);
-      oscillator.stop(audioContext.currentTime + 0.15);
-    } catch {
-      // Ignore notification audio failures caused by browser autoplay restrictions.
-    }
-  }
-
-  function showIncomingDesktopNotification(message) {
-    const settings = getLiveNotificationSettings();
-    if (settings.doNotDisturb || !settings.desktopNotifications) {
-      return;
-    }
-
-    if (typeof window.Notification !== "function" || window.Notification.permission !== "granted") {
-      return;
-    }
-
-    if (document.visibilityState === "visible" && document.hasFocus()) {
-      return;
-    }
-
-    try {
-      const notification = new window.Notification(
-        getIncomingMessageNotificationTitle(message),
-        {
-          body: getIncomingMessageNotificationBody(message, settings),
-          tag: `${chatType}:${chatId}`,
-          silent: true
-        }
-      );
-
-      notification.onclick = () => {
-        window.focus();
-        notification.close();
-      };
-
-      window.setTimeout(() => {
-        notification.close();
-      }, 5000);
-    } catch {
-      // Ignore notification API failures.
-    }
-  }
-
-  function handleIncomingMessageNotification(message) {
-    if (!shouldHandleIncomingMessageNotification(message)) {
-      return;
-    }
-
-    playIncomingMessageSound();
-    showIncomingDesktopNotification(message);
-  }
 
   function setComposerBusyState(isBusy) {
     input.disabled = isBusy;
@@ -3134,7 +3009,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         if (String(message.sender_id) !== String(currentUser.id)) {
-          handleIncomingMessageNotification(message);
           markCurrentChatAsRead();
         }
 
