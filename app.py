@@ -20,6 +20,7 @@ user_last_seen = {}
 typing_sessions = {}
 link_preview_cache = {}
 LINK_PREVIEW_TIMEOUT = 4
+MESSAGE_URL_PATTERN = re.compile(r"((?:https?://|www\.)[^\s<]+)", flags=re.IGNORECASE)
 
 
 def format_timestamp(value):
@@ -71,6 +72,92 @@ def normalize_preview_url(raw_url):
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
     return value
+
+
+def extract_message_preview(text):
+    source = str(text or "").strip()
+    if not source:
+        return None
+
+    match = MESSAGE_URL_PATTERN.search(source)
+    if not match:
+        return None
+
+    normalized_url = normalize_preview_url(match.group(1))
+    if not normalized_url:
+        return None
+
+    try:
+        return build_link_preview(normalized_url)
+    except Exception:
+        return {
+            "url": normalized_url,
+            "domain": urlparse(normalized_url).netloc,
+            "title": urlparse(normalized_url).netloc,
+            "description": "",
+            "site_name": ""
+        }
+
+
+def serialize_message_link_preview(message):
+    preview_url = row_value(message, "preview_url", "")
+    if not preview_url:
+        return None
+
+    preview = {
+        "url": preview_url,
+        "domain": urlparse(preview_url).netloc,
+        "title": row_value(message, "preview_title", "") or urlparse(preview_url).netloc,
+        "description": row_value(message, "preview_description", "") or "",
+        "site_name": row_value(message, "preview_site_name", "") or ""
+    }
+    return preview
+
+
+def ensure_message_preview_data(conn, table_name, message):
+    if not message:
+        return False
+
+    if row_value(message, "preview_url"):
+        return False
+
+    preview = extract_message_preview(row_value(message, "text", ""))
+    if not preview:
+        return False
+
+    message["preview_url"] = preview["url"]
+    message["preview_title"] = preview["title"][:255]
+    message["preview_description"] = preview["description"][:500]
+    message["preview_site_name"] = preview["site_name"][:255]
+
+    if conn and row_value(message, "id"):
+        conn.execute(f"""
+            UPDATE {table_name}
+            SET
+                preview_url = %s,
+                preview_title = %s,
+                preview_description = %s,
+                preview_site_name = %s
+            WHERE id = %s
+        """, (
+            message["preview_url"],
+            message["preview_title"],
+            message["preview_description"],
+            message["preview_site_name"],
+            message["id"]
+        ))
+
+    return True
+
+
+def ensure_message_preview_data_many(conn, table_name, messages):
+    touched = False
+    for message in messages or []:
+        if ensure_message_preview_data(conn, table_name, message):
+            touched = True
+    if touched and conn:
+        conn.commit()
+    return messages
 
 
 def build_link_preview(url):
@@ -661,6 +748,7 @@ def serialize_direct_message(message):
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
+        "link_preview": serialize_message_link_preview(message),
         "created_at": format_timestamp(message["created_at"]),
         "is_read": bool(message["read_at"]),
         "is_edited": bool(message["edited_at"])
@@ -673,6 +761,7 @@ def serialize_group_message(message):
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
+        "link_preview": serialize_message_link_preview(message),
         "message_type": message["message_type"] or "text",
         "created_at": format_timestamp(message["created_at"]),
         "is_edited": bool(message["edited_at"])
@@ -751,13 +840,17 @@ def initialize_group_read_state(conn, group_id, user_id):
 
 
 def get_direct_message_for_chat(conn, chat_id, message_id):
-    return conn.execute("""
+    message = conn.execute("""
         SELECT
             m.id,
             m.chat_id,
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -765,10 +858,13 @@ def get_direct_message_for_chat(conn, chat_id, message_id):
         JOIN users u ON u.id = m.sender_id
         WHERE m.id = %s AND m.chat_id = %s
     """, (message_id, chat_id)).fetchone()
+    if ensure_message_preview_data(conn, "messages", message):
+        conn.commit()
+    return message
 
 
 def get_group_message_for_group(conn, group_id, message_id):
-    return conn.execute("""
+    message = conn.execute("""
         SELECT
             gm.id,
             gm.group_id,
@@ -776,12 +872,19 @@ def get_group_message_for_group(conn, group_id, message_id):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.preview_url,
+            gm.preview_title,
+            gm.preview_description,
+            gm.preview_site_name,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
         WHERE gm.id = %s AND gm.group_id = %s
     """, (message_id, group_id)).fetchone()
+    if ensure_message_preview_data(conn, "group_messages", message):
+        conn.commit()
+    return message
 
 
 def parse_limit_arg(default=30, maximum=100):
@@ -852,6 +955,10 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -871,6 +978,7 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
     has_more = len(rows) > limit
     page_rows = rows[:limit]
     page_rows = list(reversed(page_rows))
+    ensure_message_preview_data_many(conn, "messages", page_rows)
     return page_rows, has_more
 
 
@@ -889,6 +997,10 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.preview_url,
+            gm.preview_title,
+            gm.preview_description,
+            gm.preview_site_name,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -907,17 +1019,22 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
     has_more = len(rows) > limit
     page_rows = rows[:limit]
     page_rows = list(reversed(page_rows))
+    ensure_message_preview_data_many(conn, "group_messages", page_rows)
     return page_rows, has_more
 
 
 def search_direct_messages(conn, chat_id, user_id, query, limit):
     pattern = f"%{query}%"
-    return conn.execute("""
+    rows = conn.execute("""
         SELECT
             m.id,
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -933,17 +1050,22 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
         ORDER BY m.id DESC
         LIMIT %s
     """, (chat_id, pattern, user_id, limit)).fetchall()
+    return ensure_message_preview_data_many(conn, "messages", rows)
 
 
 def search_group_messages(conn, group_id, user_id, query, limit):
     pattern = f"%{query}%"
-    return conn.execute("""
+    rows = conn.execute("""
         SELECT
             gm.id,
             gm.sender_id,
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.preview_url,
+            gm.preview_title,
+            gm.preview_description,
+            gm.preview_site_name,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -958,6 +1080,7 @@ def search_group_messages(conn, group_id, user_id, query, limit):
         ORDER BY gm.id DESC
         LIMIT %s
     """, (group_id, pattern, user_id, limit)).fetchall()
+    return ensure_message_preview_data_many(conn, "group_messages", rows)
 
 
 def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
@@ -967,6 +1090,10 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -981,6 +1108,7 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
     """, (message_id, chat_id, user_id)).fetchone()
     if not target:
         return None
+    target_touched = ensure_message_preview_data(conn, "messages", target)
 
     before_rows = conn.execute("""
         SELECT
@@ -988,6 +1116,10 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1050,6 +1182,10 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
         LIMIT 1
     """, (chat_id, after_rows[-1]["id"] if after_rows else message_id, user_id)).fetchone() is not None
 
+    ensure_message_preview_data_many(conn, "messages", before_rows)
+    ensure_message_preview_data_many(conn, "messages", after_rows)
+    if target_touched:
+        conn.commit()
     messages = list(reversed(before_rows)) + [target] + list(after_rows)
     return messages, has_more_before, has_more_after
 
@@ -1062,6 +1198,10 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.preview_url,
+            gm.preview_title,
+            gm.preview_description,
+            gm.preview_site_name,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1075,6 +1215,7 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
     """, (message_id, group_id, user_id)).fetchone()
     if not target:
         return None
+    target_touched = ensure_message_preview_data(conn, "group_messages", target)
 
     before_rows = conn.execute("""
         SELECT
@@ -1083,6 +1224,10 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.preview_url,
+            gm.preview_title,
+            gm.preview_description,
+            gm.preview_site_name,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1144,6 +1289,10 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
         LIMIT 1
     """, (group_id, after_rows[-1]["id"] if after_rows else message_id, user_id)).fetchone() is not None
 
+    ensure_message_preview_data_many(conn, "group_messages", before_rows)
+    ensure_message_preview_data_many(conn, "group_messages", after_rows)
+    if target_touched:
+        conn.commit()
     messages = list(reversed(before_rows)) + [target] + list(after_rows)
     return messages, has_more_before, has_more_after
 
@@ -1153,11 +1302,30 @@ def get_user_display_name(user):
 
 
 def create_group_message_record(conn, group_id, sender_id, text, message_type="text"):
+    preview = extract_message_preview(text) if message_type == "text" else None
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO group_messages (group_id, sender_id, text, message_type)
-        VALUES (%s, %s, %s, %s)
-    """, (group_id, sender_id, text, message_type))
+        INSERT INTO group_messages (
+            group_id,
+            sender_id,
+            text,
+            message_type,
+            preview_url,
+            preview_title,
+            preview_description,
+            preview_site_name
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        group_id,
+        sender_id,
+        text,
+        message_type,
+        preview["url"] if preview else None,
+        preview["title"][:255] if preview else None,
+        preview["description"][:500] if preview else None,
+        preview["site_name"][:255] if preview else None
+    ))
     return get_group_message_for_group(conn, group_id, cur.lastrowid)
 
 
@@ -2339,13 +2507,30 @@ def create_chat_message(chat_id):
         return jsonify({"message": "Чат не найден"}), 404
 
     member_ids = get_direct_chat_member_ids(conn, chat_id)
+    preview = extract_message_preview(text)
 
     cur = conn.cursor()
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
     cur.execute("""
-        INSERT INTO messages (chat_id, sender_id, text)
-        VALUES (%s, %s, %s)
-    """, (chat_id, user_id, text))
+        INSERT INTO messages (
+            chat_id,
+            sender_id,
+            text,
+            preview_url,
+            preview_title,
+            preview_description,
+            preview_site_name
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (
+        chat_id,
+        user_id,
+        text,
+        preview["url"] if preview else None,
+        preview["title"][:255] if preview else None,
+        preview["description"][:500] if preview else None,
+        preview["site_name"][:255] if preview else None
+    ))
     conn.commit()
 
     message = conn.execute("""
@@ -2354,6 +2539,10 @@ def create_chat_message(chat_id):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -2467,11 +2656,26 @@ def update_chat_message(chat_id, message_id):
         conn.close()
         return jsonify({"message": "Можно редактировать только свои сообщения"}), 403
 
+    preview = extract_message_preview(text)
     conn.execute("""
         UPDATE messages
-        SET text = %s, edited_at = CURRENT_TIMESTAMP
+        SET
+            text = %s,
+            preview_url = %s,
+            preview_title = %s,
+            preview_description = %s,
+            preview_site_name = %s,
+            edited_at = CURRENT_TIMESTAMP
         WHERE id = %s AND chat_id = %s
-    """, (text, message_id, chat_id))
+    """, (
+        text,
+        preview["url"] if preview else None,
+        preview["title"][:255] if preview else None,
+        preview["description"][:500] if preview else None,
+        preview["site_name"][:255] if preview else None,
+        message_id,
+        chat_id
+    ))
     conn.commit()
 
     updated_message = get_direct_message_for_chat(conn, chat_id, message_id)
@@ -3521,11 +3725,26 @@ def update_group_message(group_id, message_id):
         conn.close()
         return jsonify({"message": "Можно редактировать только свои сообщения"}), 403
 
+    preview = extract_message_preview(text)
     conn.execute("""
         UPDATE group_messages
-        SET text = %s, edited_at = CURRENT_TIMESTAMP
+        SET
+            text = %s,
+            preview_url = %s,
+            preview_title = %s,
+            preview_description = %s,
+            preview_site_name = %s,
+            edited_at = CURRENT_TIMESTAMP
         WHERE id = %s AND group_id = %s
-    """, (text, message_id, group_id))
+    """, (
+        text,
+        preview["url"] if preview else None,
+        preview["title"][:255] if preview else None,
+        preview["description"][:500] if preview else None,
+        preview["site_name"][:255] if preview else None,
+        message_id,
+        group_id
+    ))
     conn.commit()
 
     updated_message = get_group_message_for_group(conn, group_id, message_id)

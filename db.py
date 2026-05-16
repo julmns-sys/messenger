@@ -334,6 +334,33 @@ def _ensure_contacts_alias_column(conn):
         cursor.close()
 
 
+def _ensure_message_preview_columns(conn, table_name):
+    expected_columns = {
+        "preview_url": "VARCHAR(1000) NULL",
+        "preview_title": "VARCHAR(255) NULL",
+        "preview_description": "VARCHAR(500) NULL",
+        "preview_site_name": "VARCHAR(255) NULL",
+    }
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_NAME = %s
+        """, (DB_NAME, table_name))
+        existing = {row[0] for row in cursor.fetchall() or []}
+        for column_name, column_type in expected_columns.items():
+            if column_name in existing:
+                continue
+            cursor.execute(f"""
+                ALTER TABLE {table_name}
+                ADD COLUMN {column_name} {column_type} NULL
+            """)
+    finally:
+        cursor.close()
+
+
 def init_db():
     if not INIT_SQL_PATH.exists():
         raise FileNotFoundError(f"MariaDB schema file not found: {INIT_SQL_PATH}")
@@ -345,6 +372,8 @@ def init_db():
         for statement in _split_sql_script(script):
             cursor.execute(statement)
         _ensure_contacts_alias_column(conn)
+        _ensure_message_preview_columns(conn, "messages")
+        _ensure_message_preview_columns(conn, "group_messages")
         _ensure_group_invites(conn)
         conn.commit()
         cursor.close()

@@ -108,6 +108,20 @@ function renderMessagePreviewCard(preview = {}, fallbackUrl = "") {
   `;
 }
 
+function getMessagePreviewData(message = {}) {
+  const preview = message?.link_preview;
+  if (!preview?.url) {
+    return null;
+  }
+  return {
+    url: preview.url,
+    domain: preview.domain || urlparseHost(preview.url),
+    title: preview.title || urlparseHost(preview.url),
+    description: preview.description || "",
+    site_name: preview.site_name || ""
+  };
+}
+
 async function fetchLinkPreview(url = "") {
   if (!url) {
     return null;
@@ -276,11 +290,15 @@ function renderMessageItem(message, currentUserId, chatType) {
   }
 
   const previewUrl = extractFirstUrl(message.text || "");
+  const previewData = getMessagePreviewData(message);
+  if (previewData?.url) {
+    linkPreviewCache.set(previewData.url, previewData);
+  }
 
   return `
     <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="text" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
-      ${renderMessagePreviewPlaceholder(previewUrl)}
+      ${previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
       <p class="message-text">${renderMessageText(message.text || "")}</p>
       <div class="message-meta">
         ${renderEditedIndicator(message)}
