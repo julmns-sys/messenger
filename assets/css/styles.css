@@ -1341,6 +1341,30 @@ body.settings-theme-dark .presence-badge.typing {
     0 12px 30px rgba(23, 93, 165, 0.24);
 }
 
+body.settings-theme-dark .user-profile-username {
+  color: #8fc3ff;
+}
+
+body.settings-theme-dark .user-profile-badge-chip {
+  border-color: rgba(111, 182, 255, 0.18);
+  background: rgba(84, 148, 224, 0.16);
+  color: #b9dcff;
+}
+
+body.settings-theme-dark .user-profile-action-menu {
+  border-color: rgba(120, 149, 184, 0.2) !important;
+  background:
+    linear-gradient(180deg, rgba(40, 55, 72, 0.96), rgba(26, 38, 52, 0.94)) !important;
+  box-shadow: 0 20px 40px rgba(3, 8, 14, 0.34);
+}
+
+body.settings-theme-dark .app-toast {
+  border-color: rgba(111, 182, 255, 0.2);
+  background: rgba(24, 38, 55, 0.88);
+  box-shadow: 0 16px 34px rgba(3, 8, 14, 0.32);
+  color: #f3f7fb;
+}
+
 body.settings-theme-dark .button-secondary:hover,
 body.settings-theme-dark .sidebar-profile-menu-trigger:hover,
 body.settings-theme-dark .icon-button:hover {
@@ -2618,6 +2642,137 @@ body[data-chat-wallpaper="paper"] .messages {
   padding-top: 20px;
 }
 
+.user-profile-panel-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-profile-panel-card {
+  position: relative;
+}
+
+.user-profile-panel-hero .thread-info-name {
+  margin-bottom: 0;
+}
+
+.user-profile-original-name {
+  margin: -2px 0 0;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.user-profile-identity-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  max-width: 100%;
+}
+
+.user-profile-username {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: rgba(67, 108, 154, 0.92);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 180ms ease, opacity 180ms ease, transform 180ms ease;
+}
+
+.user-profile-username:hover {
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.user-profile-username.is-placeholder {
+  cursor: default;
+  color: var(--text-soft);
+}
+
+.user-profile-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.user-profile-badge-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(74, 131, 194, 0.16);
+  background: rgba(51, 144, 236, 0.1);
+  color: rgba(44, 94, 146, 0.96);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.user-profile-bio {
+  margin-top: 4px;
+}
+
+.user-profile-menu-trigger {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 4;
+}
+
+.user-profile-action-menu {
+  top: 14px;
+  right: 56px;
+  left: auto;
+  min-width: 220px;
+  max-width: calc(100% - 28px);
+  z-index: 8;
+}
+
+.thread-info-card > .user-profile-menu-trigger,
+.thread-info-card > .user-profile-action-menu {
+  position: absolute;
+}
+
+.user-profile-actions-status:empty {
+  display: none;
+}
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  z-index: 1200;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(137, 168, 203, 0.22);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 14px 32px rgba(18, 39, 66, 0.14);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+
+.app-toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .thread-info-card-head {
   display: flex;
   align-items: flex-start;
@@ -2671,8 +2826,12 @@ body[data-chat-wallpaper="paper"] .messages {
 }
 
 .thread-info-avatar {
+  flex: 0 0 108px;
   width: 108px;
   height: 108px;
+  min-width: 108px;
+  min-height: 108px;
+  aspect-ratio: 1 / 1;
   margin: 0 auto 20px;
   font-size: 32px;
   box-shadow:
@@ -5373,6 +5532,21 @@ body[data-chat-wallpaper="paper"] .messages {
     left: 20px;
     right: 20px;
     min-width: 0;
+  }
+
+  .user-profile-menu-trigger {
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .user-profile-action-menu {
+    top: 12px;
+    right: 52px;
+    left: 12px;
+    min-width: 0;
+    max-width: none;
   }
 
   .thread-info-invite-actions {

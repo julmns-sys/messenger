@@ -123,6 +123,39 @@ def serialize_public_user(user):
     }
 
 
+def row_value(row, key, default=None):
+    try:
+        value = row[key]
+    except Exception:
+        return default
+    return default if value is None else value
+
+
+def serialize_user_badges(user):
+    badges = []
+    if row_value(user, "is_dev", False):
+        badges.append("DEV")
+    if row_value(user, "is_staff", False):
+        badges.append("STAFF")
+    if row_value(user, "is_tester", False):
+        badges.append("TESTER")
+    return badges
+
+
+def serialize_user_panel_payload(user):
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "username": user["username"],
+        "bio": row_value(user, "bio"),
+        "contact_alias": row_value(user, "contact_alias"),
+        "is_contact": bool(row_value(user, "is_contact", False)),
+        "badges": serialize_user_badges(user),
+        "is_online": is_user_online(user["id"]),
+        "last_seen": format_timestamp(get_user_last_seen(user["id"]))
+    }
+
+
 def can_manage_group_admins(conn, user_id, group_id):
     if not user_id:
         return False
@@ -1541,6 +1574,8 @@ def search_users():
             u.id,
             u.name,
             u.username,
+            u.bio,
+            ct.alias AS contact_alias,
             EXISTS (
                 SELECT 1
                 FROM contacts ct
@@ -1548,6 +1583,8 @@ def search_users():
             ) AS is_contact,
             c.id AS chat_id
         FROM users u
+        LEFT JOIN contacts ct
+            ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
         LEFT JOIN chats c
             ON (
                 ((c.user1_id = %s AND c.user2_id = u.id) OR (c.user2_id = %s AND c.user1_id = u.id))
@@ -1564,14 +1601,13 @@ def search_users():
             )
         WHERE u.username LIKE %s AND u.id != %s
         LIMIT 20
-    """, (user_id, user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
     conn.close()
 
     return jsonify([
         {
-            **dict(user),
-            "is_online": is_user_online(user["id"]),
-            "last_seen": format_timestamp(get_user_last_seen(user["id"]))
+            **serialize_user_panel_payload(user),
+            "chat_id": user["chat_id"]
         }
         for user in users
     ])
@@ -1589,6 +1625,8 @@ def get_contacts():
             u.id,
             u.name,
             u.username,
+            u.bio,
+            ct.alias AS contact_alias,
             c.id AS chat_id
         FROM contacts ct
         JOIN users u ON u.id = ct.contact_user_id
@@ -1602,15 +1640,17 @@ def get_contacts():
                 )
             )
         WHERE ct.owner_user_id = %s
-        ORDER BY COALESCE(u.name, u.username), u.username
+        ORDER BY COALESCE(NULLIF(ct.alias, ''), u.name, u.username), u.username
     """, (user_id, user_id, user_id, user_id)).fetchall()
     conn.close()
 
     return jsonify([
         {
-            **dict(contact),
-            "is_online": is_user_online(contact["id"]),
-            "last_seen": format_timestamp(get_user_last_seen(contact["id"]))
+            **serialize_user_panel_payload({
+                **dict(contact),
+                "is_contact": True
+            }),
+            "chat_id": contact["chat_id"]
         }
         for contact in contacts
     ])
@@ -1663,7 +1703,9 @@ def add_contact():
         "name": target_user["name"],
         "username": target_user["username"],
         "chat_id": chat["id"] if chat else None,
+        "contact_alias": None,
         "is_contact": True,
+        "badges": [],
         "is_online": is_user_online(target_user["id"]),
         "last_seen": format_timestamp(get_user_last_seen(target_user["id"]))
     }), 201
@@ -1686,6 +1728,75 @@ def remove_contact(contact_user_id):
     return jsonify({"ok": True, "contact_user_id": contact_user_id})
 
 
+@app.patch("/contacts/<int:contact_user_id>")
+def update_contact_alias(contact_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    alias = str(data.get("alias", "")).strip()
+    if not alias:
+        return jsonify({"message": "Введите новое имя контакта"}), 400
+    if len(alias) > 255:
+        return jsonify({"message": "Имя контакта: максимум 255 символов"}), 400
+
+    conn = get_db()
+    contact = conn.execute("""
+        SELECT 1
+        FROM contacts
+        WHERE owner_user_id = %s AND contact_user_id = %s
+    """, (user_id, contact_user_id)).fetchone()
+    if not contact:
+        conn.close()
+        return jsonify({"message": "Контакт не найден"}), 404
+
+    conn.execute("""
+        UPDATE contacts
+        SET alias = %s
+        WHERE owner_user_id = %s AND contact_user_id = %s
+    """, (alias, user_id, contact_user_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "ok": True,
+        "contact_user_id": contact_user_id,
+        "contact_alias": alias
+    })
+
+
+@app.delete("/contacts/<int:contact_user_id>/alias")
+def reset_contact_alias(contact_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    contact = conn.execute("""
+        SELECT 1
+        FROM contacts
+        WHERE owner_user_id = %s AND contact_user_id = %s
+    """, (user_id, contact_user_id)).fetchone()
+    if not contact:
+        conn.close()
+        return jsonify({"message": "Контакт не найден"}), 404
+
+    conn.execute("""
+        UPDATE contacts
+        SET alias = NULL
+        WHERE owner_user_id = %s AND contact_user_id = %s
+    """, (user_id, contact_user_id))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "ok": True,
+        "contact_user_id": contact_user_id,
+        "contact_alias": None
+    })
+
+
 @app.get("/users/<int:target_user_id>")
 def get_user(target_user_id):
     user_id = current_user_id()
@@ -1694,16 +1805,24 @@ def get_user(target_user_id):
 
     conn = get_db()
     user = conn.execute("""
-        SELECT id, name, username, bio
-        FROM users
-        WHERE id = %s
-    """, (target_user_id,)).fetchone()
+        SELECT
+            u.id,
+            u.name,
+            u.username,
+            u.bio,
+            ct.alias AS contact_alias,
+            (ct.id IS NOT NULL) AS is_contact
+        FROM users u
+        LEFT JOIN contacts ct
+            ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
+        WHERE u.id = %s
+    """, (user_id, target_user_id)).fetchone()
     conn.close()
 
     if not user:
         return jsonify({"message": "Пользователь не найден"}), 404
 
-    return jsonify(serialize_public_user(user))
+    return jsonify(serialize_user_panel_payload(user))
 
 
 @app.get("/chats")
@@ -1718,6 +1837,8 @@ def get_chats():
             c.id,
             u.id AS user_id,
             u.username,
+            u.name AS original_name,
+            ct.alias AS contact_alias,
             u.name AS title,
             (
                 SELECT m.text
@@ -1751,6 +1872,8 @@ def get_chats():
                 WHEN c.user1_id = %s THEN c.user2_id
                 ELSE c.user1_id
             END
+        LEFT JOIN contacts ct
+            ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
         WHERE (c.user1_id = %s OR c.user2_id = %s)
           AND EXISTS (
               SELECT 1
@@ -1762,7 +1885,7 @@ def get_chats():
               FROM hidden_direct_chats hdc
               WHERE hdc.chat_id = c.id AND hdc.user_id = %s
           )
-    """, (user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
 
     group_chats = conn.execute("""
         SELECT
@@ -1821,7 +1944,9 @@ def get_chats():
             "type": "direct",
             "user_id": chat["user_id"],
             "username": chat["username"],
-            "title": chat["title"],
+            "title": chat["contact_alias"] or chat["title"],
+            "name": chat["original_name"],
+            "contact_alias": chat["contact_alias"],
             "is_online": is_user_online(chat["user_id"]),
             "last_seen": format_timestamp(get_user_last_seen(chat["user_id"])),
             "last_message": {"text": chat["last_message_text"]} if chat["last_message_text"] is not None else None,
@@ -1935,6 +2060,8 @@ def get_chat(chat_id):
             u.username,
             u.name,
             u.bio,
+            ct.alias AS contact_alias,
+            (ct.id IS NOT NULL) AS is_contact,
             (
                 SELECT COUNT(*)
                 FROM messages m
@@ -1951,8 +2078,10 @@ def get_chat(chat_id):
                 WHEN c.user1_id = %s THEN c.user2_id
                 ELSE c.user1_id
             END
+        LEFT JOIN contacts ct
+            ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
         WHERE c.id = %s AND (c.user1_id = %s OR c.user2_id = %s)
-    """, (user_id, user_id, chat_id, user_id, user_id)).fetchone()
+    """, (user_id, user_id, user_id, chat_id, user_id, user_id)).fetchone()
 
     if not chat:
         conn.close()
@@ -1974,10 +2103,13 @@ def get_chat(chat_id):
     return jsonify({
         "id": chat["id"],
         "user_id": chat["user_id"],
-        "title": chat["name"] or chat["username"],
+        "title": chat["contact_alias"] or chat["name"] or chat["username"],
         "name": chat["name"],
         "username": chat["username"],
         "bio": chat["bio"],
+        "contact_alias": chat["contact_alias"],
+        "is_contact": bool(chat["is_contact"]),
+        "badges": serialize_user_badges(chat),
         "is_online": is_user_online(chat["user_id"]),
         "last_seen": format_timestamp(get_user_last_seen(chat["user_id"])),
         "started_at": format_timestamp(chat["created_at"]),

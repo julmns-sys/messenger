@@ -8,7 +8,11 @@
           <a class="icon-button thread-back" href="/" aria-label="Back">←</a>
         </div>
         <div class="thread-header-main">
-          <h1 class="chat-name" id="chatTitle">Группа</h1>
+          <div class="thread-header-title-row">
+            <h1 class="chat-name" id="chatTitle">Группа</h1>
+            <span class="desktop-only" id="chatPresenceDesktop"></span>
+          </div>
+          <p class="muted desktop-only" id="chatSubtitleDesktop">Загрузка...</p>
           <p class="muted" id="chatSubtitle">Загрузка...</p>
         </div>
         <div class="thread-header-side">
@@ -54,16 +58,8 @@
         </div>
       </div>
       <div class="thread-info-panel-body">
-        <section class="thread-info-card thread-info-card-profile">
-          <div class="thread-info-card-eyebrow">Profile</div>
-          <div class="thread-info-hero">
-            <div class="avatar group-avatar thread-info-avatar" id="threadInfoAvatar">?</div>
-            <h3 class="thread-info-name" id="threadInfoName">Группа</h3>
-            <p class="thread-info-handle" id="threadInfoHandle">group</p>
-            <p class="thread-info-description" id="threadInfoDescription">Нет описания</p>
-          </div>
-        </section>
-        <section class="thread-info-card thread-info-card-chat">
+        <div id="threadInfoProfilePanel"></div>
+        <section class="thread-info-card thread-info-card-chat" id="threadInfoChatCard">
           <div class="thread-info-card-head">
             <div>
               <div class="thread-info-card-eyebrow">Chat Info</div>

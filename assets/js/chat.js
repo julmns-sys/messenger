@@ -486,11 +486,25 @@ function getGroupPresenceText(info = {}) {
   return `${membersCount} участников`;
 }
 
+function renderGroupProfilePanel(info = {}) {
+  const title = info?.title || "Группа";
+  const description = info?.description && String(info.description).trim() ? info.description : "Нет описания";
+  return `
+    <section class="thread-info-card thread-info-card-profile">
+      <div class="thread-info-card-eyebrow">Profile</div>
+      <div class="thread-info-hero">
+        <div class="avatar group-avatar thread-info-avatar">${escapeHtml(initials(title))}</div>
+        <h3 class="thread-info-name">${escapeHtml(title)}</h3>
+        <p class="thread-info-handle">${escapeHtml(getGroupPresenceText(info))}</p>
+        <p class="thread-info-description">${escapeHtml(description)}</p>
+      </div>
+    </section>
+  `;
+}
+
 function fillThreadInfoPanel(info, chatType) {
-  const avatarNode = document.getElementById("threadInfoAvatar");
-  const nameNode = document.getElementById("threadInfoName");
-  const handleNode = document.getElementById("threadInfoHandle");
-  const descriptionNode = document.getElementById("threadInfoDescription");
+  const profilePanelNode = document.getElementById("threadInfoProfilePanel");
+  const chatCardNode = document.getElementById("threadInfoChatCard");
   const startedAtNode = document.getElementById("threadInfoStartedAt");
   const messagesCountNode = document.getElementById("threadInfoMessagesCount");
   const tagNode = document.getElementById("threadInfoTag");
@@ -504,20 +518,22 @@ function fillThreadInfoPanel(info, chatType) {
   const membersListNode = document.getElementById("threadInfoMembersList");
   const memberAddTriggerNode = document.getElementById("threadMemberAddTrigger");
 
-  if (!avatarNode || !nameNode || !handleNode || !descriptionNode || !startedAtNode || !messagesCountNode || !tagNode) {
+  if (!profilePanelNode || !startedAtNode || !messagesCountNode || !tagNode) {
     return;
   }
 
   const threadInfoType = chatType || "direct";
-  const title = info?.title || info?.name || info?.username || "Чат";
+  const isEmbeddedUserProfile = threadInfoType === "direct" && document.body.dataset.chatType === "group";
+  const title = getUserProfileDisplayName(info) || info?.title || info?.username || "Чат";
   const customTag = info?.id != null ? getChatTag(info.id, threadInfoType) : null;
-  avatarNode.textContent = initials(title);
-  avatarNode.classList.toggle("group-avatar", threadInfoType === "group");
-  nameNode.textContent = title;
-  if (threadInfoType === "group") {
-    handleNode.textContent = `${info?.members_count || 0} участников`;
-  } else {
-    handleNode.innerHTML = renderPresenceBadge(info, { includeUsername: true, showDot: false });
+  profilePanelNode.innerHTML = threadInfoType === "group"
+    ? renderGroupProfilePanel(info)
+    : renderUserProfilePanel({
+        ...info,
+        title
+      }, { showActions: true });
+  if (chatCardNode) {
+    chatCardNode.hidden = isEmbeddedUserProfile;
   }
   startedAtNode.textContent = formatThreadInfoDate(info?.started_at);
   messagesCountNode.textContent = formatThreadInfoCount(info?.messages_count);
@@ -534,14 +550,8 @@ function fillThreadInfoPanel(info, chatType) {
     tagNode.innerHTML = "";
   }
 
-  if (threadInfoType === "group") {
-    descriptionNode.textContent = info?.description || "";
-  } else {
-    descriptionNode.textContent = info?.bio && String(info.bio).trim() ? info.bio : "";
-  }
-
   if (inviteFactNode && inviteLinkNode && inviteCopyNode && inviteRegenerateNode && inviteStatusNode) {
-    if (threadInfoType === "group" && info?.can_manage_invite && info?.invite?.url) {
+    if (!isEmbeddedUserProfile && threadInfoType === "group" && info?.can_manage_invite && info?.invite?.url) {
       inviteFactNode.hidden = false;
       inviteLinkNode.textContent = info.invite.url;
       inviteLinkNode.href = info.invite.url;
@@ -559,7 +569,7 @@ function fillThreadInfoPanel(info, chatType) {
   }
 
   if (membersWrapNode && membersListNode) {
-    if (threadInfoType === "group") {
+    if (!isEmbeddedUserProfile && threadInfoType === "group") {
       const members = Array.isArray(info?.members) ? info.members : [];
       const canEditGroup = Boolean(info?.can_edit_group);
       const canAddMembers = Boolean(info?.can_add_members);
@@ -828,7 +838,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           mode: "text",
           value: getGroupPresenceText(currentThreadInfo || {})
         },
-        desktopSubtitle: "",
+        desktopSubtitle: getGroupPresenceText(currentThreadInfo || {}),
         desktopPresence: ""
       };
     }
@@ -873,7 +883,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           value: badge
         },
         desktopSubtitle: "",
-        desktopPresence: ""
+        desktopPresence: badge
       };
     }
 
@@ -1262,6 +1272,123 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     threadInfoInviteStatus.textContent = message;
     threadInfoInviteStatus.className = `status thread-info-invite-status ${type}`.trim();
+  }
+
+  function setThreadProfileStatus(message, type = "") {
+    const statusNode = document.querySelector("#threadInfoProfilePanel [data-user-profile-status]");
+    if (!statusNode) {
+      return;
+    }
+    statusNode.textContent = message;
+    statusNode.className = `status user-profile-actions-status ${type}`.trim();
+  }
+
+  function syncThreadUserProfileState(nextProfile) {
+    if (!nextProfile?.id) {
+      return;
+    }
+
+    const targetUserId = String(nextProfile.id);
+    if (currentThreadInfo && String(currentThreadInfo.user_id || currentThreadInfo.id || "") === targetUserId) {
+      currentThreadInfo = {
+        ...currentThreadInfo,
+        ...nextProfile,
+        title: getUserProfileDisplayName({
+          ...currentThreadInfo,
+          ...nextProfile
+        })
+      };
+    }
+
+    if (activeThreadInfoView && String(activeThreadInfoView.user_id || activeThreadInfoView.id || "") === targetUserId) {
+      activeThreadInfoView = {
+        ...activeThreadInfoView,
+        ...nextProfile,
+        title: getUserProfileDisplayName({
+          ...activeThreadInfoView,
+          ...nextProfile
+        })
+      };
+    }
+
+    if (chatType === "direct" && currentThreadInfo && String(currentThreadInfo.user_id || currentThreadInfo.id || "") === targetUserId) {
+      setChatTitle(currentThreadInfo.title || getUserProfileDisplayName(currentThreadInfo));
+      renderHeaderStatus();
+    }
+
+    fillThreadInfoPanel(
+      activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
+      activeThreadInfoType === chatType ? chatType : activeThreadInfoType
+    );
+  }
+
+  async function refreshThreadUserProfile(userId) {
+    if (!userId) {
+      return;
+    }
+    const profile = await apiFetch(`/users/${encodeURIComponent(userId)}`);
+    syncThreadUserProfileState(profile);
+    await loadChats("chatList", { showLoading: false });
+  }
+
+  async function handleThreadProfileAction(action, profileUserId) {
+    if (!action || !profileUserId) {
+      return;
+    }
+
+    setThreadProfileStatus("", "");
+
+    try {
+      if (action === "add") {
+        setThreadProfileStatus("Добавляем контакт...", "");
+        await apiFetch("/contacts", {
+          method: "POST",
+          body: JSON.stringify({ user_id: profileUserId })
+        });
+        await refreshThreadUserProfile(profileUserId);
+        setThreadProfileStatus("Контакт добавлен", "success");
+        return;
+      }
+
+      if (action === "remove") {
+        setThreadProfileStatus("Удаляем контакт...", "");
+        await apiFetch(`/contacts/${encodeURIComponent(profileUserId)}`, {
+          method: "DELETE"
+        });
+        await refreshThreadUserProfile(profileUserId);
+        setThreadProfileStatus("Контакт удален", "success");
+        return;
+      }
+
+      if (action === "rename") {
+        const currentProfile = activeThreadInfoView && String(activeThreadInfoView.id || activeThreadInfoView.user_id || "") === String(profileUserId)
+          ? activeThreadInfoView
+          : currentThreadInfo;
+        const nextAlias = window.prompt("Новое имя контакта", currentProfile?.contact_alias || currentProfile?.name || "");
+        if (nextAlias == null) {
+          return;
+        }
+        setThreadProfileStatus("Сохраняем имя контакта...", "");
+        await apiFetch(`/contacts/${encodeURIComponent(profileUserId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ alias: nextAlias })
+        });
+        await refreshThreadUserProfile(profileUserId);
+        setThreadProfileStatus("Имя контакта обновлено", "success");
+        return;
+      }
+
+      if (action === "reset-alias") {
+        setThreadProfileStatus("Возвращаем исходное имя...", "");
+        await apiFetch(`/contacts/${encodeURIComponent(profileUserId)}/alias`, {
+          method: "DELETE"
+        });
+        await refreshThreadUserProfile(profileUserId);
+        setThreadProfileStatus("Имя контакта сброшено", "success");
+      }
+    } catch (error) {
+      setThreadProfileStatus(error.message, "error");
+    }
   }
 
   function updateThreadInviteControls() {
@@ -2467,6 +2594,72 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  document.getElementById("threadInfoProfilePanel")?.addEventListener("click", (event) => {
+    const menuTrigger = event.target.closest("[data-user-profile-menu-trigger]");
+    if (menuTrigger) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleUserProfileActionMenu(menuTrigger.closest("[data-user-profile-card]"));
+      return;
+    }
+
+    const usernameButton = event.target.closest("[data-profile-copy-username]");
+    if (usernameButton) {
+      closeUserProfileActionMenus();
+      const username = String(usernameButton.dataset.profileCopyUsername || "").trim();
+      if (!username) {
+        return;
+      }
+      if (!navigator.clipboard?.writeText) {
+        setThreadProfileStatus("Буфер обмена недоступен", "error");
+        return;
+      }
+      navigator.clipboard.writeText(`@${username}`)
+        .then(() => {
+          showAppToast("Username скопирован");
+          setThreadProfileStatus("", "");
+        })
+        .catch(() => {
+          setThreadProfileStatus("Не удалось скопировать username", "error");
+        });
+      return;
+    }
+
+    const actionButton = event.target.closest("[data-profile-contact-action]");
+    if (!actionButton) {
+      return;
+    }
+
+    closeUserProfileActionMenus();
+
+    if (actionButton.dataset.profileContactAction === "copy-username") {
+      const currentProfile = activeThreadInfoView && activeThreadInfoType === "direct" ? activeThreadInfoView : currentThreadInfo;
+      const username = String(currentProfile?.username || "").trim();
+      if (!username) {
+        setThreadProfileStatus("Username не указан", "error");
+        return;
+      }
+      if (!navigator.clipboard?.writeText) {
+        setThreadProfileStatus("Буфер обмена недоступен", "error");
+        return;
+      }
+      navigator.clipboard.writeText(`@${username}`)
+        .then(() => {
+          showAppToast("Username скопирован");
+          setThreadProfileStatus("", "");
+        })
+        .catch(() => {
+          setThreadProfileStatus("Не удалось скопировать username", "error");
+        });
+      return;
+    }
+
+    void handleThreadProfileAction(
+      actionButton.dataset.profileContactAction,
+      actionButton.dataset.profileUserId
+    );
+  });
+
   threadInfoInviteCopy?.addEventListener("click", () => {
     void copyThreadInviteLink();
   });
@@ -2943,6 +3136,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!event.target.closest(".thread-member-action-menu") && !event.target.closest("[data-member-menu-trigger]")) {
       hideThreadMemberActionMenu();
     }
+    if (!event.target.closest("[data-user-profile-card]")) {
+      closeUserProfileActionMenus();
+    }
   });
 
   document.addEventListener("mousedown", (event) => {
@@ -2987,6 +3183,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
       hideMessageMenu();
       hideThreadMemberActionMenu();
+      closeUserProfileActionMenus();
     }
   });
 

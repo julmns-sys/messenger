@@ -330,6 +330,230 @@ function getChatTagMarkup(chatId, chatType) {
   `;
 }
 
+function formatPresenceDate(value) {
+  const date = parseUtcDate(value);
+  if (!date) {
+    return "";
+  }
+
+  return date.toLocaleDateString("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "long"
+  });
+}
+
+function formatPresenceHours(hours) {
+  const value = Math.max(1, Math.floor(hours));
+  return `был(а) в сети ${value} ч назад`;
+}
+
+function formatPresenceText(info = {}) {
+  if (info?.is_online) {
+    return "в сети";
+  }
+
+  const lastSeenDate = parseUtcDate(info?.last_seen);
+  if (!lastSeenDate) {
+    return "не в сети";
+  }
+
+  const diffMs = Math.max(0, Date.now() - lastSeenDate.getTime());
+  const diffMinutes = Math.floor(diffMs / 60000);
+
+  if (diffMinutes < 1) {
+    return "был(а) в сети только что";
+  }
+
+  if (diffMinutes < 60) {
+    return `был(а) в сети ${diffMinutes} мин назад`;
+  }
+
+  if (diffMinutes < 24 * 60) {
+    return formatPresenceHours(diffMinutes / 60);
+  }
+
+  return `был(а) в сети ${formatPresenceDate(info.last_seen)}`;
+}
+
+function getPresenceState(info = {}) {
+  return info?.is_online ? "online" : "offline";
+}
+
+function renderPresenceBadge(info = {}, options = {}) {
+  const {
+    showDot = true,
+    compact = false,
+    includeUsername = false
+  } = options;
+  const state = getPresenceState(info);
+  const text = formatPresenceText(info);
+  const username = includeUsername && info?.username ? `<span class="presence-meta">@${escapeHtml(info.username)}</span>` : "";
+  const dot = showDot ? `<span class="presence-dot ${state}" aria-hidden="true"></span>` : "";
+  const compactClass = compact ? " compact" : "";
+
+  return `
+    <span class="presence-badge ${state}${compactClass}">
+      ${dot}${username}<span class="presence-label">${escapeHtml(text)}</span>
+    </span>
+  `;
+}
+
+function getUserProfileDisplayName(user = {}) {
+  return user?.contact_alias || user?.name || user?.username || "Пользователь";
+}
+
+function getUserProfileOriginalName(user = {}) {
+  const alias = typeof user?.contact_alias === "string" ? user.contact_alias.trim() : "";
+  const originalName = typeof user?.name === "string" ? user.name.trim() : "";
+  if (!alias || !originalName || alias === originalName) {
+    return "";
+  }
+  return originalName;
+}
+
+function getUserProfileBadges(user = {}) {
+  if (Array.isArray(user?.badges)) {
+    return user.badges
+      .map((badge) => String(badge || "").trim().toUpperCase())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function showAppToast(message, options = {}) {
+  const text = String(message || "").trim();
+  if (!text) {
+    return;
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `app-toast ${options.type || ""}`.trim();
+  toast.textContent = text;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => {
+    toast.classList.add("visible");
+  });
+  window.setTimeout(() => {
+    toast.classList.remove("visible");
+    window.setTimeout(() => {
+      toast.remove();
+    }, 180);
+  }, options.duration || 1600);
+}
+
+function closeUserProfileActionMenus() {
+  document.querySelectorAll("[data-user-profile-menu]").forEach((menu) => {
+    menu.classList.remove("visible");
+    const card = menu.closest("[data-user-profile-card]");
+    const trigger = card?.querySelector("[data-user-profile-menu-trigger]");
+    if (trigger) {
+      trigger.setAttribute("aria-expanded", "false");
+    }
+    window.setTimeout(() => {
+      if (!menu.classList.contains("visible")) {
+        menu.hidden = true;
+      }
+    }, 160);
+  });
+}
+
+function toggleUserProfileActionMenu(card) {
+  if (!card) {
+    return;
+  }
+
+  const menu = card.querySelector("[data-user-profile-menu]");
+  const trigger = card.querySelector("[data-user-profile-menu-trigger]");
+  if (!menu || !trigger) {
+    return;
+  }
+
+  const isOpen = !menu.hidden && menu.classList.contains("visible");
+  closeUserProfileActionMenus();
+  if (isOpen) {
+    return;
+  }
+
+  menu.hidden = false;
+  trigger.setAttribute("aria-expanded", "true");
+  requestAnimationFrame(() => {
+    menu.classList.add("visible");
+  });
+}
+
+function renderUserProfilePanel(user = {}, options = {}) {
+  const displayName = getUserProfileDisplayName(user);
+  const originalName = getUserProfileOriginalName(user);
+  const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "Не указана";
+  const username = user?.username ? `@${user.username}` : "";
+  const presence = renderPresenceBadge(user, { compact: true, includeUsername: false, showDot: false });
+  const badges = getUserProfileBadges(user);
+  const isContact = Boolean(user?.is_contact);
+  const hasAlias = Boolean(user?.contact_alias && String(user.contact_alias).trim());
+  const menuMarkup = options.showActions === false
+    ? ""
+    : `
+      <button
+        class="sidebar-profile-menu-trigger user-profile-menu-trigger"
+        type="button"
+        data-user-profile-menu-trigger
+        aria-label="Действия профиля"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >⋯</button>
+      <div class="sidebar-profile-menu user-profile-action-menu" data-user-profile-menu hidden>
+        <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="copy-username" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+          Скопировать username
+        </button>
+        ${!isContact ? `
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="add" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            Добавить в контакты
+          </button>
+        ` : `
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="rename" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            Переименовать контакт
+          </button>
+          ${hasAlias ? `
+            <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="reset-alias" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+              Вернуть имя по умолчанию
+            </button>
+          ` : ""}
+          <button class="sidebar-profile-menu-item danger" type="button" data-profile-contact-action="remove" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            Удалить из контактов
+          </button>
+        `}
+      </div>
+    `;
+
+  return `
+    <section class="thread-info-card thread-info-card-profile user-profile-panel-card" data-user-profile-card="true" data-user-profile-id="${escapeHtml(String(user.id || ""))}">
+      <div class="thread-info-card-eyebrow">${escapeHtml(options.eyebrow || "Profile")}</div>
+      ${menuMarkup}
+      <div class="thread-info-hero user-profile-panel-hero">
+        <div class="avatar thread-info-avatar${options.groupAvatar ? " group-avatar" : ""}">${escapeHtml(initials(displayName))}</div>
+        <h3 class="thread-info-name">${escapeHtml(displayName)}</h3>
+        ${originalName ? `<p class="user-profile-original-name">${escapeHtml(originalName)}</p>` : ""}
+        <div class="user-profile-identity-row">
+          ${username ? `
+            <button class="user-profile-username" type="button" data-profile-copy-username="${escapeHtml(String(user.username || ""))}" aria-label="Скопировать username">
+              ${escapeHtml(username)}
+            </button>
+          ` : `<span class="user-profile-username is-placeholder">username не указан</span>`}
+          ${presence}
+        </div>
+        ${badges.length ? `
+          <div class="user-profile-badges">
+            ${badges.map((badge) => `<span class="user-profile-badge-chip">${escapeHtml(badge)}</span>`).join("")}
+          </div>
+        ` : ""}
+        <p class="thread-info-description user-profile-bio">${escapeHtml(bio)}</p>
+        <div class="status user-profile-actions-status" data-user-profile-status></div>
+      </div>
+    </section>
+  `;
+}
+
 function readChatListScroll() {
   const rawValue = window.sessionStorage.getItem(CHAT_LIST_SCROLL_KEY);
   const scrollTop = Number.parseInt(rawValue || "", 10);

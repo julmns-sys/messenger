@@ -304,6 +304,27 @@ def _ensure_group_invites(conn):
         """, (group["id"], token, group["owner_id"]))
 
 
+def _ensure_contacts_alias_column(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            SELECT 1
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_NAME = 'contacts'
+              AND COLUMN_NAME = 'alias'
+            LIMIT 1
+        """, (DB_NAME,))
+        exists = cursor.fetchone()
+        if not exists:
+            cursor.execute("""
+                ALTER TABLE contacts
+                ADD COLUMN alias VARCHAR(255) NULL AFTER contact_user_id
+            """)
+    finally:
+        cursor.close()
+
+
 def init_db():
     if not INIT_SQL_PATH.exists():
         raise FileNotFoundError(f"MariaDB schema file not found: {INIT_SQL_PATH}")
@@ -314,6 +335,7 @@ def init_db():
         script = INIT_SQL_PATH.read_text(encoding="utf-8")
         for statement in _split_sql_script(script):
             cursor.execute(statement)
+        _ensure_contacts_alias_column(conn)
         _ensure_group_invites(conn)
         conn.commit()
         cursor.close()
