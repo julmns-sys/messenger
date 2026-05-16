@@ -1111,6 +1111,38 @@ textarea {
   margin-bottom: 12px;
 }
 
+.sidebar-settings-section.is-collapsible > .sidebar-settings-section-head {
+  position: relative;
+  margin-bottom: 0;
+  padding-right: 24px;
+  cursor: pointer;
+}
+
+.sidebar-settings-section.is-collapsible > .sidebar-settings-section-head::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--text-soft);
+  border-bottom: 2px solid var(--text-soft);
+  transform: rotate(225deg);
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+
+.sidebar-settings-section.is-collapsible > .sidebar-settings-section-head:hover::after {
+  border-color: var(--text);
+}
+
+.sidebar-settings-section.is-collapsible.is-collapsed > .sidebar-settings-section-head::after {
+  transform: rotate(45deg);
+}
+
+.sidebar-settings-section.is-collapsible.is-collapsed > :not(.sidebar-settings-section-head) {
+  display: none;
+}
+
 .sidebar-settings-section-head h3 {
   margin: 0 0 4px;
   font-size: 15px;

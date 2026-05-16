@@ -122,8 +122,41 @@ function applyAppSettings(settings = readAppSettings()) {
 function initSettingsControls() {
   const settingsList = document.getElementById("settingsList");
   const resetButton = document.querySelector("[data-settings-reset='appearance']");
+  const settingsSections = document.querySelectorAll(".sidebar-settings-body .sidebar-settings-section");
   const settings = normalizeAppSettings(readAppSettings());
   applyAppSettings(settings);
+
+  if (settingsSections.length) {
+    settingsSections.forEach((section) => {
+      const head = section.querySelector(":scope > .sidebar-settings-section-head");
+      if (!head || head.dataset.collapseBound === "true") {
+        return;
+      }
+
+      head.dataset.collapseBound = "true";
+      section.classList.add("is-collapsible");
+      section.classList.add("is-collapsed");
+      head.setAttribute("role", "button");
+      head.setAttribute("tabindex", "0");
+      head.setAttribute("aria-expanded", "false");
+
+      const toggleSection = () => {
+        const nextCollapsed = !section.classList.contains("is-collapsed");
+        section.classList.toggle("is-collapsed", nextCollapsed);
+        head.setAttribute("aria-expanded", nextCollapsed ? "false" : "true");
+      };
+
+      head.addEventListener("click", toggleSection);
+      head.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        toggleSection();
+      });
+    });
+  }
+
   if (!settingsList || settingsList.dataset.settingsBound === "true") {
     return;
   }
