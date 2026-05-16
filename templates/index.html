@@ -1,0 +1,28 @@
+{% extends "base_app.html" %}
+
+{% block content %}
+  <section class="content">
+    <header>
+      <div class="header-actions">
+        <a class="icon-button mobile-only" href="/search" aria-label="Search">@</a>
+        <button class="icon-button mobile-only" type="button" data-quick-actions-trigger="true" aria-label="Быстрые действия" aria-haspopup="menu" aria-expanded="false">+</button>
+      </div>
+    </header>
+    <div class="content-body">
+      <div class="placeholder">
+        <div>
+          <h2 class="page-title">Добро пожаловать</h2>
+          <p class="page-subtitle">Выберите чат для начала общения</p>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block shared_scripts %}
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+{% endblock %}
+
+{% block page_scripts %}
+  <script src="/assets/js/index.js"></script>
+{% endblock %}

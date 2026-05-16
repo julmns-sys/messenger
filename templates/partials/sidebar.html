@@ -1,0 +1,87 @@
+<aside class="sidebar">
+  <div class="sidebar-slider">
+    <div class="sidebar-panel sidebar-panel-main">
+      <div class="sidebar-header">
+        <div>
+          <div class="brand">/Chatik</div>
+          <button class="current-user-badge" id="currentUserBadge" type="button" aria-label="Открыть профиль"></button>
+        </div>
+        <div class="sidebar-actions">
+          {% if sidebar_action_mode == "back" %}
+            <a class="icon-button" href="{{ sidebar_back_href }}" aria-label="{{ sidebar_back_label }}">{{ sidebar_back_icon }}</a>
+          {% else %}
+            <a class="icon-button" href="/search" aria-label="Search">@</a>
+            <button class="icon-button" type="button" data-quick-actions-trigger="true" aria-label="Быстрые действия" aria-haspopup="menu" aria-expanded="false">+</button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="sidebar-search">
+        <input class="search-input" type="text" placeholder="Ваши чаты">
+      </div>
+      <div class="chat-list" id="chatList"></div>
+    </div>
+
+    <div class="sidebar-panel sidebar-panel-profile" aria-hidden="true">
+      <div class="sidebar-header">
+        <div class="sidebar-profile-title">
+          <button class="icon-button page-back" id="sidebarProfileBack" type="button" aria-label="Назад"></button>
+          <div>
+            <div class="brand">Профиль</div>
+            <div class="muted">Ваши данные</div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-profile-body">
+        <div class="sidebar-profile-card">
+          <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false">⋯</button>
+          <div class="sidebar-profile-menu" id="sidebarProfileMenu" hidden>
+            <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button">Изменить профиль</button>
+            <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button">Выйти из аккаунта</button>
+          </div>
+          <div class="avatar sidebar-profile-avatar" id="sidebarProfileAvatar">?</div>
+          <h2 class="sidebar-profile-name" id="sidebarProfileName">Пользователь</h2>
+          <p class="sidebar-profile-username" id="sidebarProfileUsername">@username</p>
+          <div class="sidebar-profile-facts">
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Имя</span>
+              <div class="sidebar-profile-line">
+                <strong id="sidebarProfileNameField">Не указано</strong>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="name" aria-label="Изменить имя">✎</button>
+              </div>
+            </div>
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Email</span>
+              <div class="sidebar-profile-line">
+                <button class="sidebar-profile-secret is-blurred" id="sidebarProfileEmail" type="button" aria-label="Показать email" aria-pressed="false">Не указана</button>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="email" aria-label="Изменить email">✎</button>
+              </div>
+            </div>
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Username</span>
+              <div class="sidebar-profile-line">
+                <strong id="sidebarProfileHandle">@username</strong>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="username" aria-label="Изменить username">✎</button>
+              </div>
+            </div>
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Bio</span>
+              <div class="sidebar-profile-line">
+                <strong id="sidebarProfileBio">Не указана</strong>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="bio" aria-label="Изменить bio">✎</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-profile-actions">
+          <div class="sidebar-profile-actions-header">
+            <h3>Настройки</h3>
+            <p class="muted">Откройте отдельную панель в sidebar.</p>
+          </div>
+          <button class="button settings-launch-button" id="sidebarSettingsOpen" type="button">Открыть настройки</button>
+        </div>
+      </div>
+    </div>
+    {% include "partials/sidebar_settings_panel.html" %}
+  </div>
+</aside>

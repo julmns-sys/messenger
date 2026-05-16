@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from flask import Flask, request, jsonify, send_from_directory, redirect
+from flask import Flask, request, jsonify, send_from_directory, redirect, render_template
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -1061,32 +1061,86 @@ def delete_direct_chat_for_user(conn, chat_id, user_id):
 
 @app.route("/")
 def home():
-    return send_from_directory(".", "index.html")
+    return render_template(
+        "index.html",
+        title="/Chatik",
+        body_class="page-shell chats-page",
+        data_chat_type=None,
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
 
 
 @app.get("/search")
 def search_page():
-    return send_from_directory(".", "search.html")
+    return render_template(
+        "search.html",
+        title="Search | /Chatik",
+        body_class="page-shell",
+        data_chat_type=None,
+        sidebar_action_mode="back",
+        sidebar_back_href="/",
+        sidebar_back_label="Chats",
+        sidebar_back_icon="←",
+    )
 
 
 @app.get("/chat/<int:chat_id>")
 def direct_chat_page(chat_id):
-    return send_from_directory(".", "chat.html")
+    return render_template(
+        "chat.html",
+        title="Chat | /Chatik",
+        body_class="page-shell thread-page",
+        data_chat_type="direct",
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
 
 
 @app.get("/chat/user/<int:user_id>")
 def direct_chat_draft_page(user_id):
-    return send_from_directory(".", "chat.html")
+    return render_template(
+        "chat.html",
+        title="Chat | /Chatik",
+        body_class="page-shell thread-page",
+        data_chat_type="direct",
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
 
 
 @app.get("/group/<int:group_id>")
 def group_chat_page(group_id):
-    return send_from_directory(".", "group_chat.html")
+    return render_template(
+        "group_chat.html",
+        title="Group Chat | /Chatik",
+        body_class="page-shell thread-page",
+        data_chat_type="group",
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
 
 
 @app.get("/profile")
 def profile_page():
-    return send_from_directory(".", "index.html")
+    return render_template(
+        "index.html",
+        title="/Chatik",
+        body_class="page-shell chats-page",
+        data_chat_type=None,
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
 
 
 @app.get("/create-group")
