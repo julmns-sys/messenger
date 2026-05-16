@@ -1156,6 +1156,7 @@ body.settings-theme-dark {
 
 body.settings-theme-dark .sidebar,
 body.settings-theme-dark .content,
+body.settings-theme-dark .panel,
 body.settings-theme-dark .sidebar-profile-card,
 body.settings-theme-dark .sidebar-profile-actions,
 body.settings-theme-dark .thread-info-panel,
@@ -1173,6 +1174,7 @@ body.settings-theme-dark .settings-select {
 
 body.settings-theme-dark .content,
 body.settings-theme-dark .sidebar,
+body.settings-theme-dark .panel,
 body.settings-theme-dark .sidebar-profile-card,
 body.settings-theme-dark .sidebar-profile-actions,
 body.settings-theme-dark .thread-info-panel,
@@ -1239,9 +1241,12 @@ body.settings-theme-dark .icon-button:hover {
 }
 
 body.settings-theme-dark .sidebar-profile-menu,
+body.settings-theme-dark .quick-actions-menu,
 body.settings-theme-dark .thread-info-card,
 body.settings-theme-dark .thread-info-fact,
 body.settings-theme-dark .thread-info-search-action,
+body.settings-theme-dark .thread-member-action-menu,
+body.settings-theme-dark .thread-info-action-menu,
 body.settings-theme-dark .sidebar-settings-section,
 body.settings-theme-dark .sidebar-settings-item,
 body.settings-theme-dark .settings-item {
@@ -1268,6 +1273,131 @@ body.settings-theme-dark .thread-info-search-action:hover {
     linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.05)) !important;
   border-color: rgba(146, 170, 198, 0.2) !important;
   box-shadow: 0 18px 34px rgba(3, 8, 14, 0.24);
+}
+
+body.settings-theme-dark .thread-member-action-menu,
+body.settings-theme-dark .thread-info-action-menu {
+  box-shadow: 0 20px 40px rgba(3, 8, 14, 0.34);
+}
+
+body.settings-theme-dark .quick-actions-menu {
+  box-shadow: 0 20px 40px rgba(3, 8, 14, 0.34);
+}
+
+body.settings-theme-dark .selection-toolbar,
+body.settings-theme-dark .composer-edit-banner {
+  border-color: rgba(146, 170, 198, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 30px rgba(3, 8, 14, 0.2);
+}
+
+body.settings-theme-dark .thread-member-action-menu button,
+body.settings-theme-dark .thread-info-action-menu button,
+body.settings-theme-dark .quick-actions-menu-item {
+  color: var(--text);
+}
+
+body.settings-theme-dark .selection-toolbar-count,
+body.settings-theme-dark .composer-edit-title {
+  color: #8ec5ff;
+}
+
+body.settings-theme-dark .selection-toolbar-button {
+  background: rgba(51, 144, 236, 0.16);
+  color: #cfe6ff;
+}
+
+body.settings-theme-dark .selection-toolbar-button:hover {
+  background: rgba(51, 144, 236, 0.24);
+}
+
+body.settings-theme-dark .selection-toolbar-button.danger {
+  background: rgba(217, 83, 79, 0.16);
+  color: #ff9d9d;
+}
+
+body.settings-theme-dark .selection-toolbar-button.danger:hover {
+  background: rgba(217, 83, 79, 0.24);
+}
+
+body.settings-theme-dark .composer-edit-cancel {
+  color: rgba(224, 233, 242, 0.72);
+}
+
+body.settings-theme-dark .composer-edit-cancel:hover {
+  color: var(--text);
+}
+
+body.settings-theme-dark .thread-member-action-menu button:hover,
+body.settings-theme-dark .thread-info-action-menu button:hover,
+body.settings-theme-dark .quick-actions-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f3f7fb;
+}
+
+body.settings-theme-dark .thread-member-action-menu button.danger,
+body.settings-theme-dark .thread-info-action-menu button.danger {
+  color: #ff8f8f;
+}
+
+body.settings-theme-dark .thread-member-action-menu button.danger:hover,
+body.settings-theme-dark .thread-info-action-menu button.danger:hover {
+  background: rgba(217, 83, 79, 0.14);
+}
+
+body.settings-theme-dark .message-action-menu {
+  border-color: rgba(146, 170, 198, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.035)) !important;
+  box-shadow: 0 20px 40px rgba(3, 8, 14, 0.34);
+}
+
+body.settings-theme-dark .message-action-menu button {
+  color: var(--text);
+}
+
+body.settings-theme-dark .message-action-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+body.settings-theme-dark .message-action-menu button.danger {
+  color: #ff8f8f;
+}
+
+body.settings-theme-dark .message-action-menu button.danger:hover {
+  background: rgba(217, 83, 79, 0.14);
+}
+
+body.settings-theme-dark .delete-undo-toast,
+body.settings-theme-dark .chat-delete-undo-toast {
+  border-color: rgba(146, 170, 198, 0.16);
+  background:
+    linear-gradient(180deg, rgba(24, 36, 49, 0.92), rgba(19, 30, 41, 0.94)) !important;
+  box-shadow: 0 18px 36px rgba(3, 8, 14, 0.34);
+}
+
+body.settings-theme-dark .delete-undo-ring-track {
+  stroke: rgba(142, 197, 255, 0.2);
+}
+
+body.settings-theme-dark .delete-undo-ring-bar {
+  stroke: rgba(142, 197, 255, 0.96);
+}
+
+body.settings-theme-dark .delete-undo-timer {
+  color: #8ec5ff;
+}
+
+body.settings-theme-dark .delete-undo-title {
+  color: var(--text);
+}
+
+body.settings-theme-dark .delete-undo-button {
+  color: #8ec5ff;
+}
+
+body.settings-theme-dark .delete-undo-button:hover {
+  color: #d7ebff;
 }
 
 body.settings-theme-dark .search-input,
@@ -1313,8 +1443,16 @@ body.settings-theme-dark .message-system-pill {
   color: rgba(224, 233, 242, 0.72);
 }
 
+body.settings-theme-dark .message-date-divider-pill {
+  border-color: rgba(146, 170, 198, 0.14);
+  background: linear-gradient(180deg, rgba(24, 36, 49, 0.9), rgba(19, 30, 41, 0.94));
+  box-shadow: 0 10px 22px rgba(3, 8, 14, 0.22);
+  color: rgba(224, 233, 242, 0.78);
+}
+
 body:not(.settings-theme-dark) .content,
 body:not(.settings-theme-dark) .sidebar,
+body:not(.settings-theme-dark) .panel,
 body:not(.settings-theme-dark) .sidebar-profile-card,
 body:not(.settings-theme-dark) .sidebar-profile-actions,
 body:not(.settings-theme-dark) .thread-info-panel,
@@ -1325,6 +1463,7 @@ body:not(.settings-theme-dark) .thread-group-edit-card {
 
 body.settings-surface-compact .sidebar,
 body.settings-surface-compact .content,
+body.settings-surface-compact .panel,
 body.settings-surface-compact .sidebar-profile-card,
 body.settings-surface-compact .sidebar-profile-actions,
 body.settings-surface-compact .thread-info-panel,
