@@ -1314,6 +1314,33 @@ body.settings-theme-dark .button-secondary {
   color: var(--text);
 }
 
+body.settings-theme-dark .presence-badge {
+  border-color: rgba(124, 152, 189, 0.22);
+  background: linear-gradient(180deg, rgba(33, 48, 66, 0.76), rgba(24, 38, 55, 0.58));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 26px rgba(4, 10, 18, 0.24);
+}
+
+body.settings-theme-dark .presence-badge.online {
+  color: #69b1ff;
+  border-color: rgba(105, 177, 255, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 0 1px rgba(88, 161, 244, 0.08),
+    0 12px 28px rgba(22, 85, 152, 0.2);
+}
+
+body.settings-theme-dark .presence-badge.typing {
+  color: #7fc0ff;
+  border-color: rgba(111, 182, 255, 0.3);
+  background: linear-gradient(180deg, rgba(27, 51, 78, 0.84), rgba(23, 42, 66, 0.66));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(102, 170, 244, 0.09),
+    0 12px 30px rgba(23, 93, 165, 0.24);
+}
+
 body.settings-theme-dark .button-secondary:hover,
 body.settings-theme-dark .sidebar-profile-menu-trigger:hover,
 body.settings-theme-dark .icon-button:hover {
@@ -2219,25 +2246,78 @@ body[data-chat-wallpaper="paper"] .messages {
   gap: 6px;
   max-width: 100%;
   min-width: 0;
-  padding: 0 0 0 4px;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
+  padding: 5px 10px;
+  border: 1px solid rgba(135, 170, 210, 0.22);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.32));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 8px 24px rgba(30, 58, 90, 0.08);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   color: var(--text-soft);
-  transition: color 180ms ease;
+  transform: translateY(0);
+  opacity: 1;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 220ms ease,
+    background 220ms ease,
+    transform 220ms ease,
+    opacity 220ms ease;
+  animation: presence-badge-enter 220ms ease;
 }
 
 .presence-badge.compact {
   gap: 6px;
-  padding: 0 0 0 4px;
+  padding: 4px 9px;
 }
 
 .presence-badge.online {
   color: #3390ec;
+  border-color: rgba(71, 145, 226, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    0 0 0 1px rgba(71, 145, 226, 0.06),
+    0 10px 24px rgba(51, 144, 236, 0.12);
 }
 
 .presence-badge.offline {
   color: var(--text-soft);
+}
+
+.presence-badge.typing {
+  color: #2b78cf;
+  border-color: rgba(80, 151, 232, 0.32);
+  background: linear-gradient(180deg, rgba(245, 250, 255, 0.78), rgba(232, 242, 255, 0.52));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.46),
+    0 0 0 1px rgba(102, 170, 244, 0.08),
+    0 10px 26px rgba(58, 134, 223, 0.16);
+}
+
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.typing-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.28;
+  animation: typing-dot-bounce 1.15s ease-in-out infinite;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 240ms;
 }
 
 .presence-label,
@@ -2250,7 +2330,7 @@ body[data-chat-wallpaper="paper"] .messages {
 
 .presence-label {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -2279,6 +2359,32 @@ body[data-chat-wallpaper="paper"] .messages {
 .thread-info-handle .presence-badge {
   vertical-align: middle;
   max-width: 100%;
+}
+
+#chatPresenceDesktop.is-empty {
+  display: none;
+}
+
+@keyframes presence-badge-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes typing-dot-bounce {
+  0%, 80%, 100% {
+    opacity: 0.28;
+    transform: translateY(0) scale(0.9);
+  }
+  40% {
+    opacity: 0.92;
+    transform: translateY(-1px) scale(1);
+  }
 }
 
 @media (min-width: 641px) {

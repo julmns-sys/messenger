@@ -13,6 +13,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 socket_sessions = {}
 user_last_seen = {}
+typing_sessions = {}
 
 
 def format_timestamp(value):
@@ -468,6 +469,63 @@ def get_group_member_ids(conn, group_id):
             WHERE group_id = %s
         """, (group_id,)).fetchall()
     ]
+
+
+def get_typing_room(chat_type, chat_id):
+    return f"group_{int(chat_id)}" if chat_type == "group" else f"direct_{int(chat_id)}"
+
+
+def get_typing_context(conn, user_id, chat_type, chat_id):
+    if chat_type == "group":
+        if not can_access_group(conn, user_id, chat_id):
+            return None
+        user = conn.execute("""
+            SELECT id, name, username
+            FROM users
+            WHERE id = %s
+        """, (user_id,)).fetchone()
+        return {
+            "room": get_typing_room(chat_type, chat_id),
+            "chat_type": "group",
+            "chat_id": int(chat_id),
+            "user": user
+        }
+
+    if not can_access_direct_chat(conn, user_id, chat_id):
+        return None
+
+    chat = conn.execute("""
+        SELECT user1_id, user2_id
+        FROM chats
+        WHERE id = %s
+    """, (chat_id,)).fetchone()
+    if not chat:
+        return None
+
+    recipient_id = chat["user2_id"] if int(chat["user1_id"]) == int(user_id) else chat["user1_id"]
+    recipient = conn.execute("""
+        SELECT id, name, username
+        FROM users
+        WHERE id = %s
+    """, (recipient_id,)).fetchone()
+    return {
+        "room": get_typing_room(chat_type, chat_id),
+        "chat_type": "direct",
+        "chat_id": int(chat_id),
+        "user": recipient
+    }
+
+
+def clear_typing_session(sid, *, emit_stop=True):
+    state = typing_sessions.pop(sid, None)
+    if not state or not emit_stop:
+        return
+
+    socketio.emit("typing_stopped", {
+        "chat_type": state["chat_type"],
+        "chat_id": state["chat_id"],
+        "user_id": state["user_id"]
+    }, room=state["room"], skip_sid=sid)
 
 
 def serialize_direct_message(message):
@@ -1004,6 +1062,7 @@ def handle_connect(auth):
 
 @socketio.on("disconnect")
 def handle_disconnect():
+    clear_typing_session(request.sid)
     user_id = socket_sessions.pop(request.sid, None)
     if user_id and not is_user_online(user_id):
         user_last_seen[int(user_id)] = datetime.utcnow()
@@ -1043,6 +1102,74 @@ def handle_join_chat(data):
 
     join_room(room)
     emit("join_ok", {"room": room})
+
+
+@socketio.on("typing_start")
+def handle_typing_start(data):
+    user_id = socket_sessions.get(request.sid)
+    if not user_id:
+        emit("join_error", {"message": "Не авторизован"})
+        return
+
+    chat_type = "group" if (data or {}).get("type") == "group" else "direct"
+    chat_id = (data or {}).get("id")
+
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        emit("join_error", {"message": "Некорректный chat id"})
+        return
+
+    conn = get_db()
+    context = get_typing_context(conn, user_id, chat_type, chat_id)
+    conn.close()
+    if not context:
+        emit("join_error", {"message": "Нет доступа к чату"})
+        return
+
+    previous_state = typing_sessions.get(request.sid)
+    if previous_state and (
+        previous_state["room"] != context["room"] or
+        previous_state["user_id"] != int(user_id)
+    ):
+        clear_typing_session(request.sid)
+
+    typing_sessions[request.sid] = {
+        "room": context["room"],
+        "chat_type": context["chat_type"],
+        "chat_id": context["chat_id"],
+        "user_id": int(user_id)
+    }
+
+    user = context["user"]
+    socketio.emit("typing_started", {
+        "chat_type": context["chat_type"],
+        "chat_id": context["chat_id"],
+        "user_id": int(user_id),
+        "name": (user["name"] if user and user["name"] else (user["username"] if user and user["username"] else "Кто-то")),
+        "username": user["username"] if user else None
+    }, room=context["room"], skip_sid=request.sid)
+
+
+@socketio.on("typing_stop")
+def handle_typing_stop(data):
+    user_id = socket_sessions.get(request.sid)
+    state = typing_sessions.get(request.sid)
+    if not user_id or not state:
+        return
+
+    chat_type = "group" if (data or {}).get("type") == "group" else "direct"
+    chat_id = (data or {}).get("id")
+
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        return
+
+    if state["chat_type"] != chat_type or int(state["chat_id"]) != chat_id or int(state["user_id"]) != int(user_id):
+        return
+
+    clear_typing_session(request.sid)
 
 
 def delete_direct_chat_for_user(conn, chat_id, user_id):

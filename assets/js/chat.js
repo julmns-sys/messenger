@@ -379,6 +379,27 @@ function setChatTitle(title, subtitle = "", desktopSubtitle = "", desktopPresenc
   if (avatarNode) avatarNode.textContent = initials(title || "Чат");
 }
 
+function renderTypingBadge(label, options = {}) {
+  const {
+    compact = true,
+    showDots = true
+  } = options;
+  const compactClass = compact ? " compact" : "";
+  const dots = showDots ? `
+    <span class="typing-dots" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+    </span>
+  ` : "";
+
+  return `
+    <span class="presence-badge typing${compactClass}">
+      ${dots}<span class="presence-label">${escapeHtml(label)}</span>
+    </span>
+  `;
+}
+
 function formatPresenceDate(value) {
   const date = parseUtcDate(value);
   if (!date) {
@@ -458,6 +479,11 @@ function renderDirectChatDesktopPresence(info) {
 
 function renderDirectChatDesktopSubtitle(info) {
   return info?.username ? `@${info.username}` : "";
+}
+
+function getGroupPresenceText(info = {}) {
+  const membersCount = Number(info?.members_count || info?.members?.length || 0);
+  return `${membersCount} участников`;
 }
 
 function fillThreadInfoPanel(info, chatType) {
@@ -776,6 +802,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   let activeThreadSearchRequestId = 0;
   let isShowingSearchContext = false;
   let isMobileThreadSearchOpen = false;
+  let typingPauseTimer = null;
+  let typingCooldownTimer = null;
+  let typingState = {
+    isSending: false,
+    lastStartAt: 0,
+    localActive: false,
+    remoteUsers: new Map()
+  };
   const selectedMessageIds = new Set();
   const committedDeleteEchoIds = new Set();
 
@@ -786,6 +820,192 @@ document.addEventListener("DOMContentLoaded", async () => {
   composer.parentNode.insertBefore(editBanner, composer);
   contentBody.insertBefore(selectionToolbar, composerWrap);
   contentBody.appendChild(deleteUndoToast);
+
+  function getBaseHeaderStatus() {
+    if (chatType === "group") {
+      return {
+        mobile: {
+          mode: "text",
+          value: getGroupPresenceText(currentThreadInfo || {})
+        },
+        desktopSubtitle: "",
+        desktopPresence: ""
+      };
+    }
+
+    return {
+      mobile: {
+        mode: "html",
+        value: renderDirectChatSubtitle(currentThreadInfo || {})
+      },
+      desktopSubtitle: renderDirectChatDesktopSubtitle(currentThreadInfo || {}),
+      desktopPresence: renderDirectChatDesktopPresence(currentThreadInfo || {})
+    };
+  }
+
+  function getTypingBadgeLabel() {
+    const activeUsers = [...typingState.remoteUsers.values()];
+    if (!activeUsers.length) {
+      return "";
+    }
+
+    if (chatType === "group") {
+      if (activeUsers.length === 1) {
+        return `${activeUsers[0].name || "Кто-то"} печатает...`;
+      }
+      return "Несколько человек печатают...";
+    }
+
+    return "печатает...";
+  }
+
+  function getHeaderTypingOverride() {
+    const label = getTypingBadgeLabel();
+    if (!label) {
+      return null;
+    }
+
+    const badge = renderTypingBadge(label, { compact: true, showDots: true });
+    if (chatType === "group") {
+      return {
+        mobile: {
+          mode: "html",
+          value: badge
+        },
+        desktopSubtitle: "",
+        desktopPresence: ""
+      };
+    }
+
+    return {
+      mobile: {
+        mode: "html",
+        value: badge
+      },
+      desktopSubtitle: renderDirectChatDesktopSubtitle(currentThreadInfo || {}),
+      desktopPresence: badge
+    };
+  }
+
+  function applyHeaderStatus(statusConfig) {
+    const subtitleDesktopNode = document.getElementById("chatSubtitleDesktop");
+    const presenceDesktopNode = document.getElementById("chatPresenceDesktop");
+    const subtitleMobileNode = document.getElementById("chatSubtitle");
+    if (subtitleMobileNode) {
+      if (statusConfig?.mobile?.mode === "html") {
+        subtitleMobileNode.innerHTML = statusConfig.mobile.value || "";
+      } else {
+        subtitleMobileNode.textContent = statusConfig?.mobile?.value || "";
+      }
+    }
+    if (subtitleDesktopNode) {
+      subtitleDesktopNode.textContent = statusConfig?.desktopSubtitle || "";
+    }
+    if (presenceDesktopNode) {
+      presenceDesktopNode.innerHTML = statusConfig?.desktopPresence || "";
+      presenceDesktopNode.classList.toggle("is-empty", !statusConfig?.desktopPresence);
+    }
+  }
+
+  function renderHeaderStatus() {
+    applyHeaderStatus(getHeaderTypingOverride() || getBaseHeaderStatus());
+  }
+
+  function scheduleTypingStatusRefresh() {
+    if (typingCooldownTimer) {
+      window.clearTimeout(typingCooldownTimer);
+    }
+    typingCooldownTimer = window.setTimeout(() => {
+      renderHeaderStatus();
+    }, 40);
+  }
+
+  function setRemoteTypingUser(userId, payload = {}) {
+    if (!userId || String(userId) === String(currentUser.id)) {
+      return;
+    }
+    const key = String(userId);
+    const previousUser = typingState.remoteUsers.get(key);
+    if (previousUser?.timeoutId) {
+      window.clearTimeout(previousUser.timeoutId);
+    }
+    const timeoutId = window.setTimeout(() => {
+      clearRemoteTypingUser(key, true);
+    }, 2600);
+    typingState.remoteUsers.set(key, {
+      id: String(userId),
+      name: payload.name || payload.username || "Кто-то",
+      timeoutId
+    });
+    renderHeaderStatus();
+  }
+
+  function clearRemoteTypingUser(userId, delayed = true) {
+    if (!userId) {
+      return;
+    }
+    const key = String(userId);
+    const existingUser = typingState.remoteUsers.get(key);
+    if (existingUser?.timeoutId) {
+      window.clearTimeout(existingUser.timeoutId);
+    }
+    typingState.remoteUsers.delete(key);
+    if (delayed) {
+      scheduleTypingStatusRefresh();
+      return;
+    }
+    renderHeaderStatus();
+  }
+
+  function emitTypingStop() {
+    if (typingPauseTimer) {
+      window.clearTimeout(typingPauseTimer);
+      typingPauseTimer = null;
+    }
+    if (!socket || !chatId || !typingState.localActive) {
+      return;
+    }
+    typingState.localActive = false;
+    socket.emit("typing_stop", {
+      type: chatType === "group" ? "group" : "direct",
+      id: chatId
+    });
+  }
+
+  function scheduleTypingStop() {
+    if (typingPauseTimer) {
+      window.clearTimeout(typingPauseTimer);
+    }
+    typingPauseTimer = window.setTimeout(() => {
+      emitTypingStop();
+    }, 1200);
+  }
+
+  function emitTypingStart(force = false) {
+    if (!socket || !chatId || typingState.isSending) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - typingState.lastStartAt < 1500) {
+      scheduleTypingStop();
+      return;
+    }
+    typingState.lastStartAt = now;
+    typingState.localActive = true;
+    socket.emit("typing_start", {
+      type: chatType === "group" ? "group" : "direct",
+      id: chatId
+    });
+    scheduleTypingStop();
+  }
+
+  function handleComposerTyping() {
+    if (!input.value.trim()) {
+      emitTypingStop();
+      return;
+    }
+    emitTypingStart();
+  }
 
   function setThreadInfoOpen(isOpen) {
     contentNode.classList.toggle("thread-info-open", Boolean(isOpen));
@@ -1118,7 +1338,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       title
     };
     if (chatType === "group") {
-      setChatTitle(title, `${data.members_count || data.members?.length || 0} участников`);
+      setChatTitle(title);
+      renderHeaderStatus();
       if (!currentThreadInfo.can_add_members) {
         closeThreadMemberAddModal();
       }
@@ -1364,12 +1585,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function renderPendingDirectChat(user) {
     const title = user?.name || user?.username || "Чат";
-    const subtitle = renderDirectChatSubtitle(user);
-    const desktopSubtitle = renderDirectChatDesktopSubtitle(user);
-    const desktopPresence = renderDirectChatDesktopPresence(user);
     currentThreadInfo = user ? { ...user, title } : null;
     setActiveThreadInfoView(currentThreadInfo, chatType);
-    setChatTitle(title, subtitle, desktopSubtitle, desktopPresence);
+    setChatTitle(title);
+    renderHeaderStatus();
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
     renderMessages(messagesNode, [], currentUser.id, chatType);
@@ -1943,18 +2162,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       ? chatState.allChats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === chatType)
       : null;
     const title = currentChat?.title || data.title || data.name || data.username || "Чат";
-    const subtitle = chatType === "group"
-      ? `${(data.members_count || data.members?.length || 0)} участников`
-      : renderDirectChatSubtitle(data);
-    const desktopSubtitle = chatType === "group" ? "" : renderDirectChatDesktopSubtitle(data);
-    const desktopPresence = chatType === "group" ? "" : renderDirectChatDesktopPresence(data);
 
     currentThreadInfo = {
       ...data,
       title
     };
     setActiveThreadInfoView(currentThreadInfo, chatType);
-    setChatTitle(title, subtitle, desktopSubtitle, desktopPresence);
+    setChatTitle(title);
+    renderHeaderStatus();
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
     const nextMessages = data.messages || [];
@@ -2133,14 +2348,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           shouldRerender = true;
         }
 
-        if (chatType === "direct" && shouldRerender && currentThreadInfo) {
+        if (shouldRerender && currentThreadInfo) {
           const title = currentThreadInfo.title || currentThreadInfo.name || currentThreadInfo.username || "Чат";
-          setChatTitle(
-            title,
-            renderDirectChatSubtitle(currentThreadInfo),
-            renderDirectChatDesktopSubtitle(currentThreadInfo),
-            renderDirectChatDesktopPresence(currentThreadInfo)
-          );
+          setChatTitle(title);
+          renderHeaderStatus();
         }
 
         if (shouldRerender) {
@@ -2152,6 +2363,26 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         await loadChats("chatList", { showLoading: false });
+      });
+
+      socket.on("typing_started", (data) => {
+        const roomMatches = chatType === "group"
+          ? String(data?.chat_id) === String(chatId) && data?.chat_type === "group"
+          : String(data?.chat_id) === String(chatId) && data?.chat_type === "direct";
+        if (!roomMatches) {
+          return;
+        }
+        setRemoteTypingUser(data?.user_id, data || {});
+      });
+
+      socket.on("typing_stopped", (data) => {
+        const roomMatches = chatType === "group"
+          ? String(data?.chat_id) === String(chatId) && data?.chat_type === "group"
+          : String(data?.chat_id) === String(chatId) && data?.chat_type === "direct";
+        if (!roomMatches) {
+          return;
+        }
+        clearRemoteTypingUser(data?.user_id, true);
       });
 
       socket.on("group_members_updated", async (data) => {
@@ -2489,7 +2720,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         title: data.title || nextTitle,
         description: typeof data.description === "string" ? data.description : nextDescription
       };
-      setChatTitle(currentThreadInfo.title, `${currentThreadInfo.members_count || currentThreadInfo.members?.length || 0} участников`);
+      setChatTitle(currentThreadInfo.title);
+      renderHeaderStatus();
       fillThreadInfoPanel(currentThreadInfo, chatType);
       updateThreadInviteControls();
       await loadChats("chatList", { showLoading: false });
@@ -2556,6 +2788,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     event.preventDefault();
     composer.requestSubmit();
+  });
+
+  input.addEventListener("input", () => {
+    handleComposerTyping();
+  });
+
+  input.addEventListener("blur", () => {
+    emitTypingStop();
   });
 
   messagesNode.addEventListener("scroll", () => {
@@ -2797,6 +3037,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!text) return;
 
     if (editingMessageState) {
+      emitTypingStop();
       if (text === editingMessageState.text.trim()) {
         setEditingMessageState(null);
         input.value = "";
@@ -2840,6 +3081,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     isSendingMessage = true;
+    typingState.isSending = true;
+    emitTypingStop();
     const shouldStickToBottom = isNearBottom(messagesNode);
     const pendingMessageNode = appendPendingMessage(messagesNode, text, chatType);
     pendingMessageState = { text, node: pendingMessageNode };
@@ -2891,6 +3134,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         removePendingMessage(pendingMessageNode);
         pendingMessageState = null;
       }
+      typingState.isSending = false;
       input.disabled = false;
       if (sendButton) {
         sendButton.disabled = false;
@@ -2902,6 +3146,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   window.addEventListener("pagehide", () => {
+    emitTypingStop();
+    if (typingCooldownTimer) {
+      window.clearTimeout(typingCooldownTimer);
+      typingCooldownTimer = null;
+    }
     if (socket) {
       socket.disconnect();
       socket = null;
@@ -2909,6 +3158,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   window.addEventListener("beforeunload", () => {
+    emitTypingStop();
+    if (typingCooldownTimer) {
+      window.clearTimeout(typingCooldownTimer);
+      typingCooldownTimer = null;
+    }
     if (socket) {
       socket.disconnect();
       socket = null;
