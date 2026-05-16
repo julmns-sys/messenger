@@ -106,6 +106,7 @@ function applyAppSettings(settings = readAppSettings()) {
   document.body.classList.toggle("settings-theme-dark", normalizedSettings.theme === "dark");
   document.body.classList.toggle("settings-surface-compact", normalizedSettings.surfaceMode === "compact");
   document.body.classList.toggle("settings-surface-glass", normalizedSettings.surfaceMode !== "compact");
+  document.body.classList.toggle("settings-strong-surface-blur", normalizedSettings.transparency < 65);
   document.body.classList.toggle("settings-reduced-motion", !normalizedSettings.animations);
   document.body.dataset.chatWallpaper = normalizedSettings.chatWallpaper;
 
@@ -478,29 +479,98 @@ function getSidebarProfileEditConfig(field) {
   return {
     name: {
       label: "Имя",
-      multiline: false,
+      editor: "input",
       maxLength: 80,
       value: (user) => user?.name || ""
     },
     email: {
       label: "Email",
-      multiline: false,
+      editor: "input",
       maxLength: 255,
       value: (user) => user?.email || ""
     },
     username: {
       label: "Username",
-      multiline: false,
+      editor: "input",
       maxLength: 32,
       value: (user) => user?.username || ""
     },
     bio: {
       label: "Bio",
-      multiline: true,
+      editor: "contenteditable",
       maxLength: 50,
       value: (user) => user?.bio || ""
     }
   }[field];
+}
+
+function createSidebarProfileEditorControl(field, config, value) {
+  if (config.editor === "contenteditable") {
+    const editor = document.createElement("div");
+    editor.className = "sidebar-profile-editor-input";
+    editor.dataset.editorField = field;
+    editor.dataset.placeholder = `Введите ${config.label.toLowerCase()}`;
+    editor.setAttribute("contenteditable", "true");
+    editor.setAttribute("role", "textbox");
+    editor.setAttribute("aria-multiline", "true");
+    editor.spellcheck = true;
+    editor.textContent = value;
+    editor.classList.toggle("is-empty", !value);
+    return editor;
+  }
+
+  const input = document.createElement("input");
+  input.className = "sidebar-profile-editor-input";
+  input.dataset.editorField = field;
+  input.type = field === "email" ? "email" : "text";
+  if (config.maxLength) {
+    input.maxLength = config.maxLength;
+  }
+  input.value = value;
+  input.placeholder = `Введите ${config.label.toLowerCase()}`;
+  input.classList.toggle("is-empty", !value);
+  return input;
+}
+
+function readSidebarProfileEditorValue(control) {
+  if (!control) {
+    return "";
+  }
+
+  if (control.matches('[contenteditable="true"]')) {
+    return (control.textContent || "").trim();
+  }
+
+  return (control.value || "").trim();
+}
+
+function updateSidebarProfileEditorVisualState(control) {
+  if (!control) {
+    return;
+  }
+
+  control.classList.toggle("is-empty", !readSidebarProfileEditorValue(control));
+}
+
+function focusSidebarProfileEditorControl(control) {
+  if (!control) {
+    return;
+  }
+
+  control.focus();
+  if (control.matches('[contenteditable="true"]')) {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(control);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return;
+  }
+
+  if (typeof control.setSelectionRange === "function") {
+    control.setSelectionRange(control.value.length, control.value.length);
+  }
 }
 
 function hideSidebarProfileEditor(factNode) {
@@ -584,25 +654,19 @@ function openSidebarProfileEditor(field) {
   line.classList.add("editing");
   setSidebarProfileStatus(factNode, "");
 
-  line.querySelectorAll("strong, button").forEach((node) => {
-    if (!node.classList.contains("sidebar-profile-editor-button")) {
-      node.dataset.profileLineItem = "true";
-      node.hidden = true;
-    }
-  });
+  const valueNode = line.querySelector("strong, .sidebar-profile-secret");
+  if (valueNode) {
+    valueNode.dataset.profileLineItem = "true";
+    valueNode.hidden = true;
+  }
+  if (button) {
+    button.dataset.profileLineItem = "true";
+    button.hidden = true;
+  }
 
   const editor = document.createElement("form");
   editor.className = "sidebar-profile-editor";
-
-  const input = document.createElement("input");
-
-  input.className = "sidebar-profile-editor-input";
-  input.type = field === "email" ? "email" : "text";
-  if (config.maxLength) {
-    input.maxLength = config.maxLength;
-  }
-  input.value = config.value(currentUser);
-  input.placeholder = `Введите ${config.label.toLowerCase()}`;
+  const control = createSidebarProfileEditorControl(field, config, config.value(currentUser));
 
   const actions = document.createElement("div");
   actions.className = "sidebar-profile-editor-actions";
@@ -611,28 +675,17 @@ function openSidebarProfileEditor(field) {
     <button class="sidebar-profile-editor-button save" type="submit">Сохранить</button>
   `;
 
-  editor.appendChild(input);
+  editor.appendChild(control);
   editor.appendChild(actions);
   line.appendChild(editor);
-  input.focus();
-  if (typeof input.setSelectionRange === "function") {
-    input.setSelectionRange(input.value.length, input.value.length);
-  }
+  focusSidebarProfileEditorControl(control);
 
   actions.querySelector(".cancel")?.addEventListener("click", () => {
     hideSidebarProfileEditor(factNode);
   });
 
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      hideSidebarProfileEditor(factNode);
-    }
-  });
-
-  editor.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const nextValue = input.value.trim();
+  const onSubmit = async () => {
+    const nextValue = readSidebarProfileEditorValue(control);
     const saveButton = actions.querySelector(".save");
     if (saveButton) saveButton.disabled = true;
     setSidebarProfileStatus(factNode, "Сохранение...", "loading");
@@ -648,6 +701,43 @@ function openSidebarProfileEditor(field) {
       setSidebarProfileStatus(factNode, error.message, "error");
       if (saveButton) saveButton.disabled = false;
     }
+  };
+
+  control.addEventListener("input", () => {
+    if (config.maxLength && control.matches('[contenteditable="true"]')) {
+      const currentValue = control.textContent || "";
+      if (currentValue.length > config.maxLength) {
+        control.textContent = currentValue.slice(0, config.maxLength);
+        focusSidebarProfileEditorControl(control);
+      }
+    }
+    updateSidebarProfileEditorVisualState(control);
+  });
+
+  control.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideSidebarProfileEditor(factNode);
+      return;
+    }
+
+    if (field === "bio") {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        void onSubmit();
+      }
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void onSubmit();
+    }
+  });
+
+  editor.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await onSubmit();
   });
 }
 

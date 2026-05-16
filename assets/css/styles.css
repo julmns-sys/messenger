@@ -602,10 +602,11 @@ textarea {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .sidebar-profile-line.editing {
-  align-items: center;
+  row-gap: 8px;
 }
 
 .sidebar-profile-line > strong,
@@ -685,10 +686,12 @@ textarea {
 }
 
 .sidebar-profile-editor {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 12px;
+  row-gap: 8px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -699,43 +702,89 @@ textarea {
 .sidebar-profile-editor-input {
   width: 100%;
   min-width: 0;
-  flex: 1;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
   color: var(--text);
-  padding: 8px 12px;
+  padding: 0;
   outline: none;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: left;
+  box-shadow: none;
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, padding 0.18s ease;
 }
 
+.sidebar-profile-editor-input::placeholder {
+  color: rgba(137, 154, 174, 0.72);
+}
+
+.sidebar-profile-editor-input.is-empty,
 .sidebar-profile-editor-input:focus {
-  border-color: rgba(51, 144, 236, 0.32);
-  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(51, 144, 236, 0.22);
+  background: rgba(255, 255, 255, 0.4);
+  padding: 6px 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), 0 0 0 3px rgba(51, 144, 236, 0.08);
+}
+
+.sidebar-profile-editor-input[data-editor-field="bio"] {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 22px;
+  cursor: text;
+}
+
+.sidebar-profile-editor-input[data-editor-field="bio"]:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(137, 154, 174, 0.72);
 }
 
 .sidebar-profile-editor-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 0 0 auto;
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  padding-left: 0;
 }
 
 .sidebar-profile-editor-button {
   border: 0;
-  border-radius: 10px;
-  padding: 7px 10px;
+  border-radius: 999px;
+  padding: 6px 12px;
   cursor: pointer;
   font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .sidebar-profile-editor-button.cancel {
-  background: rgba(111, 129, 152, 0.1);
+  background: rgba(111, 129, 152, 0.12);
   color: var(--text-soft);
 }
 
 .sidebar-profile-editor-button.save {
-  background: rgba(51, 144, 236, 0.12);
+  background: rgba(51, 144, 236, 0.14);
   color: var(--accent);
+}
+
+.sidebar-profile-editor-button:hover {
+  transform: translateY(-1px);
+}
+
+.sidebar-profile-editor-button.cancel:hover {
+  background: rgba(111, 129, 152, 0.18);
+  color: var(--text);
+}
+
+.sidebar-profile-editor-button.save:hover {
+  background: rgba(51, 144, 236, 0.2);
 }
 
 .sidebar-profile-inline-status {
@@ -1291,6 +1340,18 @@ body.settings-theme-dark .composer-edit-banner {
   box-shadow: 0 14px 30px rgba(3, 8, 14, 0.2);
 }
 
+body.settings-theme-dark .sidebar-profile-editor-input.is-empty,
+body.settings-theme-dark .sidebar-profile-editor-input:focus {
+  border-color: rgba(146, 170, 198, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 0 3px rgba(51, 144, 236, 0.1);
+}
+
+body.settings-theme-dark .sidebar-profile-editor-input::placeholder,
+body.settings-theme-dark .sidebar-profile-editor-input[data-editor-field="bio"]:empty::before {
+  color: rgba(159, 176, 195, 0.72);
+}
+
 body.settings-theme-dark .thread-member-action-menu button,
 body.settings-theme-dark .thread-info-action-menu button,
 body.settings-theme-dark .quick-actions-menu-item {
@@ -1326,6 +1387,25 @@ body.settings-theme-dark .composer-edit-cancel {
 
 body.settings-theme-dark .composer-edit-cancel:hover {
   color: var(--text);
+}
+
+body.settings-theme-dark .sidebar-profile-editor-button.cancel {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(224, 233, 242, 0.78);
+}
+
+body.settings-theme-dark .sidebar-profile-editor-button.cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+body.settings-theme-dark .sidebar-profile-editor-button.save {
+  background: rgba(51, 144, 236, 0.18);
+  color: #cfe6ff;
+}
+
+body.settings-theme-dark .sidebar-profile-editor-button.save:hover {
+  background: rgba(51, 144, 236, 0.24);
 }
 
 body.settings-theme-dark .thread-member-action-menu button:hover,
@@ -1448,6 +1528,73 @@ body.settings-theme-dark .message-date-divider-pill {
   background: linear-gradient(180deg, rgba(24, 36, 49, 0.9), rgba(19, 30, 41, 0.94));
   box-shadow: 0 10px 22px rgba(3, 8, 14, 0.22);
   color: rgba(224, 233, 242, 0.78);
+}
+
+body.settings-strong-surface-blur .sidebar,
+body.settings-strong-surface-blur .thread-info-panel {
+  backdrop-filter: blur(36px) saturate(1.16);
+  -webkit-backdrop-filter: blur(36px) saturate(1.16);
+}
+
+body.settings-strong-surface-blur .sidebar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.78));
+}
+
+body.settings-theme-dark.settings-strong-surface-blur .sidebar {
+  background: linear-gradient(180deg, rgba(14, 24, 34, 0.94), rgba(13, 23, 33, 0.88)) !important;
+}
+
+body.settings-strong-surface-blur .sidebar-profile-card,
+body.settings-strong-surface-blur .sidebar-profile-actions {
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(24px) saturate(1.1);
+  -webkit-backdrop-filter: blur(24px) saturate(1.1);
+}
+
+body.settings-theme-dark.settings-strong-surface-blur .sidebar-profile-card,
+body.settings-theme-dark.settings-strong-surface-blur .sidebar-profile-actions {
+  background: rgba(24, 36, 48, 0.78) !important;
+}
+
+body.settings-strong-surface-blur .thread-info-panel-header,
+body.settings-strong-surface-blur .thread-info-members-header {
+  backdrop-filter: blur(24px) saturate(1.1);
+  -webkit-backdrop-filter: blur(24px) saturate(1.1);
+}
+
+body.settings-strong-surface-blur .thread-info-panel-header {
+  background:
+    radial-gradient(circle at top right, rgba(125, 180, 255, 0.18), transparent 38%),
+    linear-gradient(180deg, rgba(249, 252, 255, 0.82), rgba(241, 247, 255, 0.62));
+}
+
+body.settings-theme-dark.settings-strong-surface-blur .thread-info-panel-header {
+  background:
+    radial-gradient(circle at top right, rgba(78, 145, 223, 0.2), transparent 38%),
+    linear-gradient(180deg, rgba(23, 35, 48, 0.9), rgba(19, 30, 41, 0.76));
+}
+
+body.settings-strong-surface-blur .thread-info-panel-header .icon-button {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.52);
+  box-shadow: 0 12px 26px rgba(27, 39, 52, 0.1);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+body.settings-strong-surface-blur .thread-info-panel-header .icon-button:hover {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 14px 30px rgba(27, 39, 52, 0.14);
+}
+
+body.settings-theme-dark.settings-strong-surface-blur .thread-info-panel-header .icon-button {
+  border-color: rgba(146, 170, 198, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 26px rgba(3, 8, 14, 0.22);
+}
+
+body.settings-theme-dark.settings-strong-surface-blur .thread-info-panel-header .icon-button:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 body:not(.settings-theme-dark) .content,
@@ -4670,6 +4817,27 @@ body[data-chat-wallpaper="paper"] .messages {
     overflow: hidden;
   }
 
+  body.settings-strong-surface-blur .thread-info-panel {
+    border-left-color: rgba(255, 255, 255, 0.34);
+    background:
+      radial-gradient(circle at top right, rgba(125, 180, 255, 0.22), transparent 30%),
+      linear-gradient(180deg, rgba(245, 249, 255, 0.96), rgba(233, 242, 252, 0.92));
+    backdrop-filter: blur(40px) saturate(1.18);
+    -webkit-backdrop-filter: blur(40px) saturate(1.18);
+    box-shadow: -24px 0 54px rgba(20, 36, 58, 0.2);
+  }
+
+  body.settings-strong-surface-blur .thread-info-panel-header {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background:
+      radial-gradient(circle at top right, rgba(125, 180, 255, 0.18), transparent 40%),
+      linear-gradient(180deg, rgba(245, 249, 255, 0.94), rgba(245, 249, 255, 0.78));
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+
   .thread-info-panel-body {
     gap: 16px;
     padding: 18px 16px 20px;
@@ -4688,6 +4856,12 @@ body[data-chat-wallpaper="paper"] .messages {
     padding-bottom: 10px;
     background: linear-gradient(180deg, rgba(247, 250, 255, 0.96), rgba(247, 250, 255, 0.86));
     backdrop-filter: blur(12px);
+  }
+
+  body.settings-strong-surface-blur .thread-info-members-header {
+    background: linear-gradient(180deg, rgba(247, 250, 255, 0.98), rgba(247, 250, 255, 0.9));
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
   }
 
   .thread-info-members-list {
