@@ -270,6 +270,14 @@ function getUserTimeZone() {
   }
 }
 
+function getPreferredTimeFormat() {
+  try {
+    return document.body?.dataset?.timeFormat === "12" ? "12" : "24";
+  } catch {
+    return "24";
+  }
+}
+
 function parseUtcDate(value) {
   if (!value) return null;
 
@@ -329,8 +337,21 @@ function getLocalDateKey(value) {
 function formatTime(value) {
   const date = parseUtcDate(value);
   if (!date) return "";
+  const timeZone = getUserTimeZone();
+  if (getPreferredTimeFormat() === "12") {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h12"
+    });
+    return formatter.format(date);
+  }
+
   return date.toLocaleTimeString("ru-RU", {
-    timeZone: getUserTimeZone(),
+    timeZone,
+    hour12: false,
+    hourCycle: "h23",
     hour: "2-digit",
     minute: "2-digit"
   });

@@ -336,10 +336,14 @@ def _ensure_contacts_alias_column(conn):
 
 def _ensure_message_preview_columns(conn, table_name):
     expected_columns = {
+        "message_type": "VARCHAR(32) NOT NULL DEFAULT 'text'",
         "preview_url": "VARCHAR(1000) NULL",
         "preview_title": "VARCHAR(255) NULL",
         "preview_description": "VARCHAR(500) NULL",
         "preview_site_name": "VARCHAR(255) NULL",
+        "audio_url": "VARCHAR(1000) NULL",
+        "audio_mime_type": "VARCHAR(120) NULL",
+        "audio_duration_ms": "INT NULL",
     }
     cursor = conn.cursor(dictionary=False)
     try:

@@ -30,7 +30,14 @@ const defaultAppSettings = {
   chatWallpaper: "none",
   transparency: 62,
   uiRadius: 24,
-  enterToSend: true
+  enterToSend: true,
+  messageDensity: "comfortable",
+  linkPreviews: true,
+  timeFormat: "24",
+  notificationSound: true,
+  desktopNotifications: false,
+  notificationTextPreview: true,
+  doNotDisturb: false
 };
 
 function getChatStateKey(chatId, chatType = "direct") {
@@ -82,6 +89,22 @@ function darkenHexColor(color, amount = 0.14) {
   return `#${adjust(0)}${adjust(2)}${adjust(4)}`;
 }
 
+function getChatListPreviewText(lastMessage) {
+  if (!lastMessage) {
+    return "Нет сообщений";
+  }
+
+  const messageType = String(lastMessage.message_type || "text");
+  if (messageType === "voice") {
+    return "Голосовое сообщение";
+  }
+  if (messageType === "system") {
+    return lastMessage.text || "Системное сообщение";
+  }
+
+  return lastMessage.text || "Нет сообщений";
+}
+
 function normalizeAppSettings(rawSettings = {}) {
   return {
     ...defaultAppSettings,
@@ -94,7 +117,16 @@ function normalizeAppSettings(rawSettings = {}) {
     chatWallpaper: ["none", "grid", "aurora", "paper"].includes(rawSettings.chatWallpaper) ? rawSettings.chatWallpaper : "none",
     transparency: clampSetting(rawSettings.transparency, 35, 92, defaultAppSettings.transparency),
     uiRadius: clampSetting(rawSettings.uiRadius, 12, 34, defaultAppSettings.uiRadius),
-    enterToSend: rawSettings.enterToSend !== false
+    enterToSend: rawSettings.enterToSend !== false,
+    linkPreviews: rawSettings.linkPreviews !== false,
+    timeFormat: rawSettings.timeFormat === "12" ? "12" : "24",
+    notificationSound: rawSettings.notificationSound !== false,
+    desktopNotifications: rawSettings.desktopNotifications === true,
+    notificationTextPreview: rawSettings.notificationTextPreview !== false,
+    doNotDisturb: rawSettings.doNotDisturb === true,
+    messageDensity: ["compact", "comfortable", "spacious"].includes(rawSettings.messageDensity)
+      ? rawSettings.messageDensity
+      : defaultAppSettings.messageDensity
   };
 }
 
@@ -102,13 +134,60 @@ function applyAppSettings(settings = readAppSettings()) {
   const normalizedSettings = normalizeAppSettings(settings);
   const root = document.documentElement;
   const accentDark = darkenHexColor(normalizedSettings.accentColor, 0.14);
+  const densityPresets = {
+    compact: {
+      stackGap: "9px",
+      bubblePadding: "7px 12px 5px",
+      bubbleRadius: "18px",
+      directPadding: "6px 11px 4px",
+      directRadius: "17px",
+      authorMarginBottom: "3px",
+      authorSize: "12px",
+      textLineHeight: "1.32",
+      previewMarginBottom: "7px",
+      previewPadding: "8px 11px",
+      metaMarginTop: "3px",
+      directMetaMarginTop: "2px"
+    },
+    comfortable: {
+      stackGap: "14px",
+      bubblePadding: "10px 16px 7px",
+      bubbleRadius: "22px",
+      directPadding: "9px 14px 6px",
+      directRadius: "20px",
+      authorMarginBottom: "6px",
+      authorSize: "13px",
+      textLineHeight: "1.4",
+      previewMarginBottom: "9px",
+      previewPadding: "10px 13px",
+      metaMarginTop: "4px",
+      directMetaMarginTop: "3px"
+    },
+    spacious: {
+      stackGap: "18px",
+      bubblePadding: "13px 18px 9px",
+      bubbleRadius: "24px",
+      directPadding: "11px 16px 8px",
+      directRadius: "22px",
+      authorMarginBottom: "6px",
+      authorSize: "13px",
+      textLineHeight: "1.47",
+      previewMarginBottom: "10px",
+      previewPadding: "11px 14px",
+      metaMarginTop: "5px",
+      directMetaMarginTop: "4px"
+    }
+  };
+  const densityPreset = densityPresets[normalizedSettings.messageDensity] || densityPresets.comfortable;
 
   document.body.classList.toggle("settings-theme-dark", normalizedSettings.theme === "dark");
   document.body.classList.toggle("settings-surface-compact", normalizedSettings.surfaceMode === "compact");
   document.body.classList.toggle("settings-surface-glass", normalizedSettings.surfaceMode !== "compact");
   document.body.classList.toggle("settings-strong-surface-blur", normalizedSettings.transparency < 65);
   document.body.classList.toggle("settings-reduced-motion", !normalizedSettings.animations);
+  document.body.classList.toggle("settings-link-previews-off", !normalizedSettings.linkPreviews);
   document.body.dataset.chatWallpaper = normalizedSettings.chatWallpaper;
+  document.body.dataset.timeFormat = normalizedSettings.timeFormat;
 
   root.style.setProperty("--accent", normalizedSettings.accentColor);
   root.style.setProperty("--accent-dark", accentDark);
@@ -117,10 +196,31 @@ function applyAppSettings(settings = readAppSettings()) {
   root.style.setProperty("--radius-lg", `${normalizedSettings.uiRadius}px`);
   root.style.setProperty("--radius-md", `${Math.max(12, normalizedSettings.uiRadius - 6)}px`);
   root.style.setProperty("--radius-sm", `${Math.max(10, normalizedSettings.uiRadius - 10)}px`);
+  root.style.setProperty("--message-stack-gap", densityPreset.stackGap);
+  root.style.setProperty("--message-bubble-padding", densityPreset.bubblePadding);
+  root.style.setProperty("--message-bubble-radius", densityPreset.bubbleRadius);
+  root.style.setProperty("--message-direct-padding", densityPreset.directPadding);
+  root.style.setProperty("--message-direct-radius", densityPreset.directRadius);
+  root.style.setProperty("--message-author-margin-bottom", densityPreset.authorMarginBottom);
+  root.style.setProperty("--message-author-font-size", densityPreset.authorSize);
+  root.style.setProperty("--message-text-line-height", densityPreset.textLineHeight);
+  root.style.setProperty("--message-preview-margin-bottom", densityPreset.previewMarginBottom);
+  root.style.setProperty("--message-preview-padding", densityPreset.previewPadding);
+  root.style.setProperty("--message-meta-margin-top", densityPreset.metaMarginTop);
+  root.style.setProperty("--message-direct-meta-margin-top", densityPreset.directMetaMarginTop);
+
+  document.dispatchEvent(new CustomEvent("appsettingschange", {
+    detail: normalizedSettings
+  }));
+
+  const chatList = document.getElementById("chatList");
+  if (chatList && Array.isArray(chatState.allChats)) {
+    renderChats(chatList, filterChats(getChatSearchQuery()));
+  }
 }
 
 function initSettingsControls() {
-  const settingsList = document.getElementById("settingsList");
+  const settingsRoot = document.querySelector(".sidebar-settings-body");
   const resetButton = document.querySelector("[data-settings-reset='appearance']");
   const settingsSections = document.querySelectorAll(".sidebar-settings-body .sidebar-settings-section");
   const settings = normalizeAppSettings(readAppSettings());
@@ -157,15 +257,15 @@ function initSettingsControls() {
     });
   }
 
-  if (!settingsList || settingsList.dataset.settingsBound === "true") {
+  if (!settingsRoot || settingsRoot.dataset.settingsBound === "true") {
     return;
   }
 
-  settingsList.dataset.settingsBound = "true";
+  settingsRoot.dataset.settingsBound = "true";
   const controlMap = new Map();
 
   const updateValuePreview = (settingKey, value) => {
-    const valueNode = settingsList.querySelector(`[data-setting-value="${settingKey}"]`);
+    const valueNode = settingsRoot.querySelector(`[data-setting-value="${settingKey}"]`);
     if (!valueNode) {
       return;
     }
@@ -180,7 +280,7 @@ function initSettingsControls() {
     }
   };
 
-  settingsList.querySelectorAll("[data-setting-control]").forEach((input) => {
+  settingsRoot.querySelectorAll("[data-setting-control]").forEach((input) => {
     const settingKey = input.dataset.settingControl;
     if (!settingKey) return;
     controlMap.set(settingKey, input);
@@ -193,6 +293,38 @@ function initSettingsControls() {
     updateValuePreview(settingKey, settings[settingKey]);
 
     input.addEventListener("input", () => {
+      if (settingKey === "desktopNotifications" && input.type === "checkbox" && input.checked) {
+        if (typeof window.Notification !== "function") {
+          input.checked = false;
+          showAppToast("Браузер не поддерживает desktop notifications", { type: "error" });
+          return;
+        }
+
+        if (window.Notification.permission === "denied") {
+          input.checked = false;
+          showAppToast("Уведомления браузера заблокированы в настройках", { type: "error" });
+          return;
+        }
+
+        if (window.Notification.permission === "default") {
+          window.Notification.requestPermission().then((permission) => {
+            if (permission !== "granted") {
+              input.checked = false;
+              const revertedSettings = normalizeAppSettings({
+                ...readAppSettings(),
+                desktopNotifications: false
+              });
+              saveAppSettings(revertedSettings);
+              applyAppSettings(revertedSettings);
+              showAppToast("Доступ к уведомлениям не выдан", { type: "error" });
+            }
+          }).catch(() => {
+            input.checked = false;
+            showAppToast("Не удалось запросить доступ к уведомлениям", { type: "error" });
+          });
+        }
+      }
+
       const nextSettings = normalizeAppSettings({
         ...readAppSettings(),
         [settingKey]: input.type === "checkbox" ? input.checked : input.value
@@ -215,7 +347,10 @@ function initSettingsControls() {
         animations: defaultAppSettings.animations,
         chatWallpaper: defaultAppSettings.chatWallpaper,
         transparency: defaultAppSettings.transparency,
-        uiRadius: defaultAppSettings.uiRadius
+        uiRadius: defaultAppSettings.uiRadius,
+        linkPreviews: defaultAppSettings.linkPreviews,
+        timeFormat: defaultAppSettings.timeFormat,
+        messageDensity: defaultAppSettings.messageDensity
       });
 
       saveAppSettings(nextSettings);
@@ -485,7 +620,7 @@ function toggleUserProfileActionMenu(card) {
 function renderUserProfilePanel(user = {}, options = {}) {
   const displayName = getUserProfileDisplayName(user);
   const originalName = getUserProfileOriginalName(user);
-  const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "Не указана";
+  const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "";
   const username = user?.username ? `@${user.username}` : "";
   const presence = renderPresenceBadge(user, { compact: true, includeUsername: false, showDot: false });
   const badges = getUserProfileBadges(user);
@@ -547,7 +682,7 @@ function renderUserProfilePanel(user = {}, options = {}) {
             ${badges.map((badge) => `<span class="user-profile-badge-chip">${escapeHtml(badge)}</span>`).join("")}
           </div>
         ` : ""}
-        <p class="thread-info-description user-profile-bio">${escapeHtml(bio)}</p>
+        ${bio ? `<p class="thread-info-description user-profile-bio">${escapeHtml(bio)}</p>` : ""}
         <div class="status user-profile-actions-status" data-user-profile-status></div>
       </div>
     </section>
@@ -1415,7 +1550,7 @@ function filterChats(query) {
     const haystack = [
       chat.title,
       chat.username,
-      chat.last_message?.text,
+      getChatListPreviewText(chat.last_message),
       customTag?.label
     ]
       .filter(Boolean)
@@ -2335,7 +2470,7 @@ function renderChats(list, chats) {
   list.innerHTML = chats
     .map((chat) => {
       const href = chat.type === "group" ? getGroupChatRoute(chat.id) : getDirectChatRoute(chat.id);
-      const preview = chat.last_message?.text || "Нет сообщений";
+      const preview = getChatListPreviewText(chat.last_message);
       const name = chat.title || chat.username || chat.name || "Чат";
       const isGroup = chat.type === "group";
       const customTagMarkup = getChatTagMarkup(chat.id, chat.type || "direct");

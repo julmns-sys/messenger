@@ -1,6 +1,8 @@
 from datetime import date, datetime, timezone
 from html import unescape
+from pathlib import Path
 import re
+import uuid
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -21,6 +23,19 @@ typing_sessions = {}
 link_preview_cache = {}
 LINK_PREVIEW_TIMEOUT = 4
 MESSAGE_URL_PATTERN = re.compile(r"((?:https?://|www\.)[^\s<]+)", flags=re.IGNORECASE)
+BASE_DIR = Path(__file__).resolve().parent
+VOICE_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "voice"
+VOICE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+VOICE_EXTENSIONS_BY_MIME = {
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+}
 
 
 def format_timestamp(value):
@@ -114,6 +129,26 @@ def serialize_message_link_preview(message):
     return preview
 
 
+def parse_duration_ms(raw_value, default=0):
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(value, 60 * 60 * 1000))
+
+
+def serialize_message_audio(message):
+    audio_url = row_value(message, "audio_url", "")
+    if not audio_url:
+        return None
+
+    return {
+        "url": audio_url,
+        "mime_type": row_value(message, "audio_mime_type", "") or "audio/webm",
+        "duration_ms": parse_duration_ms(row_value(message, "audio_duration_ms", 0))
+    }
+
+
 def ensure_message_preview_data(conn, table_name, message):
     if not message:
         return False
@@ -203,6 +238,43 @@ def build_link_preview(url):
     }
     link_preview_cache[normalized_url] = preview
     return preview
+
+
+def save_voice_upload(uploaded_file):
+    if not uploaded_file or not uploaded_file.filename:
+        raise ValueError("Файл голосового сообщения не найден")
+
+    mime_type = str(uploaded_file.mimetype or "").split(";", 1)[0].strip().lower()
+    if not mime_type.startswith("audio/"):
+        raise ValueError("Поддерживаются только аудиофайлы")
+
+    extension = VOICE_EXTENSIONS_BY_MIME.get(mime_type) or Path(uploaded_file.filename).suffix.lower() or ".webm"
+    filename = f"{uuid.uuid4().hex}{extension}"
+    uploaded_file.save(VOICE_UPLOAD_DIR / filename)
+    return {
+        "url": f"/assets/uploads/voice/{filename}",
+        "mime_type": mime_type
+    }
+
+
+def iter_voice_file_paths(audio_urls):
+    for audio_url in audio_urls or []:
+        value = str(audio_url or "").strip()
+        if not value or not value.startswith("/assets/uploads/voice/"):
+            continue
+        filename = Path(value).name
+        if not filename:
+            continue
+        yield VOICE_UPLOAD_DIR / filename
+
+
+def remove_voice_files(audio_urls):
+    for file_path in iter_voice_file_paths(audio_urls):
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError:
+            continue
 
 
 def persist_token(token, user_id):
@@ -748,7 +820,9 @@ def serialize_direct_message(message):
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
+        "message_type": row_value(message, "message_type", "text") or "text",
         "link_preview": serialize_message_link_preview(message),
+        "audio": serialize_message_audio(message),
         "created_at": format_timestamp(message["created_at"]),
         "is_read": bool(message["read_at"]),
         "is_edited": bool(message["edited_at"])
@@ -762,6 +836,7 @@ def serialize_group_message(message):
         "sender_name": message["sender_name"],
         "text": message["text"],
         "link_preview": serialize_message_link_preview(message),
+        "audio": serialize_message_audio(message),
         "message_type": message["message_type"] or "text",
         "created_at": format_timestamp(message["created_at"]),
         "is_edited": bool(message["edited_at"])
@@ -798,7 +873,7 @@ def mark_group_chat_as_read(conn, group_id, reader_id):
         SELECT MAX(gm.id) AS upto_message_id
         FROM group_messages gm
         WHERE gm.group_id = %s
-          AND gm.message_type = 'text'
+          AND gm.message_type != 'system'
           AND NOT EXISTS (
               SELECT 1
               FROM hidden_group_messages hgm
@@ -827,7 +902,7 @@ def initialize_group_read_state(conn, group_id, user_id):
         SELECT MAX(id) AS last_message_id
         FROM group_messages
         WHERE group_id = %s
-          AND message_type = 'text'
+          AND message_type != 'system'
     """, (group_id,)).fetchone()
     last_message_id = latest_row["last_message_id"] if latest_row else None
     if not last_message_id:
@@ -847,10 +922,14 @@ def get_direct_message_for_chat(conn, chat_id, message_id):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
             m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -876,6 +955,9 @@ def get_group_message_for_group(conn, group_id, message_id):
             gm.preview_title,
             gm.preview_description,
             gm.preview_site_name,
+            gm.audio_url,
+            gm.audio_mime_type,
+            gm.audio_duration_ms,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -955,10 +1037,14 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
             m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1001,6 +1087,9 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             gm.preview_title,
             gm.preview_description,
             gm.preview_site_name,
+            gm.audio_url,
+            gm.audio_mime_type,
+            gm.audio_duration_ms,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1031,10 +1120,14 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
             m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1066,6 +1159,9 @@ def search_group_messages(conn, group_id, user_id, query, limit):
             gm.preview_title,
             gm.preview_description,
             gm.preview_site_name,
+            gm.audio_url,
+            gm.audio_mime_type,
+            gm.audio_duration_ms,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1090,10 +1186,14 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
             m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1141,6 +1241,14 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.message_type,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1202,6 +1310,9 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.preview_title,
             gm.preview_description,
             gm.preview_site_name,
+            gm.audio_url,
+            gm.audio_mime_type,
+            gm.audio_duration_ms,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1228,6 +1339,9 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.preview_title,
             gm.preview_description,
             gm.preview_site_name,
+            gm.audio_url,
+            gm.audio_mime_type,
+            gm.audio_duration_ms,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1249,6 +1363,13 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.preview_url,
+            gm.preview_title,
+            gm.preview_description,
+            gm.preview_site_name,
+            gm.audio_url,
+            gm.audio_mime_type,
+            gm.audio_duration_ms,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1301,7 +1422,7 @@ def get_user_display_name(user):
     return user["name"] or user["username"] or "Пользователь"
 
 
-def create_group_message_record(conn, group_id, sender_id, text, message_type="text"):
+def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None):
     preview = extract_message_preview(text) if message_type == "text" else None
     cur = conn.cursor()
     cur.execute("""
@@ -1313,9 +1434,12 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             preview_url,
             preview_title,
             preview_description,
-            preview_site_name
+            preview_site_name,
+            audio_url,
+            audio_mime_type,
+            audio_duration_ms
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         group_id,
         sender_id,
@@ -1324,7 +1448,10 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
         preview["url"] if preview else None,
         preview["title"][:255] if preview else None,
         preview["description"][:500] if preview else None,
-        preview["site_name"][:255] if preview else None
+        preview["site_name"][:255] if preview else None,
+        audio["url"] if audio else None,
+        audio["mime_type"] if audio else None,
+        parse_duration_ms(audio.get("duration_ms")) if audio else None
     ))
     return get_group_message_for_group(conn, group_id, cur.lastrowid)
 
@@ -2132,6 +2259,13 @@ def get_chats():
                 LIMIT 1
             ) AS last_message_text,
             (
+                SELECT m.message_type
+                FROM messages m
+                WHERE m.chat_id = c.id
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT 1
+            ) AS last_message_type,
+            (
                 SELECT m.created_at
                 FROM messages m
                 WHERE m.chat_id = c.id
@@ -2188,6 +2322,18 @@ def get_chats():
                 LIMIT 1
             ) AS last_message_text,
             (
+                SELECT gm.message_type
+                FROM group_messages gm
+                WHERE gm.group_id = g.id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS last_message_type,
+            (
                 SELECT gm.created_at
                 FROM group_messages gm
                 WHERE gm.group_id = g.id
@@ -2203,7 +2349,7 @@ def get_chats():
                 SELECT COUNT(*)
                 FROM group_messages gm
                 WHERE gm.group_id = g.id
-                  AND gm.message_type = 'text'
+                  AND gm.message_type != 'system'
                   AND gm.sender_id != %s
                   AND gm.id > COALESCE((
                       SELECT grs.last_read_message_id
@@ -2219,7 +2365,7 @@ def get_chats():
         FROM groups g
         JOIN group_members gmbr ON gmbr.group_id = g.id
         WHERE gmbr.user_id = %s
-    """, (user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
     conn.close()
 
     chats = [
@@ -2233,7 +2379,10 @@ def get_chats():
             "contact_alias": chat["contact_alias"],
             "is_online": is_user_online(chat["user_id"]),
             "last_seen": format_timestamp(get_user_last_seen(chat["user_id"])),
-            "last_message": {"text": chat["last_message_text"]} if chat["last_message_text"] is not None else None,
+            "last_message": {
+                "text": chat["last_message_text"],
+                "message_type": chat["last_message_type"] or "text"
+            } if chat["last_message_text"] is not None or chat["last_message_type"] is not None else None,
             "updated_at": format_timestamp(chat["updated_at"]),
             "unread_count": chat["unread_count"] or 0
         }
@@ -2246,7 +2395,10 @@ def get_chats():
             "type": "group",
             "username": None,
             "title": group["title"],
-            "last_message": {"text": group["last_message_text"]} if group["last_message_text"] is not None else None,
+            "last_message": {
+                "text": group["last_message_text"],
+                "message_type": group["last_message_type"] or "text"
+            } if group["last_message_text"] is not None or group["last_message_type"] is not None else None,
             "updated_at": format_timestamp(group["updated_at"]),
             "unread_count": group["unread_count"] or 0
         }
@@ -2516,20 +2668,28 @@ def create_chat_message(chat_id):
             chat_id,
             sender_id,
             text,
+            message_type,
             preview_url,
             preview_title,
             preview_description,
-            preview_site_name
+            preview_site_name,
+            audio_url,
+            audio_mime_type,
+            audio_duration_ms
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         chat_id,
         user_id,
         text,
+        "text",
         preview["url"] if preview else None,
         preview["title"][:255] if preview else None,
         preview["description"][:500] if preview else None,
-        preview["site_name"][:255] if preview else None
+        preview["site_name"][:255] if preview else None,
+        None,
+        None,
+        None
     ))
     conn.commit()
 
@@ -2539,10 +2699,14 @@ def create_chat_message(chat_id):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
             m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -2557,6 +2721,84 @@ def create_chat_message(chat_id):
     socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
     emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
 
+    return jsonify(message_data), 201
+
+
+@app.post("/chats/<int:chat_id>/voice")
+def create_chat_voice_message(chat_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    chat = can_access_direct_chat(conn, user_id, chat_id)
+    if not chat:
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    try:
+        audio = save_voice_upload(request.files.get("voice"))
+    except ValueError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 400
+
+    duration_ms = parse_duration_ms(request.form.get("duration_ms"))
+    member_ids = get_direct_chat_member_ids(conn, chat_id)
+
+    cur = conn.cursor()
+    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
+    cur.execute("""
+        INSERT INTO messages (
+            chat_id,
+            sender_id,
+            text,
+            message_type,
+            preview_url,
+            preview_title,
+            preview_description,
+            preview_site_name,
+            audio_url,
+            audio_mime_type,
+            audio_duration_ms
+        )
+        VALUES (%s, %s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s)
+    """, (
+        chat_id,
+        user_id,
+        "",
+        "voice",
+        audio["url"],
+        audio["mime_type"],
+        duration_ms
+    ))
+    conn.commit()
+
+    message = conn.execute("""
+        SELECT
+            m.id,
+            m.sender_id,
+            u.name AS sender_name,
+            m.text,
+            m.message_type,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
+            m.created_at,
+            m.read_at,
+            m.edited_at
+        FROM messages m
+        JOIN users u ON u.id = m.sender_id
+        WHERE m.id = %s
+    """, (cur.lastrowid,)).fetchone()
+    conn.close()
+
+    message_data = serialize_direct_message(message)
+    socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
+    emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
     return jsonify(message_data), 201
 
 
@@ -2576,10 +2818,12 @@ def delete_direct_chat(chat_id):
         return jsonify({"message": "Чат не найден"}), 404
 
     if scope == "all":
+        message_rows = conn.execute("SELECT id, audio_url FROM messages WHERE chat_id = %s", (chat_id,)).fetchall()
         message_ids = [
             row["id"]
-            for row in conn.execute("SELECT id FROM messages WHERE chat_id = %s", (chat_id,)).fetchall()
+            for row in message_rows
         ]
+        voice_urls = [row["audio_url"] for row in message_rows]
 
         if message_ids:
             placeholders = ",".join("%s" for _ in message_ids)
@@ -2590,6 +2834,7 @@ def delete_direct_chat(chat_id):
         conn.execute("DELETE FROM chats WHERE id = %s", (chat_id,))
         conn.commit()
         conn.close()
+        remove_voice_files(voice_urls)
 
         socketio.emit("chat_deleted", {
             "chat_id": chat_id,
@@ -2652,6 +2897,10 @@ def update_chat_message(chat_id, message_id):
         conn.close()
         return jsonify({"message": "Сообщение не найдено"}), 404
 
+    if (message["message_type"] or "text") != "text":
+        conn.close()
+        return jsonify({"message": "Редактировать можно только текстовые сообщения"}), 403
+
     if message["sender_id"] != user_id:
         conn.close()
         return jsonify({"message": "Можно редактировать только свои сообщения"}), 403
@@ -2665,6 +2914,9 @@ def update_chat_message(chat_id, message_id):
             preview_title = %s,
             preview_description = %s,
             preview_site_name = %s,
+            audio_url = NULL,
+            audio_mime_type = NULL,
+            audio_duration_ms = NULL,
             edited_at = CURRENT_TIMESTAMP
         WHERE id = %s AND chat_id = %s
     """, (
@@ -2714,10 +2966,12 @@ def delete_chat_message(chat_id, message_id):
             conn.close()
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
+        voice_url = message.get("audio_url")
         conn.execute("DELETE FROM hidden_messages WHERE message_id = %s", (message_id,))
         conn.execute("DELETE FROM messages WHERE id = %s AND chat_id = %s", (message_id, chat_id))
         conn.commit()
         conn.close()
+        remove_voice_files([voice_url])
 
         socketio.emit("message_deleted", {
             "chat_id": chat_id,
@@ -2757,7 +3011,7 @@ def bulk_delete_chat_messages(chat_id):
 
     placeholders = ",".join("%s" for _ in message_ids)
     message_rows = conn.execute(f"""
-        SELECT id, sender_id
+        SELECT id, sender_id, audio_url
         FROM messages
         WHERE chat_id = %s AND id IN ({placeholders})
     """, [chat_id, *message_ids]).fetchall()
@@ -2774,10 +3028,12 @@ def bulk_delete_chat_messages(chat_id):
             conn.close()
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
+        voice_urls = [row["audio_url"] for row in message_rows]
         conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
         conn.execute(f"DELETE FROM messages WHERE chat_id = %s AND id IN ({placeholders})", [chat_id, *message_ids])
         conn.commit()
         conn.close()
+        remove_voice_files(voice_urls)
 
         for message_id in message_ids:
             socketio.emit("message_deleted", {
@@ -3284,6 +3540,14 @@ def delete_group(group_id):
             WHERE group_id = %s
         """, (group_id,)).fetchall()
     ]
+    voice_urls = [
+        row["audio_url"]
+        for row in conn.execute("""
+            SELECT audio_url
+            FROM group_messages
+            WHERE group_id = %s
+        """, (group_id,)).fetchall()
+    ]
 
     if group_message_ids:
         placeholders = ",".join("%s" for _ in group_message_ids)
@@ -3299,6 +3563,7 @@ def delete_group(group_id):
     conn.execute("DELETE FROM groups WHERE id = %s", (group_id,))
     conn.commit()
     conn.close()
+    remove_voice_files(voice_urls)
 
     return jsonify({
         "ok": True,
@@ -3685,7 +3950,7 @@ def create_group_message(group_id):
         return jsonify({"message": "Текст сообщения обязателен"}), 400
     if message_type != "text":
         conn.close()
-        return jsonify({"message": "Нельзя отправлять системные сообщения вручную"}), 403
+        return jsonify({"message": "Нельзя отправлять этот тип сообщения вручную"}), 403
 
     message = create_group_message_record(conn, group_id, user_id, text, "text")
     conn.commit()
@@ -3693,6 +3958,37 @@ def create_group_message(group_id):
 
     emit_group_new_message(message, group_id)
 
+    return jsonify(serialize_group_message(message)), 201
+
+
+@app.post("/groups/<int:group_id>/voice")
+def create_group_voice_message(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    member = can_access_group(conn, user_id, group_id)
+    if not member:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    try:
+        audio = save_voice_upload(request.files.get("voice"))
+    except ValueError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 400
+
+    duration_ms = parse_duration_ms(request.form.get("duration_ms"))
+    message = create_group_message_record(conn, group_id, user_id, "", "voice", {
+        "url": audio["url"],
+        "mime_type": audio["mime_type"],
+        "duration_ms": duration_ms
+    })
+    conn.commit()
+    conn.close()
+
+    emit_group_new_message(message, group_id)
     return jsonify(serialize_group_message(message)), 201
 
 
@@ -3719,7 +4015,7 @@ def update_group_message(group_id, message_id):
 
     if (message["message_type"] or "text") != "text":
         conn.close()
-        return jsonify({"message": "Системные сообщения нельзя редактировать"}), 403
+        return jsonify({"message": "Редактировать можно только текстовые сообщения"}), 403
 
     if message["sender_id"] != user_id:
         conn.close()
@@ -3734,6 +4030,9 @@ def update_group_message(group_id, message_id):
             preview_title = %s,
             preview_description = %s,
             preview_site_name = %s,
+            audio_url = NULL,
+            audio_mime_type = NULL,
+            audio_duration_ms = NULL,
             edited_at = CURRENT_TIMESTAMP
         WHERE id = %s AND group_id = %s
     """, (
@@ -3778,7 +4077,7 @@ def delete_group_message(group_id, message_id):
         conn.close()
         return jsonify({"message": "Сообщение не найдено"}), 404
 
-    if scope == "all" and (message["message_type"] or "text") != "text":
+    if scope == "all" and (message["message_type"] or "text") == "system":
         conn.close()
         return jsonify({"message": "Системные сообщения нельзя удалять у всех"}), 403
 
@@ -3787,10 +4086,12 @@ def delete_group_message(group_id, message_id):
             conn.close()
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
+        voice_url = message.get("audio_url")
         conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id = %s", (message_id,))
         conn.execute("DELETE FROM group_messages WHERE id = %s AND group_id = %s", (message_id, group_id))
         conn.commit()
         conn.close()
+        remove_voice_files([voice_url])
 
         socketio.emit("message_deleted", {
             "group_id": group_id,
@@ -3830,7 +4131,7 @@ def bulk_delete_group_messages(group_id):
 
     placeholders = ",".join("%s" for _ in message_ids)
     message_rows = conn.execute(f"""
-        SELECT id, sender_id, message_type
+        SELECT id, sender_id, message_type, audio_url
         FROM group_messages
         WHERE group_id = %s AND id IN ({placeholders})
     """, [group_id, *message_ids]).fetchall()
@@ -3842,7 +4143,7 @@ def bulk_delete_group_messages(group_id):
         return jsonify({"message": "Некоторые сообщения не найдены"}), 404
 
     if scope == "all":
-        system_ids = [row["id"] for row in message_rows if (row["message_type"] or "text") != "text"]
+        system_ids = [row["id"] for row in message_rows if (row["message_type"] or "text") == "system"]
         if system_ids:
             conn.close()
             return jsonify({"message": "Системные сообщения нельзя удалять у всех"}), 403
@@ -3852,10 +4153,12 @@ def bulk_delete_group_messages(group_id):
             conn.close()
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
+        voice_urls = [row["audio_url"] for row in message_rows]
         conn.execute(f"DELETE FROM hidden_group_messages WHERE group_message_id IN ({placeholders})", message_ids)
         conn.execute(f"DELETE FROM group_messages WHERE group_id = %s AND id IN ({placeholders})", [group_id, *message_ids])
         conn.commit()
         conn.close()
+        remove_voice_files(voice_urls)
 
         for message_id in message_ids:
             socketio.emit("message_deleted", {
