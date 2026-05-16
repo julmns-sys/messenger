@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from html import unescape
 import re
 from urllib.parse import urlparse
@@ -24,7 +24,8 @@ LINK_PREVIEW_TIMEOUT = 4
 
 def format_timestamp(value):
     if isinstance(value, datetime):
-        return value.isoformat(sep=" ", timespec="seconds")
+        normalized = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return normalized.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     if isinstance(value, date):
         return value.isoformat()
     return value
@@ -1191,7 +1192,7 @@ def handle_disconnect():
     clear_typing_session(request.sid)
     user_id = socket_sessions.pop(request.sid, None)
     if user_id and not is_user_online(user_id):
-        user_last_seen[int(user_id)] = datetime.utcnow()
+        user_last_seen[int(user_id)] = datetime.now(timezone.utc)
         emit_presence_updated(user_id)
 
 

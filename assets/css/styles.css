@@ -4983,6 +4983,25 @@ body.settings-theme-dark .message-link-preview-description {
   transform: translateY(0);
 }
 
+body.settings-theme-dark .scroll-down-button {
+  border-color: rgba(130, 182, 245, 0.22);
+  background:
+    linear-gradient(180deg, rgba(34, 49, 67, 0.94), rgba(23, 34, 48, 0.92)),
+    rgba(51, 144, 236, 0.12);
+  color: #8fc3ff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 24px rgba(3, 8, 14, 0.28);
+}
+
+body.settings-theme-dark .scroll-down-button:hover {
+  background:
+    linear-gradient(180deg, rgba(40, 58, 78, 0.98), rgba(28, 41, 58, 0.96)),
+    rgba(51, 144, 236, 0.18);
+  border-color: rgba(143, 195, 255, 0.34);
+  color: #d8ecff;
+}
+
 @media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;

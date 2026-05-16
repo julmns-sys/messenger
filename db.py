@@ -233,6 +233,14 @@ class MariaCursor:
 class MariaConnection:
     def __init__(self, raw_connection):
         self._raw = raw_connection
+        self._configure_session()
+
+    def _configure_session(self):
+        cursor = self._raw.cursor()
+        try:
+            cursor.execute("SET time_zone = '+00:00'")
+        finally:
+            cursor.close()
 
     def _ensure_alive(self):
         self._raw.ping(reconnect=True, attempts=3, delay=1)
@@ -243,6 +251,7 @@ class MariaConnection:
         except AttributeError:
             self.close()
             self._raw = _build_pool().get_connection()
+        self._configure_session()
 
     def _should_retry(self, exc):
         return getattr(exc, "errno", None) in TRANSIENT_ERROR_CODES
