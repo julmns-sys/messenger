@@ -3508,6 +3508,18 @@ body[data-chat-wallpaper="paper"] .messages {
   border-radius: 18px;
 }
 
+.thread-info-members-list .thread-member-presence-dot {
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  border-width: 2px;
+  background: #3390ec;
+  box-shadow:
+    0 0 0 3px rgba(51, 144, 236, 0.1),
+    0 4px 10px rgba(34, 66, 110, 0.14);
+}
+
 .thread-info-members-list .member-item + .member-item {
   margin-top: 6px;
 }

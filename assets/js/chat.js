@@ -202,6 +202,21 @@ function renderVoiceMessageBody(message = {}, pending = false) {
 
 let activeVoiceAudio = null;
 
+function isVoicePlaybackCompleted(audio, durationOverride = null) {
+  if (!audio) {
+    return false;
+  }
+
+  const fallbackDuration = Number(audio.dataset.durationMs || 0) / 1000;
+  const duration = durationOverride ?? (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallbackDuration);
+  if (!(duration > 0)) {
+    return false;
+  }
+
+  const currentTime = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+  return currentTime >= Math.max(0, duration - 0.15);
+}
+
 function syncVoicePlayerState(player) {
   if (!player) {
     return;
@@ -220,16 +235,21 @@ function syncVoicePlayerState(player) {
   const currentTime = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
   const fallbackDuration = Number(audio.dataset.durationMs || 0) / 1000;
   const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallbackDuration;
-  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const isCompleted = player.dataset.voiceCompleted === "true" || isVoicePlaybackCompleted(audio, duration);
+  const visibleCurrentTime = isCompleted ? duration : currentTime;
+  const progress = duration > 0
+    ? (isCompleted ? 100 : Math.min(100, Math.max(0, (currentTime / duration) * 100)))
+    : 0;
 
   player.classList.toggle("is-playing", !audio.paused && !audio.ended);
   player.classList.toggle("is-ready", duration > 0);
+  player.classList.toggle("is-completed", isCompleted);
   toggle.setAttribute("aria-label", audio.paused || audio.ended ? "Воспроизвести голосовое сообщение" : "Поставить голосовое на паузу");
   const iconNode = toggle.querySelector(".voice-message-play-icon");
   if (iconNode) {
     iconNode.textContent = audio.paused || audio.ended ? "▶" : "❚❚";
   }
-  currentTimeNode.textContent = formatVoiceTime(currentTime);
+  currentTimeNode.textContent = formatVoiceTime(visibleCurrentTime);
   durationNode.textContent = formatVoiceTime(duration);
   fillNode.style.width = `${progress}%`;
   thumbNode.style.left = `${progress}%`;
@@ -259,6 +279,15 @@ function initializeVoicePlayers(container) {
             activeVoiceAudio.pause();
           }
           activeVoiceAudio = audio;
+          if (!isVoicePlaybackCompleted(audio)) {
+            player.dataset.voiceCompleted = "false";
+          }
+        }
+        if (eventName === "timeupdate" && !isVoicePlaybackCompleted(audio)) {
+          player.dataset.voiceCompleted = "false";
+        }
+        if (eventName === "ended") {
+          player.dataset.voiceCompleted = "true";
         }
         if ((eventName === "pause" || eventName === "ended") && activeVoiceAudio === audio && (audio.paused || audio.ended)) {
           activeVoiceAudio = null;
@@ -1131,7 +1160,10 @@ function fillThreadInfoPanel(info, chatType) {
             data-member-is-owner="${member.is_owner ? "true" : "false"}"
             data-member-can-manage="${member.can_manage ? "true" : "false"}"
           >
-            <div class="avatar small">${escapeHtml(initials(member.name || member.username || "U"))}</div>
+            <div class="avatar small">
+              ${escapeHtml(initials(member.name || member.username || "U"))}
+              ${!member.hide_presence && member.is_online ? '<span class="presence-dot online thread-member-presence-dot" aria-hidden="true"></span>' : ""}
+            </div>
             <div class="result-meta">
               <div class="result-topline">
                 <h3 class="result-name">${escapeHtml(member.name || member.username || "User")}</h3>
@@ -4108,7 +4140,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
       if (audio.paused || audio.ended) {
-        if (audio.ended) {
+        if (audio.ended || player?.dataset.voiceCompleted === "true") {
+          player.dataset.voiceCompleted = "false";
           audio.currentTime = 0;
         }
         void audio.play().catch(() => {});
@@ -4132,6 +4165,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallbackDuration;
       if (duration > 0) {
         audio.currentTime = duration * ratio;
+        if (player && ratio < 0.999) {
+          player.dataset.voiceCompleted = "false";
+        }
         syncVoicePlayerState(player);
       }
       return;
