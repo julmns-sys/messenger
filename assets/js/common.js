@@ -22,6 +22,7 @@ let groupOwnerLeaveModal = null;
 let groupDeleteConfirmModal = null;
 let pendingChatDeleteState = null;
 let chatDeleteUndoCountdownTimer = null;
+let activeChatTagFilter = "all";
 const pendingDeletedChatKeys = new Set();
 const defaultAppSettings = {
   theme: "light",
@@ -1786,6 +1787,115 @@ function getVisibleChats() {
   return chatState.allChats.filter((chat) => !pendingDeletedChatKeys.has(getChatStateKey(chat.id, chat.type || "direct")));
 }
 
+function getChatTagFilterOptions() {
+  const tagMap = new Map();
+
+  getVisibleChats().forEach((chat) => {
+    const tag = getChatTag(chat.id, chat.type || "direct");
+    if (!tag) {
+      return;
+    }
+
+    const key = `${tag.label}::${tag.color}`;
+    if (!tagMap.has(key)) {
+      tagMap.set(key, {
+        key,
+        label: tag.label,
+        color: tag.color
+      });
+    }
+  });
+
+  return [...tagMap.values()].sort((left, right) => left.label.localeCompare(right.label, "ru-RU"));
+}
+
+function isChatMatchingActiveTagFilter(chat) {
+  if (activeChatTagFilter === "all") {
+    return true;
+  }
+
+  const tag = getChatTag(chat.id, chat.type || "direct");
+  if (activeChatTagFilter === "untagged") {
+    return !tag;
+  }
+
+  if (!tag || !activeChatTagFilter.startsWith("tag:")) {
+    return false;
+  }
+
+  return `tag:${tag.label}::${tag.color}` === activeChatTagFilter;
+}
+
+function normalizeActiveChatTagFilter() {
+  if (activeChatTagFilter === "all" || activeChatTagFilter === "untagged") {
+    return;
+  }
+
+  const hasActiveTag = getChatTagFilterOptions().some((tag) => `tag:${tag.key}` === activeChatTagFilter);
+  if (!hasActiveTag) {
+    activeChatTagFilter = "all";
+  }
+}
+
+function renderChatTagFilters(listId = "chatList") {
+  const container = document.getElementById("chatTagFilters");
+  if (!container) {
+    return;
+  }
+
+  const tags = getChatTagFilterOptions();
+  normalizeActiveChatTagFilter();
+  container.dataset.listId = listId;
+  container.innerHTML = [
+    '<button type="button" class="chat-tag-filter-chip" data-chat-tag-filter="all">Все</button>',
+    '<button type="button" class="chat-tag-filter-chip" data-chat-tag-filter="untagged">Без тега</button>',
+    ...tags.map((tag) => {
+      const styleVars = getChatTagStyleVars(tag.color);
+      return `
+        <button
+          type="button"
+          class="chat-tag-filter-chip chat-tag-filter-chip-custom"
+          data-chat-tag-filter="${escapeHtml(`tag:${tag.key}`)}"
+          style="--chat-tag-bg: ${styleVars.background}; --chat-tag-border: ${styleVars.border}; --chat-tag-text: ${styleVars.text}; --chat-tag-solid: ${styleVars.solid};"
+        >${escapeHtml(tag.label)}</button>
+      `;
+    })
+  ].join("");
+
+  container.querySelectorAll("[data-chat-tag-filter]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.chatTagFilter === activeChatTagFilter);
+  });
+}
+
+function bindChatTagFilters(listId = "chatList") {
+  const container = document.getElementById("chatTagFilters");
+  if (!container || container.dataset.chatTagFiltersBound === "true") {
+    return;
+  }
+
+  container.dataset.chatTagFiltersBound = "true";
+  container.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-chat-tag-filter]");
+    if (!trigger) {
+      return;
+    }
+
+    activeChatTagFilter = trigger.dataset.chatTagFilter || "all";
+    updateChatListView(container.dataset.listId || listId);
+  });
+}
+
+function updateChatListView(listId = "chatList") {
+  const list = document.getElementById(listId);
+  if (!list) {
+    return;
+  }
+
+  bindChatTagFilters(listId);
+  renderChatTagFilters(listId);
+  renderChats(list, filterChats(getChatSearchQuery()));
+}
+
 function scheduleChatListRefresh(listId = "chatList", delayMs = 0) {
   if (chatListRefreshTimer) {
     window.clearTimeout(chatListRefreshTimer);
@@ -1846,7 +1956,7 @@ async function loadChats(listId = "chatList", options = {}) {
     const normalizedChats = Array.isArray(chats) ? chats : chats.items || [];
     chatState.allChats = normalizedChats;
     bindChatSearch(listId);
-    renderChats(list, filterChats(getChatSearchQuery()));
+    updateChatListView(listId);
     return normalizedChats;
   } catch (error) {
     if (showLoading) {
@@ -1861,7 +1971,7 @@ async function loadChats(listId = "chatList", options = {}) {
 
 function filterChats(query) {
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleChats = getVisibleChats();
+  const visibleChats = getVisibleChats().filter(isChatMatchingActiveTagFilter);
   if (!normalizedQuery) {
     return visibleChats;
   }
@@ -1891,7 +2001,7 @@ function bindChatSearch(listId = "chatList") {
 
   input.dataset.chatSearchBound = "true";
   input.addEventListener("input", () => {
-    renderChats(list, filterChats(input.value));
+    updateChatListView(listId);
   });
 }
 
@@ -2246,13 +2356,13 @@ function openChatTagEditor(chatItem, listId = "chatList") {
       label: labelInput.value,
       color: colorInput.value
     });
-    renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+    updateChatListView(listId);
     closeChatTagEditorModal();
   };
 
   removeButton.onclick = () => {
     setChatTag(chatId, chatType, { label: "", color: colorInput.value });
-    renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+    updateChatListView(listId);
     closeChatTagEditorModal();
   };
 
@@ -2463,7 +2573,7 @@ async function deleteDirectChatFromList(chatItem, scope, listId = "chatList") {
   }
 
   pendingDeletedChatKeys.add(chatKey);
-  renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+  updateChatListView(listId);
 
   pendingChatDeleteState = {
     chatId,
@@ -2492,7 +2602,7 @@ async function flushPendingChatDelete(reason = "commit", listId = "chatList") {
 
   if (reason === "undo") {
     pendingDeletedChatKeys.delete(state.chatKey);
-    renderChats(document.getElementById(state.listId || listId), filterChats(getChatSearchQuery()));
+    updateChatListView(state.listId || listId);
     hideChatDeleteUndoToast();
     return;
   }
@@ -2512,7 +2622,7 @@ async function flushPendingChatDelete(reason = "commit", listId = "chatList") {
     }
   } catch (error) {
     pendingDeletedChatKeys.delete(state.chatKey);
-    renderChats(document.getElementById(state.listId || listId), filterChats(getChatSearchQuery()));
+    updateChatListView(state.listId || listId);
     hideChatDeleteUndoToast();
     window.alert(error.message);
   }
@@ -2781,7 +2891,13 @@ function renderChats(list, chats) {
 
   if (!chats.length) {
     const hasQuery = Boolean(document.querySelector(".sidebar-search .search-input")?.value.trim());
-    list.innerHTML = `<div class="empty-state">${hasQuery ? "Ничего не найдено" : "Чатов пока нет"}</div>`;
+    const hasTagFilter = activeChatTagFilter !== "all";
+    const emptyMessage = hasQuery
+      ? "Ничего не найдено"
+      : hasTagFilter
+        ? "Нет чатов по выбранному тегу"
+        : "Чатов пока нет";
+    list.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
     restoreChatListScroll(list, previousScrollTop);
     return;
   }
