@@ -1508,6 +1508,7 @@ function buildQuickActionsMenu() {
   menu.hidden = true;
   menu.innerHTML = `
     <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">Написать пользователю</button>
+    <button class="quick-actions-menu-item" type="button" data-quick-action="open-graph">Граф общения</button>
     <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">Создать группу</button>
   `;
   document.body.appendChild(menu);
@@ -1534,7 +1535,7 @@ function openQuickActionsMenu(trigger, menu) {
 
   const rect = trigger.getBoundingClientRect();
   const menuWidth = Math.min(240, window.innerWidth - 24);
-  const menuHeight = 116;
+  const menuHeight = menu.offsetHeight || 164;
   const left = Math.max(12, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 12));
   const top = Math.max(12, Math.min(rect.bottom + 10, window.innerHeight - menuHeight - 12));
 
@@ -1568,6 +1569,10 @@ function initQuickActionsMenu() {
   const navigateForAction = (action) => {
     if (action === "search-user") {
       window.location.href = getSearchRoute();
+      return;
+    }
+    if (action === "open-graph") {
+      window.location.href = getGraphRoute();
       return;
     }
     if (action === "create-group") {

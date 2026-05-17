@@ -35,6 +35,10 @@ function getSearchRoute() {
   return "/search";
 }
 
+function getGraphRoute() {
+  return "/graph";
+}
+
 function getCreateGroupRoute() {
   return "/create-group";
 }
@@ -91,6 +95,8 @@ function getCurrentRouteInfo() {
     page = "chats";
   } else if (segments[0] === "search" || segments[0] === "search.html") {
     page = "search";
+  } else if (segments[0] === "graph" || segments[0] === "graph.html") {
+    page = "graph";
   } else if (segments[0] === "create-group" || segments[0] === "create_group.html") {
     page = "create-group";
   } else if (segments[0] === "login" || segments[0] === "login.html") {

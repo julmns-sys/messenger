@@ -1,0 +1,76 @@
+{% extends "base_app.html" %}
+
+{% block content %}
+  <section class="content graph-content">
+    <header class="content-header graph-content-header">
+      <div>
+        <h1 class="page-title">Граф общения</h1>
+        <p class="page-subtitle">Визуальная карта ваших контактов, групп и чатов</p>
+      </div>
+      <div class="header-actions graph-header-actions">
+        <button class="icon-button" type="button" data-graph-zoom="out" aria-label="Уменьшить граф">−</button>
+        <button class="icon-button" type="button" data-graph-zoom="reset" aria-label="Сбросить вид">100%</button>
+        <button class="icon-button" type="button" data-graph-zoom="in" aria-label="Увеличить граф">+</button>
+      </div>
+    </header>
+    <div class="content-body graph-content-body">
+      <div class="graph-layout">
+        <section class="graph-stage-shell">
+          <div class="panel graph-stage-card">
+            <div class="graph-stage-toolbar">
+              <div>
+                <p class="graph-stage-eyebrow">Экспериментальный режим</p>
+                <div class="graph-stage-stats" id="graphStageStats">Загрузка графа...</div>
+              </div>
+              <div class="graph-stage-hint">Перетаскивайте поле мышью и используйте колесо для zoom</div>
+            </div>
+            <div class="graph-canvas-wrap">
+              <div class="graph-svg-shell" id="graphStage">
+                <svg class="graph-svg" id="graphSvg" role="img" aria-label="Граф общения">
+                  <defs>
+                    <filter id="graphNodeGlow" x="-80%" y="-80%" width="260%" height="260%">
+                      <feGaussianBlur stdDeviation="8" result="blur"></feGaussianBlur>
+                      <feColorMatrix
+                        in="blur"
+                        type="matrix"
+                        values="0 0 0 0 0.2
+                                0 0 0 0 0.56
+                                0 0 0 0 0.92
+                                0 0 0 0.55 0"
+                        result="glow">
+                      </feColorMatrix>
+                      <feMerge>
+                        <feMergeNode in="glow"></feMergeNode>
+                        <feMergeNode in="SourceGraphic"></feMergeNode>
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  <g id="graphViewport"></g>
+                </svg>
+                <div class="graph-empty-state" id="graphEmptyState" hidden>
+                  <div>
+                    <h2>Пока нечего строить</h2>
+                    <p>Как только у вас появятся чаты, контакты или группы, граф заполнится автоматически.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="graph-mobile-list" id="graphMobileList" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel graph-info-panel" id="graphInfoPanel">
+          <div class="graph-info-empty">
+            <p class="graph-info-eyebrow">Узел графа</p>
+            <h2>Выберите контакт или группу</h2>
+            <p>Справа появится карточка с деталями и быстрым переходом в нужный чат.</p>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block page_scripts %}
+  <script src="/assets/js/graph.js"></script>
+{% endblock %}

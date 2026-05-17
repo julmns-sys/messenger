@@ -2517,6 +2517,20 @@ def search_page():
     )
 
 
+@app.get("/graph")
+def graph_page():
+    return render_template(
+        "graph.html",
+        title="Граф общения | /Chatik",
+        body_class="page-shell graph-page",
+        data_chat_type=None,
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
+
+
 @app.get("/chat/<int:chat_id>")
 def direct_chat_page(chat_id):
     return render_template(
@@ -2630,6 +2644,11 @@ def legacy_index_page():
 @app.get("/search.html")
 def legacy_search_page():
     return redirect("/search", code=302)
+
+
+@app.get("/graph.html")
+def legacy_graph_page():
+    return redirect("/graph", code=302)
 
 
 @app.get("/create_group.html")
