@@ -381,6 +381,31 @@ function renderEditedIndicator(message) {
   return '<span class="message-edited" title="Сообщение изменено">(изм.)</span>';
 }
 
+function getReplyPreviewText(reply = {}) {
+  const messageType = String(reply?.message_type || "text");
+  if (messageType === "voice") {
+    return "Голосовое сообщение";
+  }
+  if (messageType === "system") {
+    return String(reply?.text || "").trim() || "Системное сообщение";
+  }
+  return String(reply?.text || "").trim() || "Сообщение";
+}
+
+function renderMessageReplyPreview(reply = {}) {
+  const messageId = Number(reply?.message_id || 0);
+  if (!messageId) {
+    return "";
+  }
+
+  return `
+    <button type="button" class="message-reply-preview" data-reply-jump-id="${escapeHtml(String(messageId))}">
+      <span class="message-reply-preview-author">${escapeHtml(String(reply?.sender_name || "Сообщение"))}</span>
+      <span class="message-reply-preview-text">${escapeHtml(getReplyPreviewText(reply))}</span>
+    </button>
+  `;
+}
+
 function renderDateDivider(value) {
   const label = formatChatDateDivider(value);
   if (!label) {
@@ -448,6 +473,7 @@ function renderMessageItem(message, currentUserId, chatType) {
   return `
     <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="${escapeHtml(String(message.message_type || "text"))}" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
+      ${renderMessageReplyPreview(message.reply)}
       ${isVoice ? renderVoiceMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
       <p class="message-text">${renderMessageText(message.text || "")}</p>`}
       <div class="message-meta">
@@ -679,6 +705,7 @@ function buildMessageActionMenu() {
   menu.className = "message-action-menu";
   menu.hidden = true;
   menu.innerHTML = `
+    <button type="button" data-action="reply">Ответить</button>
     <button type="button" data-action="select">Выбрать</button>
     <button type="button" data-action="edit">Редактировать</button>
     <button type="button" data-action="delete-me">Удалить у меня</button>
@@ -714,6 +741,21 @@ function buildEditBanner() {
       <span class="composer-edit-title">Редактирование сообщения</span>
     </div>
     <button type="button" class="composer-edit-cancel">Отмена</button>
+  `;
+  return banner;
+}
+
+function buildReplyBanner() {
+  const banner = document.createElement("div");
+  banner.className = "composer-reply-banner";
+  banner.hidden = true;
+  banner.innerHTML = `
+    <div class="composer-reply-copy">
+      <span class="composer-reply-title">Ответ</span>
+      <strong class="composer-reply-author"></strong>
+      <span class="composer-reply-text"></span>
+    </div>
+    <button type="button" class="composer-reply-cancel">Отмена</button>
   `;
   return banner;
 }
@@ -791,6 +833,10 @@ function formatPresenceHours(hours) {
 }
 
 function formatPresenceText(info = {}) {
+  if (info?.hide_presence) {
+    return "";
+  }
+
   if (info?.is_online) {
     return "в сети";
   }
@@ -819,6 +865,9 @@ function formatPresenceText(info = {}) {
 }
 
 function getPresenceState(info = {}) {
+  if (info?.hide_presence) {
+    return "";
+  }
   return info?.is_online ? "online" : "offline";
 }
 
@@ -830,6 +879,9 @@ function renderPresenceBadge(info = {}, options = {}) {
   } = options;
   const state = getPresenceState(info);
   const text = formatPresenceText(info);
+  if (!text) {
+    return "";
+  }
   const username = includeUsername && info?.username ? `<span class="presence-meta">@${escapeHtml(info.username)}</span>` : "";
   const dot = showDot ? `<span class="presence-dot ${state}" aria-hidden="true"></span>` : "";
   const compactClass = compact ? " compact" : "";
@@ -842,10 +894,16 @@ function renderPresenceBadge(info = {}, options = {}) {
 }
 
 function renderDirectChatSubtitle(info) {
+  if (info?.hide_presence) {
+    return "";
+  }
   return renderPresenceBadge(info, { compact: true, includeUsername: false, showDot: false });
 }
 
 function renderDirectChatDesktopPresence(info) {
+  if (info?.hide_presence) {
+    return "";
+  }
   return renderPresenceBadge(info, { compact: true, includeUsername: false, showDot: false });
 }
 
@@ -1151,6 +1209,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const voiceRecordButton = document.getElementById("voiceRecordButton");
   const messageActionMenu = buildMessageActionMenu();
   const editBanner = buildEditBanner();
+  const replyBanner = buildReplyBanner();
   const deleteUndoToast = buildDeleteUndoToast();
   const selectionToolbar = buildSelectionToolbar();
   const threadMemberActionMenu = buildThreadMemberActionMenu();
@@ -1165,9 +1224,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   let activeMessageMenuTarget = null;
   let hideMessageMenuTimer = null;
   let editingMessageState = null;
+  let replyMessageState = null;
   let touchMenuPressTimer = null;
   let touchMenuTarget = null;
   let touchMenuPoint = null;
+  let swipeReplyTarget = null;
+  let swipeReplyStartPoint = null;
+  let swipeReplyTracking = false;
   let threadMemberTouchTimer = null;
   let activeThreadMemberItem = null;
   let threadMemberContacts = [];
@@ -1210,6 +1273,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   composer.parentNode.insertBefore(editBanner, composer);
+  composer.parentNode.insertBefore(replyBanner, composer);
   contentBody.insertBefore(selectionToolbar, composerWrap);
   contentBody.appendChild(deleteUndoToast);
 
@@ -1326,6 +1390,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       const formData = new FormData();
       formData.append("voice", blob, `voice-message.${blob.type.includes("ogg") ? "ogg" : "webm"}`);
       formData.append("duration_ms", String(Math.max(0, Math.round(durationMs))));
+      if (replyMessageState?.messageId) {
+        formData.append("reply_to_id", String(replyMessageState.messageId));
+      }
       const path = chatType === "group" ? `/groups/${chatId}/voice` : `/chats/${chatId}/voice`;
       const sentMessage = await apiFetch(path, {
         method: "POST",
@@ -1346,6 +1413,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         await markCurrentChatAsRead();
         connectRealtime();
       }
+      setReplyMessageState(null);
       status.textContent = "";
       status.className = "status thread-status";
     } catch (error) {
@@ -2635,6 +2703,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function setEditingMessageState(nextState) {
     editingMessageState = nextState;
+    if (nextState) {
+      setReplyMessageState(null);
+    }
     composer.classList.toggle("is-editing", Boolean(nextState));
     editBanner.hidden = !nextState;
 
@@ -2656,6 +2727,64 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.focus();
     const caretPos = input.value.length;
     input.setSelectionRange(caretPos, caretPos);
+  }
+
+  function setReplyMessageState(nextState) {
+    replyMessageState = nextState;
+    composer.classList.toggle("is-replying", Boolean(nextState));
+    replyBanner.hidden = !nextState;
+
+    if (!nextState) {
+      return;
+    }
+
+    if (editingMessageState) {
+      setEditingMessageState(null);
+    }
+
+    const authorNode = replyBanner.querySelector(".composer-reply-author");
+    const textNode = replyBanner.querySelector(".composer-reply-text");
+    if (authorNode) {
+      authorNode.textContent = nextState.senderName || "Сообщение";
+    }
+    if (textNode) {
+      textNode.textContent = getReplyPreviewText({
+        text: nextState.text,
+        message_type: nextState.messageType
+      });
+    }
+    input.focus();
+  }
+
+  function buildReplyStateFromMessageNode(messageNode) {
+    if (!messageNode) {
+      return null;
+    }
+
+    const messageId = Number(messageNode.dataset.messageId || 0);
+    if (!messageId) {
+      return null;
+    }
+
+    const authorButton = messageNode.querySelector(".message-author");
+    return {
+      messageId,
+      senderName: authorButton?.textContent?.trim()
+        || (messageNode.dataset.own === "true" ? (currentUser?.name || currentUser?.username || "Вы") : "")
+        || "Сообщение",
+      text: messageNode.querySelector(".message-text")?.textContent || "",
+      messageType: String(messageNode.dataset.messageType || "text")
+    };
+  }
+
+  function resetSwipeReplyState() {
+    if (swipeReplyTarget) {
+      swipeReplyTarget.classList.remove("is-swipe-replying");
+      swipeReplyTarget.style.removeProperty("--swipe-reply-offset");
+    }
+    swipeReplyTarget = null;
+    swipeReplyStartPoint = null;
+    swipeReplyTracking = false;
   }
 
   function hideDeleteUndoToast() {
@@ -2814,7 +2943,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     messageActionMenu.hidden = false;
 
     const menuWidth = 180;
-    const menuHeight = isOwnMessage ? (isTextMessage ? 164 : 124) : 84;
+    const menuHeight = isOwnMessage ? (isTextMessage ? 204 : 164) : 124;
     const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
     const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
     messageActionMenu.style.left = `${Math.max(12, left)}px`;
@@ -3685,6 +3814,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
+    const replyJumpNode = event.target.closest("[data-reply-jump-id]");
+    if (replyJumpNode) {
+      event.preventDefault();
+      const targetMessageId = Number(replyJumpNode.dataset.replyJumpId || 0);
+      if (targetMessageId) {
+        void focusMessageFromSearch(targetMessageId, isMobileThreadSearchOpen ? "mobile" : "desktop");
+      }
+      return;
+    }
+
     const messageNode = event.target.closest(".message[data-message-id]");
     if (!isSelectionMode || !messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       return;
@@ -3705,6 +3844,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     touchMenuTarget = messageNode;
     touchMenuPoint = { x: touch.clientX, y: touch.clientY };
+    swipeReplyTarget = messageNode;
+    swipeReplyStartPoint = { x: touch.clientX, y: touch.clientY };
+    swipeReplyTracking = true;
     if (touchMenuPressTimer) {
       window.clearTimeout(touchMenuPressTimer);
     }
@@ -3733,9 +3875,34 @@ document.addEventListener("DOMContentLoaded", async () => {
       touchMenuTarget = null;
       touchMenuPoint = null;
     }
+
+    if (!swipeReplyTracking || !swipeReplyTarget || !swipeReplyStartPoint) {
+      return;
+    }
+
+    const replyDeltaX = touch.clientX - swipeReplyStartPoint.x;
+    const replyDeltaY = touch.clientY - swipeReplyStartPoint.y;
+    if (Math.abs(replyDeltaY) > 28) {
+      resetSwipeReplyState();
+      return;
+    }
+
+    const clampedOffset = Math.max(0, Math.min(88, replyDeltaX));
+    swipeReplyTarget.style.setProperty("--swipe-reply-offset", `${clampedOffset}px`);
+    swipeReplyTarget.classList.toggle("is-swipe-replying", clampedOffset > 8);
   }, { passive: true });
 
   messagesNode.addEventListener("touchend", () => {
+    if (swipeReplyTracking && swipeReplyTarget) {
+      const offset = Number.parseFloat(swipeReplyTarget.style.getPropertyValue("--swipe-reply-offset") || "0");
+      if (offset >= 56) {
+        const replyState = buildReplyStateFromMessageNode(swipeReplyTarget);
+        if (replyState) {
+          setReplyMessageState(replyState);
+        }
+      }
+    }
+    resetSwipeReplyState();
     if (touchMenuPressTimer) {
       window.clearTimeout(touchMenuPressTimer);
       touchMenuPressTimer = null;
@@ -3745,6 +3912,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }, { passive: true });
 
   messagesNode.addEventListener("touchcancel", () => {
+    resetSwipeReplyState();
     if (touchMenuPressTimer) {
       window.clearTimeout(touchMenuPressTimer);
       touchMenuPressTimer = null;
@@ -3769,7 +3937,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       : `/chats/${chatId}/messages/${messageId}`;
 
     try {
-      if (action === "select") {
+      if (action === "reply") {
+        const replyState = buildReplyStateFromMessageNode(targetNode);
+        if (replyState) {
+          setReplyMessageState(replyState);
+        }
+        return;
+      } else if (action === "select") {
         enterSelectionMode(targetNode);
         return;
       } else if (action === "edit") {
@@ -3852,6 +4026,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         setEditingMessageState(null);
         input.value = "";
       }
+      if (replyMessageState) {
+        setReplyMessageState(null);
+      }
       hideMessageMenu();
       hideThreadMemberActionMenu();
       closeUserProfileActionMenus();
@@ -3863,6 +4040,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.value = "";
     status.textContent = "";
     status.className = "status thread-status";
+  });
+
+  replyBanner.querySelector(".composer-reply-cancel")?.addEventListener("click", () => {
+    setReplyMessageState(null);
   });
 
   deleteUndoToast.querySelector(".delete-undo-button")?.addEventListener("click", () => {
@@ -3967,7 +4148,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       const path = chatType === "group" ? `/groups/${chatId}/messages` : `/chats/${chatId}/messages`;
       const sentMessage = await apiFetch(path, {
         method: "POST",
-        body: JSON.stringify({ text })
+        body: JSON.stringify({
+          text,
+          reply_to_id: replyMessageState?.messageId || null
+        })
       });
 
       removePendingMessage(pendingMessageNode);
@@ -3984,6 +4168,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         await markCurrentChatAsRead();
         connectRealtime();
       }
+      setReplyMessageState(null);
       status.textContent = "";
     } catch (error) {
       status.textContent = error.message;

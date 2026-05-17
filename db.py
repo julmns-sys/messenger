@@ -337,6 +337,10 @@ def _ensure_contacts_alias_column(conn):
 def _ensure_message_preview_columns(conn, table_name):
     expected_columns = {
         "message_type": "VARCHAR(32) NOT NULL DEFAULT 'text'",
+        "reply_to_message_id": "INT NULL",
+        "reply_preview_text": "TEXT NULL",
+        "reply_preview_sender_name": "VARCHAR(255) NULL",
+        "reply_preview_message_type": "VARCHAR(32) NULL",
         "preview_url": "VARCHAR(1000) NULL",
         "preview_title": "VARCHAR(255) NULL",
         "preview_description": "VARCHAR(500) NULL",
@@ -365,6 +369,44 @@ def _ensure_message_preview_columns(conn, table_name):
         cursor.close()
 
 
+def _ensure_user_login_devices_table(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_login_devices (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                device_key CHAR(64) NOT NULL,
+                device_label VARCHAR(255) NOT NULL,
+                first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_user_login_device (user_id, device_key),
+                INDEX idx_user_login_devices_user_id (user_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+    finally:
+        cursor.close()
+
+
+def _ensure_users_security_columns(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_NAME = 'users'
+        """, (DB_NAME,))
+        existing = {row[0] for row in cursor.fetchall() or []}
+        if "login_alerts_enabled" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN login_alerts_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER bio
+            """)
+    finally:
+        cursor.close()
+
+
 def init_db():
     if not INIT_SQL_PATH.exists():
         raise FileNotFoundError(f"MariaDB schema file not found: {INIT_SQL_PATH}")
@@ -378,6 +420,8 @@ def init_db():
         _ensure_contacts_alias_column(conn)
         _ensure_message_preview_columns(conn, "messages")
         _ensure_message_preview_columns(conn, "group_messages")
+        _ensure_user_login_devices_table(conn)
+        _ensure_users_security_columns(conn)
         _ensure_group_invites(conn)
         conn.commit()
         cursor.close()

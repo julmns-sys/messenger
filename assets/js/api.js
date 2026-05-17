@@ -3,8 +3,29 @@ const API = {
   tokenKey: "messenger_token",
   userKey: "messenger_user",
   emailBookKey: "messenger_user_emails",
-  postAuthRedirectKey: "messenger_post_auth_redirect"
+  postAuthRedirectKey: "messenger_post_auth_redirect",
+  deviceIdKey: "messenger_device_id"
 };
+
+function generateLocalDeviceId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  const randomPart = Math.random().toString(36).slice(2);
+  return `device-${Date.now().toString(36)}-${randomPart}`;
+}
+
+function getOrCreateDeviceId() {
+  const existingDeviceId = localStorage.getItem(API.deviceIdKey);
+  if (typeof existingDeviceId === "string" && existingDeviceId.trim()) {
+    return existingDeviceId.trim();
+  }
+
+  const nextDeviceId = generateLocalDeviceId();
+  localStorage.setItem(API.deviceIdKey, nextDeviceId);
+  return nextDeviceId;
+}
 
 function getChatsRoute() {
   return "/";
@@ -222,6 +243,7 @@ function consumePostAuthRedirect() {
 async function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
+  headers.set("X-Device-Id", getOrCreateDeviceId());
 
   if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");

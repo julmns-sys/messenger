@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) NULL,
     password_hash VARCHAR(255) NOT NULL,
     bio TEXT NULL,
+    login_alerts_enabled TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -13,6 +14,17 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     user_id INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_auth_tokens_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_login_devices (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    device_key CHAR(64) NOT NULL,
+    device_label VARCHAR(255) NOT NULL,
+    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_user_login_device (user_id, device_key),
+    INDEX idx_user_login_devices_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS chats (
@@ -38,6 +50,10 @@ CREATE TABLE IF NOT EXISTS messages (
     sender_id INT NOT NULL,
     text TEXT NOT NULL,
     message_type VARCHAR(32) NOT NULL DEFAULT 'text',
+    reply_to_message_id INT NULL,
+    reply_preview_text TEXT NULL,
+    reply_preview_sender_name VARCHAR(255) NULL,
+    reply_preview_message_type VARCHAR(32) NULL,
     preview_url VARCHAR(1000) NULL,
     preview_title VARCHAR(255) NULL,
     preview_description VARCHAR(500) NULL,
@@ -75,6 +91,10 @@ CREATE TABLE IF NOT EXISTS group_messages (
     sender_id INT NOT NULL,
     text TEXT NOT NULL,
     message_type VARCHAR(32) NOT NULL DEFAULT 'text',
+    reply_to_message_id INT NULL,
+    reply_preview_text TEXT NULL,
+    reply_preview_sender_name VARCHAR(255) NULL,
+    reply_preview_message_type VARCHAR(32) NULL,
     preview_url VARCHAR(1000) NULL,
     preview_title VARCHAR(255) NULL,
     preview_description VARCHAR(500) NULL,

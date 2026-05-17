@@ -39,7 +39,14 @@ const defaultAppSettings = {
   notificationSound: true,
   desktopNotifications: false,
   notificationTextPreview: true,
-  doNotDisturb: false
+  doNotDisturb: false,
+  onlineVisibility: "everyone",
+  lastSeenVisibility: "contacts",
+  directMessagesPrivacy: "everyone",
+  groupInvitesPrivacy: "contacts",
+  readReceipts: true,
+  typingStatus: true,
+  screenshotProtection: false
 };
 
 function getChatStateKey(chatId, chatType = "direct") {
@@ -108,6 +115,7 @@ function getChatListPreviewText(lastMessage) {
 }
 
 function normalizeAppSettings(rawSettings = {}) {
+  const privacyAudienceValues = ["everyone", "contacts", "nobody"];
   return {
     ...defaultAppSettings,
     ...rawSettings,
@@ -126,6 +134,21 @@ function normalizeAppSettings(rawSettings = {}) {
     desktopNotifications: rawSettings.desktopNotifications === true,
     notificationTextPreview: rawSettings.notificationTextPreview !== false,
     doNotDisturb: rawSettings.doNotDisturb === true,
+    onlineVisibility: privacyAudienceValues.includes(rawSettings.onlineVisibility)
+      ? rawSettings.onlineVisibility
+      : defaultAppSettings.onlineVisibility,
+    lastSeenVisibility: privacyAudienceValues.includes(rawSettings.lastSeenVisibility)
+      ? rawSettings.lastSeenVisibility
+      : defaultAppSettings.lastSeenVisibility,
+    directMessagesPrivacy: privacyAudienceValues.includes(rawSettings.directMessagesPrivacy)
+      ? rawSettings.directMessagesPrivacy
+      : defaultAppSettings.directMessagesPrivacy,
+    groupInvitesPrivacy: privacyAudienceValues.includes(rawSettings.groupInvitesPrivacy)
+      ? rawSettings.groupInvitesPrivacy
+      : defaultAppSettings.groupInvitesPrivacy,
+    readReceipts: rawSettings.readReceipts !== false,
+    typingStatus: rawSettings.typingStatus !== false,
+    screenshotProtection: rawSettings.screenshotProtection === true,
     messageDensity: ["compact", "comfortable", "spacious"].includes(rawSettings.messageDensity)
       ? rawSettings.messageDensity
       : defaultAppSettings.messageDensity
@@ -368,6 +391,153 @@ function initSettingsControls() {
       });
     });
   }
+
+  initSecurityControls();
+}
+
+function formatSecurityDateTime(value) {
+  const date = parseUtcDate(value);
+  if (!date) {
+    return "Нет данных";
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function renderSecurityDevices(devices = []) {
+  if (!Array.isArray(devices) || !devices.length) {
+    return '<div class="empty-state">Устройства пока не определены</div>';
+  }
+
+  return devices.map((device) => {
+    const label = String(device?.device_label || "Неизвестное устройство").trim() || "Неизвестное устройство";
+    const badges = [
+      device?.is_current ? '<span class="thread-member-role owner">Это устройство</span>' : "",
+      '<span class="thread-member-role">Входы</span>'
+    ].filter(Boolean).join("");
+
+    return `
+      <article class="member-item">
+        <div class="avatar small">${escapeHtml(initials(label))}</div>
+        <div class="result-meta">
+          <div class="result-topline">
+            <h3 class="result-name">${escapeHtml(label)}</h3>
+          </div>
+          <p class="result-username">Первый вход: ${escapeHtml(formatSecurityDateTime(device?.first_seen_at))}</p>
+          <p class="result-username">Последний вход: ${escapeHtml(formatSecurityDateTime(device?.last_seen_at))}</p>
+        </div>
+        <div class="thread-info-member-meta">
+          ${badges}
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function initSecurityControls() {
+  const root = document.querySelector("[data-security-settings-root='true']");
+  if (!root || root.dataset.securityBound === "true") {
+    return;
+  }
+
+  root.dataset.securityBound = "true";
+
+  const statusNode = root.querySelector("[data-security-status='true']");
+  const summaryNode = root.querySelector("[data-security-summary]");
+  const devicesNode = root.querySelector("[data-security-devices-list='true']");
+  const loginAlertsInput = root.querySelector("[data-security-control='loginAlertsEnabled']");
+  const refreshButton = root.querySelector("[data-security-refresh]");
+  const terminateButton = root.querySelector("[data-security-terminate-sessions]");
+
+  const setStatus = (message = "", type = "") => {
+    if (!statusNode) {
+      return;
+    }
+    statusNode.textContent = message;
+    statusNode.className = `status ${type}`.trim();
+  };
+
+  const applyOverview = (overview = {}) => {
+    if (loginAlertsInput) {
+      loginAlertsInput.checked = Boolean(overview.login_alerts_enabled);
+    }
+    if (summaryNode) {
+      const sessionsCount = Number(overview.active_sessions_count || 0);
+      const devicesCount = Number(overview.known_devices_count || 0);
+      summaryNode.textContent = `${sessionsCount} сессий, ${devicesCount} устройств`;
+    }
+    if (devicesNode) {
+      devicesNode.innerHTML = renderSecurityDevices(overview.devices || []);
+    }
+  };
+
+  const loadOverview = async (options = {}) => {
+    if (!options.silent) {
+      setStatus("Загружаем безопасность...");
+    }
+    try {
+      const overview = await apiFetch("/security/overview");
+      applyOverview(overview);
+      setStatus(options.successMessage || "");
+      const currentUser = getCurrentUser();
+      if (currentUser && typeof overview.login_alerts_enabled === "boolean") {
+        setCurrentUser({
+          ...currentUser,
+          login_alerts_enabled: overview.login_alerts_enabled
+        });
+      }
+      return overview;
+    } catch (error) {
+      setStatus(error.message, "error");
+      throw error;
+    }
+  };
+
+  loginAlertsInput?.addEventListener("input", async () => {
+    const nextValue = Boolean(loginAlertsInput.checked);
+    setStatus("Сохраняем настройки...");
+    try {
+      const overview = await apiFetch("/security/preferences", {
+        method: "PATCH",
+        body: JSON.stringify({
+          login_alerts_enabled: nextValue
+        })
+      });
+      applyOverview(overview);
+      setStatus("Настройки безопасности сохранены", "success");
+    } catch (error) {
+      loginAlertsInput.checked = !nextValue;
+      setStatus(error.message, "error");
+    }
+  });
+
+  refreshButton?.addEventListener("click", () => {
+    void loadOverview({ successMessage: "Данные безопасности обновлены" });
+  });
+
+  terminateButton?.addEventListener("click", async () => {
+    setStatus("Завершаем другие сессии...");
+    terminateButton.disabled = true;
+    try {
+      const overview = await apiFetch("/security/terminate-other-sessions", {
+        method: "POST"
+      });
+      applyOverview(overview);
+      setStatus(`Завершено сессий: ${Math.max(0, Number(overview.revoked_sessions || 0))}`, "success");
+    } catch (error) {
+      setStatus(error.message, "error");
+    } finally {
+      terminateButton.disabled = false;
+    }
+  });
+
+  void loadOverview({ silent: true });
 }
 
 function readChatTags() {
@@ -486,6 +656,10 @@ function formatPresenceHours(hours) {
 }
 
 function formatPresenceText(info = {}) {
+  if (info?.hide_presence) {
+    return "";
+  }
+
   if (info?.is_online) {
     return "в сети";
   }
@@ -514,6 +688,9 @@ function formatPresenceText(info = {}) {
 }
 
 function getPresenceState(info = {}) {
+  if (info?.hide_presence) {
+    return "";
+  }
   return info?.is_online ? "online" : "offline";
 }
 
@@ -525,6 +702,9 @@ function renderPresenceBadge(info = {}, options = {}) {
   } = options;
   const state = getPresenceState(info);
   const text = formatPresenceText(info);
+  if (!text) {
+    return "";
+  }
   const username = includeUsername && info?.username ? `<span class="presence-meta">@${escapeHtml(info.username)}</span>` : "";
   const dot = showDot ? `<span class="presence-dot ${state}" aria-hidden="true"></span>` : "";
   const compactClass = compact ? " compact" : "";
@@ -757,7 +937,9 @@ function renderUserProfilePanel(user = {}, options = {}) {
   const originalName = getUserProfileOriginalName(user);
   const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "";
   const username = user?.username ? `@${user.username}` : "";
-  const presence = renderPresenceBadge(user, { compact: true, includeUsername: false, showDot: false });
+  const presence = user?.hide_presence
+    ? ""
+    : renderPresenceBadge(user, { compact: true, includeUsername: false, showDot: false });
   const badges = getUserProfileBadges(user);
   const isContact = Boolean(user?.is_contact);
   const hasAlias = Boolean(user?.contact_alias && String(user.contact_alias).trim());

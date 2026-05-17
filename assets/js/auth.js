@@ -20,6 +20,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const formData = new FormData(form);
     const payload = Object.fromEntries(formData.entries());
+    payload.device_id = getOrCreateDeviceId();
 
     try {
       const data = await apiFetch(endpoint, {

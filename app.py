@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from html import unescape
+import hashlib
 from pathlib import Path
 import re
 import uuid
@@ -36,6 +37,11 @@ VOICE_EXTENSIONS_BY_MIME = {
     "audio/wav": ".wav",
     "audio/x-wav": ".wav",
 }
+SYSTEM_USERNAME = "chatik"
+SYSTEM_NAME = "Chatik"
+SYSTEM_EMAIL = "chatik@system.local"
+SYSTEM_BIO = "Системный аккаунт для обновлений и уведомлений безопасности."
+SYSTEM_PASSWORD_PLACEHOLDER = "chatik-system-account"
 
 
 def format_timestamp(value):
@@ -147,6 +153,81 @@ def serialize_message_audio(message):
         "mime_type": row_value(message, "audio_mime_type", "") or "audio/webm",
         "duration_ms": parse_duration_ms(row_value(message, "audio_duration_ms", 0))
     }
+
+
+def serialize_message_reply(message):
+    reply_to_message_id = row_value(message, "reply_to_message_id")
+    if not reply_to_message_id:
+        return None
+
+    return {
+        "message_id": int(reply_to_message_id),
+        "sender_name": row_value(message, "reply_preview_sender_name", "") or "Сообщение",
+        "text": row_value(message, "reply_preview_text", "") or "",
+        "message_type": row_value(message, "reply_preview_message_type", "text") or "text"
+    }
+
+
+def build_reply_preview_payload(reply_message):
+    if not reply_message:
+        return None
+
+    reply_message_type = row_value(reply_message, "message_type", "text") or "text"
+    if reply_message_type == "voice":
+        reply_preview_text = "Голосовое сообщение"
+    elif reply_message_type == "system":
+        reply_preview_text = row_value(reply_message, "text", "") or "Системное сообщение"
+    else:
+        reply_preview_text = row_value(reply_message, "text", "") or "Сообщение"
+
+    return {
+        "reply_to_message_id": int(row_value(reply_message, "id", 0) or 0),
+        "reply_preview_text": str(reply_preview_text)[:1000],
+        "reply_preview_sender_name": (row_value(reply_message, "sender_name", "") or "Сообщение")[:255],
+        "reply_preview_message_type": reply_message_type[:32]
+    }
+
+
+def get_direct_reply_target(conn, chat_id, reply_to_message_id):
+    try:
+        target_message_id = int(reply_to_message_id)
+    except (TypeError, ValueError):
+        return None
+    if target_message_id <= 0:
+        return None
+
+    return conn.execute("""
+        SELECT
+            m.id,
+            m.text,
+            m.message_type,
+            u.name AS sender_name
+        FROM messages m
+        JOIN users u ON u.id = m.sender_id
+        WHERE m.id = %s AND m.chat_id = %s
+        LIMIT 1
+    """, (target_message_id, chat_id)).fetchone()
+
+
+def get_group_reply_target(conn, group_id, reply_to_message_id):
+    try:
+        target_message_id = int(reply_to_message_id)
+    except (TypeError, ValueError):
+        return None
+    if target_message_id <= 0:
+        return None
+
+    return conn.execute("""
+        SELECT
+            gm.id,
+            gm.text,
+            gm.message_type,
+            u.name AS sender_name
+        FROM group_messages gm
+        JOIN users u ON u.id = gm.sender_id
+        WHERE gm.id = %s AND gm.group_id = %s
+        LIMIT 1
+    """, (target_message_id, group_id)).fetchone()
 
 
 def ensure_message_preview_data(conn, table_name, message):
@@ -277,6 +358,302 @@ def remove_voice_files(audio_urls):
             continue
 
 
+def ensure_system_account(conn):
+    user = conn.execute("""
+        SELECT id, name, username, email, bio
+        FROM users
+        WHERE username = %s
+        LIMIT 1
+    """, (SYSTEM_USERNAME,)).fetchone()
+    if user:
+        return user
+
+    password_hash = generate_password_hash(SYSTEM_PASSWORD_PLACEHOLDER)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO users (name, username, email, password_hash, bio)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        SYSTEM_NAME,
+        SYSTEM_USERNAME,
+        SYSTEM_EMAIL,
+        password_hash,
+        SYSTEM_BIO
+    ))
+    return conn.execute("""
+        SELECT id, name, username, email, bio
+        FROM users
+        WHERE id = %s
+    """, (cursor.lastrowid,)).fetchone()
+
+
+def ensure_direct_chat_between(conn, left_user_id, right_user_id):
+    user1_id, user2_id = sorted((int(left_user_id), int(right_user_id)))
+    chat = conn.execute("""
+        SELECT id
+        FROM chats
+        WHERE user1_id = %s AND user2_id = %s
+    """, (user1_id, user2_id)).fetchone()
+    if chat:
+        return chat["id"]
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO chats (user1_id, user2_id)
+        VALUES (%s, %s)
+    """, (user1_id, user2_id))
+    return cursor.lastrowid
+
+
+def create_direct_message_record(conn, chat_id, sender_id, text, message_type="text", audio=None):
+    preview = extract_message_preview(text) if message_type == "text" else None
+    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO messages (
+            chat_id,
+            sender_id,
+            text,
+            message_type,
+            preview_url,
+            preview_title,
+            preview_description,
+            preview_site_name,
+            audio_url,
+            audio_mime_type,
+            audio_duration_ms
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        chat_id,
+        sender_id,
+        text,
+        message_type,
+        preview["url"] if preview else None,
+        preview["title"][:255] if preview else None,
+        preview["description"][:500] if preview else None,
+        preview["site_name"][:255] if preview else None,
+        audio["url"] if audio else None,
+        audio["mime_type"] if audio else None,
+        parse_duration_ms(audio.get("duration_ms")) if audio else None
+    ))
+    return conn.execute("""
+        SELECT
+            m.id,
+            m.sender_id,
+            u.name AS sender_name,
+            m.text,
+            m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
+            m.preview_url,
+            m.preview_title,
+            m.preview_description,
+            m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
+            m.created_at,
+            m.read_at,
+            m.edited_at
+        FROM messages m
+        JOIN users u ON u.id = m.sender_id
+        WHERE m.id = %s
+    """, (cursor.lastrowid,)).fetchone()
+
+
+def build_chatik_welcome_message():
+    return (
+        "Привет! Это @chatik.\n\n"
+        "Сюда приходят полезные системные уведомления: обновления продукта, подсказки по новым функциям и login alerts."
+    )
+
+
+def build_chatik_login_alert():
+    remote_address = get_request_ip()
+    user_agent = collapse_spaces(request.headers.get("User-Agent", "Неизвестное устройство"))
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    details = [
+        "Login alert",
+        "",
+        "В аккаунт выполнен новый вход.",
+        f"Время: {timestamp}",
+        f"IP: {remote_address or 'Не удалось определить'}",
+        f"Устройство: {user_agent[:220]}"
+    ]
+    return "\n".join(details)
+
+
+def get_request_ip():
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    return collapse_spaces(forwarded_for.split(",", 1)[0] if forwarded_for else request.remote_addr or "")
+
+
+def build_login_device_label():
+    sec_ch_ua_platform = collapse_spaces(request.headers.get("Sec-CH-UA-Platform", "")).replace('"', "")
+    sec_ch_ua_mobile = collapse_spaces(request.headers.get("Sec-CH-UA-Mobile", ""))
+    user_agent = collapse_spaces(request.headers.get("User-Agent", "Неизвестное устройство"))
+
+    platform = sec_ch_ua_platform or "Unknown platform"
+    if sec_ch_ua_mobile == "?1":
+        platform = f"{platform} mobile"
+    elif sec_ch_ua_mobile == "?0":
+        platform = f"{platform} desktop"
+
+    return collapse_spaces(f"{platform} • {user_agent[:180]}")[:255]
+
+
+def build_login_device_key():
+    fingerprint_parts = [
+        collapse_spaces(request.headers.get("User-Agent", "")),
+        collapse_spaces(request.headers.get("Sec-CH-UA", "")),
+        collapse_spaces(request.headers.get("Sec-CH-UA-Platform", "")),
+        collapse_spaces(request.headers.get("Sec-CH-UA-Mobile", "")),
+        collapse_spaces(request.headers.get("Accept-Language", "")),
+    ]
+    raw_fingerprint = "||".join(fingerprint_parts)
+    return hashlib.sha256(raw_fingerprint.encode("utf-8")).hexdigest()
+
+
+def normalize_client_device_id(raw_value):
+    value = collapse_spaces(raw_value)
+    if not value:
+        return ""
+    return value[:200]
+
+
+def get_request_device_id():
+    return normalize_client_device_id(request.headers.get("X-Device-Id", ""))
+
+
+def get_current_device_key():
+    normalized_client_device_id = get_request_device_id()
+    if normalized_client_device_id:
+        return hashlib.sha256(f"client-device::{normalized_client_device_id}".encode("utf-8")).hexdigest()
+    return build_login_device_key()
+
+
+def register_login_device(user_id, client_device_id=""):
+    if not user_id:
+        return False
+
+    normalized_client_device_id = normalize_client_device_id(client_device_id)
+    device_key = (
+        hashlib.sha256(f"client-device::{normalized_client_device_id}".encode("utf-8")).hexdigest()
+        if normalized_client_device_id
+        else build_login_device_key()
+    )
+    device_label = build_login_device_label()
+    conn = get_db()
+    try:
+        existing = conn.execute("""
+            SELECT id
+            FROM user_login_devices
+            WHERE user_id = %s AND device_key = %s
+            LIMIT 1
+        """, (user_id, device_key)).fetchone()
+
+        if existing:
+            conn.execute("""
+                UPDATE user_login_devices
+                SET last_seen_at = CURRENT_TIMESTAMP,
+                    device_label = %s
+                WHERE id = %s
+            """, (device_label, existing["id"]))
+            conn.commit()
+            return False
+
+        conn.execute("""
+            INSERT INTO user_login_devices (user_id, device_key, device_label)
+            VALUES (%s, %s, %s)
+        """, (user_id, device_key, device_label))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def get_security_overview(conn, user_id):
+    user = conn.execute("""
+        SELECT login_alerts_enabled
+        FROM users
+        WHERE id = %s
+    """, (user_id,)).fetchone()
+    current_device_key = get_current_device_key()
+    sessions_row = conn.execute("""
+        SELECT COUNT(*) AS sessions_count
+        FROM auth_tokens
+        WHERE user_id = %s
+    """, (user_id,)).fetchone()
+    devices = conn.execute("""
+        SELECT device_key, device_label, first_seen_at, last_seen_at
+        FROM user_login_devices
+        WHERE user_id = %s
+        ORDER BY
+            CASE WHEN device_key = %s THEN 0 ELSE 1 END,
+            last_seen_at DESC,
+            first_seen_at DESC
+    """, (user_id, current_device_key)).fetchall()
+
+    return {
+        "login_alerts_enabled": bool(row_value(user, "login_alerts_enabled", True)),
+        "active_sessions_count": int(row_value(sessions_row, "sessions_count", 0) or 0),
+        "known_devices_count": len(devices),
+        "devices": [
+            {
+                "device_key": row["device_key"],
+                "device_label": row["device_label"],
+                "first_seen_at": format_timestamp(row["first_seen_at"]),
+                "last_seen_at": format_timestamp(row["last_seen_at"]),
+                "is_current": row["device_key"] == current_device_key
+            }
+            for row in devices
+        ]
+    }
+
+
+def send_chatik_notification(recipient_user_id, text):
+    if not recipient_user_id or not text:
+        return None
+
+    conn = get_db()
+    try:
+        system_user = ensure_system_account(conn)
+        chat_id = ensure_direct_chat_between(conn, system_user["id"], recipient_user_id)
+        conn.execute("""
+            INSERT OR IGNORE INTO contacts (owner_user_id, contact_user_id)
+            VALUES (%s, %s)
+        """, (recipient_user_id, system_user["id"]))
+        message = create_direct_message_record(conn, chat_id, system_user["id"], text, "text")
+        conn.commit()
+
+        member_ids = get_direct_chat_member_ids(conn, chat_id)
+        message_data = serialize_direct_message(message)
+        emit_inbox_message_for_users(member_ids, {
+            **message_data,
+            "chat_type": "direct",
+            "chat_id": int(chat_id),
+            "thread_title": system_user["name"] or SYSTEM_NAME
+        }, exclude_user_id=system_user["id"])
+    finally:
+        conn.close()
+
+    socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
+    emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
+    return message_data
+
+
+def bootstrap_system_account():
+    conn = get_db()
+    try:
+        ensure_system_account(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def persist_token(token, user_id):
     conn = get_db()
     conn.execute("""
@@ -308,6 +685,13 @@ def current_user_id():
 
     token = auth.replace("Bearer ", "")
     return lookup_user_id_by_token(token)
+
+
+def current_auth_token():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return ""
+    return auth.replace("Bearer ", "", 1).strip()
 
 
 def user_id_from_token(token):
@@ -362,25 +746,30 @@ def emit_inbox_message_for_users(user_ids, payload, *, exclude_user_id=None):
 
 
 def serialize_user_profile(user):
+    hide_presence = str(row_value(user, "username", "")).lower() == SYSTEM_USERNAME
     return {
         "id": user["id"],
         "name": user["name"],
         "username": user["username"],
         "email": user["email"],
         "bio": user["bio"],
-        "is_online": is_user_online(user["id"]),
-        "last_seen": format_timestamp(get_user_last_seen(user["id"]))
+        "login_alerts_enabled": bool(row_value(user, "login_alerts_enabled", True)),
+        "is_online": False if hide_presence else is_user_online(user["id"]),
+        "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
+        "hide_presence": hide_presence
     }
 
 
 def serialize_public_user(user):
+    hide_presence = str(row_value(user, "username", "")).lower() == SYSTEM_USERNAME
     return {
         "id": user["id"],
         "name": user["name"],
         "username": user["username"],
         "bio": user["bio"],
-        "is_online": is_user_online(user["id"]),
-        "last_seen": format_timestamp(get_user_last_seen(user["id"]))
+        "is_online": False if hide_presence else is_user_online(user["id"]),
+        "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
+        "hide_presence": hide_presence
     }
 
 
@@ -394,6 +783,8 @@ def row_value(row, key, default=None):
 
 def serialize_user_badges(user):
     badges = []
+    if str(row_value(user, "username", "")).lower() == SYSTEM_USERNAME:
+        badges.append("SYSTEM")
     if row_value(user, "is_dev", False):
         badges.append("DEV")
     if row_value(user, "is_staff", False):
@@ -404,6 +795,7 @@ def serialize_user_badges(user):
 
 
 def serialize_user_panel_payload(user):
+    hide_presence = str(row_value(user, "username", "")).lower() == SYSTEM_USERNAME
     return {
         "id": user["id"],
         "name": user["name"],
@@ -412,9 +804,14 @@ def serialize_user_panel_payload(user):
         "contact_alias": row_value(user, "contact_alias"),
         "is_contact": bool(row_value(user, "is_contact", False)),
         "badges": serialize_user_badges(user),
-        "is_online": is_user_online(user["id"]),
-        "last_seen": format_timestamp(get_user_last_seen(user["id"]))
+        "is_online": False if hide_presence else is_user_online(user["id"]),
+        "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
+        "hide_presence": hide_presence
     }
+
+
+def should_hide_presence_for_username(username):
+    return str(username or "").strip().lower() == SYSTEM_USERNAME
 
 
 def can_manage_group_admins(conn, user_id, group_id):
@@ -829,6 +1226,7 @@ def serialize_direct_message(message):
         "sender_name": message["sender_name"],
         "text": message["text"],
         "message_type": row_value(message, "message_type", "text") or "text",
+        "reply": serialize_message_reply(message),
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "created_at": format_timestamp(message["created_at"]),
@@ -843,6 +1241,7 @@ def serialize_group_message(message):
         "sender_id": message["sender_id"],
         "sender_name": message["sender_name"],
         "text": message["text"],
+        "reply": serialize_message_reply(message),
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "message_type": message["message_type"] or "text",
@@ -931,6 +1330,10 @@ def get_direct_message_for_chat(conn, chat_id, message_id):
             u.name AS sender_name,
             m.text,
             m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -959,6 +1362,10 @@ def get_group_message_for_group(conn, group_id, message_id):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.reply_to_message_id,
+            gm.reply_preview_text,
+            gm.reply_preview_sender_name,
+            gm.reply_preview_message_type,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1046,6 +1453,10 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
             u.name AS sender_name,
             m.text,
             m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1091,6 +1502,10 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.reply_to_message_id,
+            gm.reply_preview_text,
+            gm.reply_preview_sender_name,
+            gm.reply_preview_message_type,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1129,6 +1544,10 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
             u.name AS sender_name,
             m.text,
             m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1163,6 +1582,10 @@ def search_group_messages(conn, group_id, user_id, query, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.reply_to_message_id,
+            gm.reply_preview_text,
+            gm.reply_preview_sender_name,
+            gm.reply_preview_message_type,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1195,6 +1618,10 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             u.name AS sender_name,
             m.text,
             m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1224,10 +1651,18 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.sender_id,
             u.name AS sender_name,
             m.text,
+            m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
             m.preview_site_name,
+            m.audio_url,
+            m.audio_mime_type,
+            m.audio_duration_ms,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1250,6 +1685,10 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             u.name AS sender_name,
             m.text,
             m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1314,6 +1753,10 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.reply_to_message_id,
+            gm.reply_preview_text,
+            gm.reply_preview_sender_name,
+            gm.reply_preview_message_type,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1343,6 +1786,10 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.reply_to_message_id,
+            gm.reply_preview_text,
+            gm.reply_preview_sender_name,
+            gm.reply_preview_message_type,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1371,6 +1818,10 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.reply_to_message_id,
+            gm.reply_preview_text,
+            gm.reply_preview_sender_name,
+            gm.reply_preview_message_type,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1430,8 +1881,9 @@ def get_user_display_name(user):
     return user["name"] or user["username"] or "Пользователь"
 
 
-def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None):
+def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, reply_to_message=None):
     preview = extract_message_preview(text) if message_type == "text" else None
+    reply_preview = build_reply_preview_payload(reply_to_message)
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO group_messages (
@@ -1439,6 +1891,10 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             sender_id,
             text,
             message_type,
+            reply_to_message_id,
+            reply_preview_text,
+            reply_preview_sender_name,
+            reply_preview_message_type,
             preview_url,
             preview_title,
             preview_description,
@@ -1447,12 +1903,16 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             audio_mime_type,
             audio_duration_ms
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         group_id,
         sender_id,
         text,
         message_type,
+        reply_preview["reply_to_message_id"] if reply_preview else None,
+        reply_preview["reply_preview_text"] if reply_preview else None,
+        reply_preview["reply_preview_sender_name"] if reply_preview else None,
+        reply_preview["reply_preview_message_type"] if reply_preview else None,
         preview["url"] if preview else None,
         preview["title"][:255] if preview else None,
         preview["description"][:500] if preview else None,
@@ -1816,6 +2276,8 @@ def register():
 
     if not name or not username or not password:
         return jsonify({"message": "Заполните имя, username и пароль"}), 400
+    if username.lower() == SYSTEM_USERNAME:
+        return jsonify({"message": "Этот username зарезервирован"}), 400
 
     conn = get_db()
     cur = conn.cursor()
@@ -1839,6 +2301,10 @@ def register():
 
     token = secrets.token_hex(32)
     persist_token(token, user_id)
+    try:
+        send_chatik_notification(user_id, build_chatik_welcome_message())
+    except Exception:
+        pass
 
     return jsonify({
         "token": token,
@@ -1854,10 +2320,11 @@ def register():
 
 @app.post("/auth/login")
 def login():
-    data = request.json
+    data = request.json or {}
 
     username = data.get("username", "").strip().replace("@", "")
     password = data.get("password", "")
+    client_device_id = data.get("device_id", "")
 
     conn = get_db()
     user = conn.execute(
@@ -1871,6 +2338,12 @@ def login():
 
     token = secrets.token_hex(32)
     persist_token(token, user["id"])
+    try:
+        is_new_device = register_login_device(user["id"], client_device_id)
+        if is_new_device and bool(row_value(user, "login_alerts_enabled", True)):
+            send_chatik_notification(user["id"], build_chatik_login_alert())
+    except Exception:
+        pass
 
     return jsonify({
         "token": token,
@@ -1886,7 +2359,7 @@ def get_me():
 
     conn = get_db()
     user = conn.execute("""
-        SELECT id, name, username, email, bio
+        SELECT id, name, username, email, bio, login_alerts_enabled
         FROM users
         WHERE id = %s
     """, (user_id,)).fetchone()
@@ -1896,6 +2369,70 @@ def get_me():
         return jsonify({"message": "Пользователь не найден"}), 404
 
     return jsonify(serialize_user_profile(user))
+
+
+@app.get("/security/overview")
+def get_security_overview_endpoint():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        return jsonify(get_security_overview(conn, user_id))
+    finally:
+        conn.close()
+
+
+@app.patch("/security/preferences")
+def update_security_preferences():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    if "login_alerts_enabled" not in data:
+        return jsonify({"message": "login_alerts_enabled обязателен"}), 400
+
+    login_alerts_enabled = bool(data.get("login_alerts_enabled"))
+    conn = get_db()
+    try:
+        conn.execute("""
+            UPDATE users
+            SET login_alerts_enabled = %s
+            WHERE id = %s
+        """, (1 if login_alerts_enabled else 0, user_id))
+        conn.commit()
+        return jsonify(get_security_overview(conn, user_id))
+    finally:
+        conn.close()
+
+
+@app.post("/security/terminate-other-sessions")
+def terminate_other_sessions():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    current_token = current_auth_token()
+    if not current_token:
+        return jsonify({"message": "Не удалось определить текущую сессию"}), 400
+
+    conn = get_db()
+    try:
+        cursor = conn.execute("""
+            DELETE FROM auth_tokens
+            WHERE user_id = %s AND token != %s
+        """, (user_id, current_token))
+        conn.commit()
+        overview = get_security_overview(conn, user_id)
+        return jsonify({
+            "ok": True,
+            "revoked_sessions": max(0, cursor.rowcount),
+            **overview
+        })
+    finally:
+        conn.close()
 
 
 @app.patch("/users/me")
@@ -2110,8 +2647,9 @@ def add_contact():
         "contact_alias": None,
         "is_contact": True,
         "badges": [],
-        "is_online": is_user_online(target_user["id"]),
-        "last_seen": format_timestamp(get_user_last_seen(target_user["id"]))
+        "is_online": False if should_hide_presence_for_username(target_user["username"]) else is_user_online(target_user["id"]),
+        "last_seen": None if should_hide_presence_for_username(target_user["username"]) else format_timestamp(get_user_last_seen(target_user["id"])),
+        "hide_presence": should_hide_presence_for_username(target_user["username"])
     }), 201
 
 
@@ -2392,8 +2930,9 @@ def get_chats():
             "title": chat["contact_alias"] or chat["title"],
             "name": chat["original_name"],
             "contact_alias": chat["contact_alias"],
-            "is_online": is_user_online(chat["user_id"]),
-            "last_seen": format_timestamp(get_user_last_seen(chat["user_id"])),
+            "is_online": False if should_hide_presence_for_username(chat["username"]) else is_user_online(chat["user_id"]),
+            "last_seen": None if should_hide_presence_for_username(chat["username"]) else format_timestamp(get_user_last_seen(chat["user_id"])),
+            "hide_presence": should_hide_presence_for_username(chat["username"]),
             "last_message": {
                 "text": chat["last_message_text"],
                 "message_type": chat["last_message_type"] or "text"
@@ -2551,6 +3090,7 @@ def get_chat(chat_id):
         }, room=f"direct_{chat_id}")
         emit_chat_list_updated_for_users([user_id], "direct", chat_id)
 
+    hide_presence = should_hide_presence_for_username(chat["username"])
     return jsonify({
         "id": chat["id"],
         "user_id": chat["user_id"],
@@ -2561,8 +3101,9 @@ def get_chat(chat_id):
         "contact_alias": chat["contact_alias"],
         "is_contact": bool(chat["is_contact"]),
         "badges": serialize_user_badges(chat),
-        "is_online": is_user_online(chat["user_id"]),
-        "last_seen": format_timestamp(get_user_last_seen(chat["user_id"])),
+        "is_online": False if hide_presence else is_user_online(chat["user_id"]),
+        "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(chat["user_id"])),
+        "hide_presence": hide_presence,
         "started_at": format_timestamp(chat["created_at"]),
         "messages_count": chat["messages_count"] or 0,
         "has_more_messages": has_more_messages,
@@ -2662,6 +3203,7 @@ def create_chat_message(chat_id):
 
     data = request.json or {}
     text = data.get("text", "").strip()
+    reply_to_id = data.get("reply_to_id")
 
     if not text:
         return jsonify({"message": "Текст сообщения обязателен"}), 400
@@ -2675,6 +3217,13 @@ def create_chat_message(chat_id):
 
     member_ids = get_direct_chat_member_ids(conn, chat_id)
     preview = extract_message_preview(text)
+    reply_to_message = None
+    if reply_to_id is not None:
+        reply_to_message = get_direct_reply_target(conn, chat_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+    reply_preview = build_reply_preview_payload(reply_to_message)
 
     cur = conn.cursor()
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
@@ -2684,6 +3233,10 @@ def create_chat_message(chat_id):
             sender_id,
             text,
             message_type,
+            reply_to_message_id,
+            reply_preview_text,
+            reply_preview_sender_name,
+            reply_preview_message_type,
             preview_url,
             preview_title,
             preview_description,
@@ -2692,12 +3245,16 @@ def create_chat_message(chat_id):
             audio_mime_type,
             audio_duration_ms
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         chat_id,
         user_id,
         text,
         "text",
+        reply_preview["reply_to_message_id"] if reply_preview else None,
+        reply_preview["reply_preview_text"] if reply_preview else None,
+        reply_preview["reply_preview_sender_name"] if reply_preview else None,
+        reply_preview["reply_preview_message_type"] if reply_preview else None,
         preview["url"] if preview else None,
         preview["title"][:255] if preview else None,
         preview["description"][:500] if preview else None,
@@ -2715,6 +3272,10 @@ def create_chat_message(chat_id):
             u.name AS sender_name,
             m.text,
             m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -2764,7 +3325,15 @@ def create_chat_voice_message(chat_id):
         return jsonify({"message": str(error)}), 400
 
     duration_ms = parse_duration_ms(request.form.get("duration_ms"))
+    reply_to_id = request.form.get("reply_to_id")
     member_ids = get_direct_chat_member_ids(conn, chat_id)
+    reply_to_message = None
+    if reply_to_id is not None and str(reply_to_id).strip():
+        reply_to_message = get_direct_reply_target(conn, chat_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+    reply_preview = build_reply_preview_payload(reply_to_message)
 
     cur = conn.cursor()
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
@@ -2774,6 +3343,10 @@ def create_chat_voice_message(chat_id):
             sender_id,
             text,
             message_type,
+            reply_to_message_id,
+            reply_preview_text,
+            reply_preview_sender_name,
+            reply_preview_message_type,
             preview_url,
             preview_title,
             preview_description,
@@ -2782,12 +3355,16 @@ def create_chat_voice_message(chat_id):
             audio_mime_type,
             audio_duration_ms
         )
-        VALUES (%s, %s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s)
     """, (
         chat_id,
         user_id,
         "",
         "voice",
+        reply_preview["reply_to_message_id"] if reply_preview else None,
+        reply_preview["reply_preview_text"] if reply_preview else None,
+        reply_preview["reply_preview_sender_name"] if reply_preview else None,
+        reply_preview["reply_preview_message_type"] if reply_preview else None,
         audio["url"],
         audio["mime_type"],
         duration_ms
@@ -2801,6 +3378,10 @@ def create_chat_voice_message(chat_id):
             u.name AS sender_name,
             m.text,
             m.message_type,
+            m.reply_to_message_id,
+            m.reply_preview_text,
+            m.reply_preview_sender_name,
+            m.reply_preview_message_type,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -3971,6 +4552,7 @@ def create_group_message(group_id):
     data = request.json or {}
     text = data.get("text", "").strip()
     message_type = str(data.get("message_type", "text") or "text").strip().lower()
+    reply_to_id = data.get("reply_to_id")
 
     if not text:
         conn.close()
@@ -3979,7 +4561,14 @@ def create_group_message(group_id):
         conn.close()
         return jsonify({"message": "Нельзя отправлять этот тип сообщения вручную"}), 403
 
-    message = create_group_message_record(conn, group_id, user_id, text, "text")
+    reply_to_message = None
+    if reply_to_id is not None:
+        reply_to_message = get_group_reply_target(conn, group_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+
+    message = create_group_message_record(conn, group_id, user_id, text, "text", None, reply_to_message)
     conn.commit()
     conn.close()
 
@@ -4007,11 +4596,19 @@ def create_group_voice_message(group_id):
         return jsonify({"message": str(error)}), 400
 
     duration_ms = parse_duration_ms(request.form.get("duration_ms"))
+    reply_to_id = request.form.get("reply_to_id")
+    reply_to_message = None
+    if reply_to_id is not None and str(reply_to_id).strip():
+        reply_to_message = get_group_reply_target(conn, group_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+
     message = create_group_message_record(conn, group_id, user_id, "", "voice", {
         "url": audio["url"],
         "mime_type": audio["mime_type"],
         "duration_ms": duration_ms
-    })
+    }, reply_to_message)
     conn.commit()
     conn.close()
 
@@ -4207,4 +4804,5 @@ def bulk_delete_group_messages(group_id):
 
 if __name__ == "__main__":
     init_db()
+    bootstrap_system_account()
     socketio.run(app, host="0.0.0.0", port=8000, debug=True)
