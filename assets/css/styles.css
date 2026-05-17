@@ -1476,6 +1476,34 @@ body.settings-theme-dark .message-forwarded-meta {
   color: #8ec5ff;
 }
 
+body.settings-theme-dark .forwarded-dialog-card {
+  border-color: rgba(120, 189, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    rgba(51, 144, 236, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 14px 28px rgba(3, 8, 14, 0.12);
+}
+
+body.settings-theme-dark .forwarded-dialog-card-count,
+body.settings-theme-dark .forwarded-dialog-item-head {
+  color: rgba(197, 214, 233, 0.7);
+}
+
+body.settings-theme-dark .forwarded-dialog-item-author {
+  color: var(--text);
+}
+
+body.settings-theme-dark .forwarded-dialog-item-bubble {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+body.settings-theme-dark .forwarded-dialog-item.outgoing .forwarded-dialog-item-bubble {
+  background: rgba(51, 144, 236, 0.18);
+}
+
 body.settings-theme-dark .sidebar-profile-editor-input.is-empty,
 body.settings-theme-dark .sidebar-profile-editor-input:focus {
   border-color: rgba(146, 170, 198, 0.18);
@@ -3960,6 +3988,109 @@ body[data-chat-wallpaper="paper"] .messages {
 
 .message-forwarded-meta-button:active {
   transform: translateY(1px);
+}
+
+.forwarded-dialog-card {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 6px;
+  padding: 12px;
+  border: 1px solid rgba(120, 169, 222, 0.2);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.18)),
+    rgba(51, 144, 236, 0.05);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    0 10px 20px rgba(18, 39, 66, 0.05);
+}
+
+.forwarded-dialog-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.forwarded-dialog-card-title {
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.forwarded-dialog-card-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.forwarded-dialog-thread {
+  display: grid;
+  gap: 8px;
+}
+
+.forwarded-dialog-item {
+  display: grid;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.forwarded-dialog-item.incoming {
+  justify-items: start;
+}
+
+.forwarded-dialog-item.outgoing {
+  justify-items: end;
+}
+
+.forwarded-dialog-item-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
+.forwarded-dialog-item-author {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.forwarded-dialog-item-bubble {
+  max-width: min(100%, 280px);
+  padding: 8px 10px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.56);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
+}
+
+.forwarded-dialog-item.outgoing .forwarded-dialog-item-bubble {
+  background: rgba(51, 144, 236, 0.14);
+}
+
+.forwarded-dialog-item-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.36;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.forwarded-dialog-toggle {
+  justify-self: start;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.forwarded-dialog-toggle:hover {
+  opacity: 0.82;
 }
 
 .message.is-swipe-replying {

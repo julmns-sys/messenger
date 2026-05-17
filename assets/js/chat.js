@@ -406,6 +406,18 @@ function renderMessageReplyPreview(reply = {}) {
   `;
 }
 
+function formatSelectedMessagesCount(count) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} сообщение`;
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} сообщения`;
+  }
+  return `${count} сообщений`;
+}
+
 function renderMessageForwardedMeta(forwardedFrom = {}) {
   const senderName = String(forwardedFrom?.sender_name || "").trim();
   if (!senderName) {
@@ -425,6 +437,56 @@ function renderMessageForwardedMeta(forwardedFrom = {}) {
   }
 
   return `<div class="message-forwarded-meta">${escapeHtml(label)}</div>`;
+}
+
+function getForwardedDialogItemText(item = {}) {
+  const messageType = String(item?.message_type || "text");
+  if (messageType === "voice") {
+    return "Голосовое сообщение";
+  }
+  return String(item?.text || "").trim() || "Сообщение";
+}
+
+function renderForwardedDialogCard(forwardedDialog = {}) {
+  const items = Array.isArray(forwardedDialog?.items) ? forwardedDialog.items : [];
+  if (!items.length) {
+    return "";
+  }
+
+  const previewCount = 4;
+  const title = String(forwardedDialog?.title || "Пересланный диалог").trim() || "Пересланный диалог";
+  const collapsedCount = Math.max(0, items.length - previewCount);
+
+  return `
+    <section class="forwarded-dialog-card" data-forwarded-dialog-card="true">
+      <div class="forwarded-dialog-card-header">
+        <strong class="forwarded-dialog-card-title">${escapeHtml(title)}</strong>
+        <span class="forwarded-dialog-card-count">${escapeHtml(formatSelectedMessagesCount(items.length))}</span>
+      </div>
+      <div class="forwarded-dialog-thread">
+        ${items.map((item, index) => {
+          const isOutgoing = String(item?.side || "incoming") === "outgoing";
+          const isCollapsed = index >= previewCount;
+          return `
+            <article class="forwarded-dialog-item ${isOutgoing ? "outgoing" : "incoming"}" ${isCollapsed ? 'hidden data-forwarded-dialog-hidden-item="true"' : ""}>
+              <div class="forwarded-dialog-item-head">
+                <span class="forwarded-dialog-item-author">${escapeHtml(String(item?.original_sender_name || "Пользователь"))}</span>
+                <span class="forwarded-dialog-item-time">${escapeHtml(formatTime(item?.created_at || ""))}</span>
+              </div>
+              <div class="forwarded-dialog-item-bubble">
+                <p class="forwarded-dialog-item-text">${renderMessageText(getForwardedDialogItemText(item))}</p>
+              </div>
+            </article>
+          `;
+        }).join("")}
+      </div>
+      ${collapsedCount > 0 ? `
+        <button type="button" class="forwarded-dialog-toggle" data-forwarded-dialog-toggle="expand">
+          Показать полностью (${escapeHtml(String(collapsedCount))})
+        </button>
+      ` : ""}
+    </section>
+  `;
 }
 
 function renderDateDivider(value) {
@@ -462,6 +524,7 @@ function formatThreadInfoCount(value) {
 function renderMessageItem(message, currentUserId, chatType) {
   const isSystem = (message.message_type || "text") === "system";
   const isVoice = (message.message_type || "text") === "voice";
+  const isForwardedDialog = (message.message_type || "text") === "forwarded_dialog";
   const own = !isSystem && String(message.sender_id) === String(currentUserId);
   const messageClasses = ["message"];
   if (own) {
@@ -496,7 +559,7 @@ function renderMessageItem(message, currentUserId, chatType) {
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
       ${renderMessageForwardedMeta(message.forwarded_from)}
       ${renderMessageReplyPreview(message.reply)}
-      ${isVoice ? renderVoiceMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
+      ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
       <p class="message-text">${renderMessageText(message.text || "")}</p>`}
       <div class="message-meta">
         ${renderEditedIndicator(message)}
@@ -748,6 +811,7 @@ function buildSelectionToolbar() {
     </div>
     <div class="selection-toolbar-actions">
       <button type="button" class="selection-toolbar-button" data-action="cancel">Отмена</button>
+      <button type="button" class="selection-toolbar-button" data-action="forward-dialog">Переслать как диалог</button>
       <button type="button" class="selection-toolbar-button" data-action="delete-me">Удалить у меня</button>
       <button type="button" class="selection-toolbar-button danger" data-action="delete-all">Удалить у всех</button>
     </div>
@@ -2516,6 +2580,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const countNode = selectionToolbar.querySelector(".selection-toolbar-count");
     const deleteAllButton = selectionToolbar.querySelector('[data-action="delete-all"]');
     const deleteMeButton = selectionToolbar.querySelector('[data-action="delete-me"]');
+    const forwardDialogButton = selectionToolbar.querySelector('[data-action="forward-dialog"]');
     const selectedNodes = [...selectedMessageIds].map((messageId) => (
       messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`)
     )).filter(Boolean);
@@ -2535,6 +2600,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (deleteAllButton) {
       deleteAllButton.disabled = count === 0 || !allOwn;
       deleteAllButton.hidden = !allOwn;
+    }
+
+    if (forwardDialogButton) {
+      forwardDialogButton.disabled = count < 2;
+      forwardDialogButton.hidden = count < 2;
     }
 
     if (count === 0) {
@@ -2886,7 +2956,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     statusNode.textContent = forwardMessageState
-      ? `Сообщение от ${forwardMessageState.senderName || "пользователя"}`
+      ? forwardMessageState.mode === "dialog"
+        ? `Выбрано: ${forwardMessageState.text || "несколько сообщений"}`
+        : `Сообщение от ${forwardMessageState.senderName || "пользователя"}`
       : "";
     statusNode.className = "status forward-modal-status";
     listNode.innerHTML = targets.map(renderForwardTargetItem).join("");
@@ -2917,12 +2989,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function openForwardModal(nextState) {
-    if (!nextState?.messageId) {
+    if (!nextState || (!nextState.messageId && !Array.isArray(nextState.messageIds))) {
       return;
     }
 
     forwardMessageState = nextState;
     selectedForwardTargetKey = "";
+    const titleNode = forwardModal.querySelector(".forward-modal-title");
+    const subtitleNode = forwardModal.querySelector(".forward-modal-subtitle");
+    if (titleNode) {
+      titleNode.textContent = nextState.mode === "dialog" ? "Переслать как диалог" : "Переслать сообщение";
+    }
+    if (subtitleNode) {
+      subtitleNode.textContent = nextState.mode === "dialog"
+        ? "Выберите чат, куда отправить мини-переписку"
+        : "Выберите чат, куда отправить сообщение";
+    }
     renderForwardTargetList("");
     forwardModal.hidden = false;
     requestAnimationFrame(() => {
@@ -2932,30 +3014,35 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function submitForwardMessage(targetChatId, targetChatType) {
-    if (!forwardMessageState?.messageId) {
+    if (!forwardMessageState || (!forwardMessageState.messageId && !Array.isArray(forwardMessageState.messageIds))) {
       return;
     }
 
     const statusNode = forwardModal.querySelector("[data-forward-status]");
-    const basePath = chatType === "group"
-      ? `/groups/${chatId}/messages/${forwardMessageState.messageId}`
-      : `/chats/${chatId}/messages/${forwardMessageState.messageId}`;
+    const isDialogForward = forwardMessageState.mode === "dialog";
+    const basePath = isDialogForward
+      ? (chatType === "group" ? `/groups/${chatId}/messages/forward-dialog` : `/chats/${chatId}/messages/forward-dialog`)
+      : (chatType === "group" ? `/groups/${chatId}/messages/${forwardMessageState.messageId}` : `/chats/${chatId}/messages/${forwardMessageState.messageId}`);
 
     if (statusNode) {
-      statusNode.textContent = "Пересылаем сообщение...";
+      statusNode.textContent = isDialogForward ? "Пересылаем диалог..." : "Пересылаем сообщение...";
       statusNode.className = "status forward-modal-status";
     }
 
     try {
-      await apiFetch(`${basePath}/forward`, {
+      await apiFetch(isDialogForward ? basePath : `${basePath}/forward`, {
         method: "POST",
         body: JSON.stringify({
+          ...(isDialogForward ? { message_ids: forwardMessageState.messageIds || [] } : {}),
           target_chat_id: targetChatId,
           target_chat_type: targetChatType
         })
       });
+      if (isDialogForward) {
+        exitSelectionMode();
+      }
       closeForwardModal();
-      showAppToast("Сообщение переслано");
+      showAppToast(isDialogForward ? "Диалог переслан" : "Сообщение переслано");
       await loadChats("chatList", { showLoading: false });
     } catch (error) {
       if (statusNode) {
@@ -2978,6 +3065,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const authorButton = messageNode.querySelector(".message-author");
     return {
       messageId,
+      mode: "single",
       senderName: authorButton?.textContent?.trim()
         || (messageNode.dataset.own === "true" ? (currentUser?.name || currentUser?.username || "Вы") : "")
         || "Сообщение",
@@ -2985,6 +3073,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         || messageNode.querySelector(".message-forwarded-meta")?.textContent
         || "",
       messageType: String(messageNode.dataset.messageType || "text")
+    };
+  }
+
+  function buildForwardDialogStateFromSelection() {
+    const selectedItems = collectSelectedMessageItems();
+    if (selectedItems.length < 2) {
+      return null;
+    }
+
+    return {
+      mode: "dialog",
+      messageIds: selectedItems
+        .sort((left, right) => (left.originalIndex || 0) - (right.originalIndex || 0))
+        .map((item) => item.messageId),
+      senderName: "Пересланный диалог",
+      text: formatSelectedMessagesCount(selectedItems.length),
+      messageType: "forwarded_dialog"
     };
   }
 
@@ -4042,6 +4147,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
+    const forwardedDialogToggle = event.target.closest("[data-forwarded-dialog-toggle]");
+    if (forwardedDialogToggle) {
+      event.preventDefault();
+      const cardNode = forwardedDialogToggle.closest("[data-forwarded-dialog-card]");
+      if (!cardNode) {
+        return;
+      }
+
+      const hiddenItems = [...cardNode.querySelectorAll("[data-forwarded-dialog-hidden-item]")];
+      const isExpanded = forwardedDialogToggle.dataset.forwardedDialogToggle === "collapse";
+      hiddenItems.forEach((node) => {
+        node.hidden = isExpanded;
+      });
+      forwardedDialogToggle.dataset.forwardedDialogToggle = isExpanded ? "expand" : "collapse";
+      forwardedDialogToggle.textContent = isExpanded
+        ? `Показать полностью (${hiddenItems.length})`
+        : "Свернуть";
+      return;
+    }
+
     const messageNode = event.target.closest(".message[data-message-id]");
     if (!isSelectionMode || !messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       return;
@@ -4310,6 +4435,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (action === "cancel") {
       exitSelectionMode();
+      return;
+    }
+
+    if (action === "forward-dialog") {
+      const forwardDialogState = buildForwardDialogStateFromSelection();
+      if (forwardDialogState) {
+        openForwardModal(forwardDialogState);
+      }
       return;
     }
 

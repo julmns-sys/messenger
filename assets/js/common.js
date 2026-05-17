@@ -105,6 +105,9 @@ function getChatListPreviewText(lastMessage) {
   }
 
   const messageType = String(lastMessage.message_type || "text");
+  if (messageType === "forwarded_dialog") {
+    return "Пересланный диалог";
+  }
   if (messageType === "voice") {
     return "Голосовое сообщение";
   }

@@ -343,6 +343,7 @@ def _ensure_message_preview_columns(conn, table_name):
         "reply_preview_message_type": "VARCHAR(32) NULL",
         "forwarded_from_user_id": "INT NULL",
         "forwarded_from_sender_name": "VARCHAR(255) NULL",
+        "forwarded_dialog_payload": "LONGTEXT NULL",
         "preview_url": "VARCHAR(1000) NULL",
         "preview_title": "VARCHAR(255) NULL",
         "preview_description": "VARCHAR(500) NULL",
