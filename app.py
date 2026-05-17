@@ -3,6 +3,7 @@ from html import unescape
 import hashlib
 from pathlib import Path
 import re
+import shutil
 import uuid
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -155,6 +156,23 @@ def serialize_message_audio(message):
     }
 
 
+def serialize_message_forwarded_from(message):
+    forwarded_from_sender_name = row_value(message, "forwarded_from_sender_name", "")
+    forwarded_from_user_id = row_value(message, "forwarded_from_user_id")
+    if not forwarded_from_sender_name and not forwarded_from_user_id:
+        return None
+
+    try:
+        normalized_user_id = int(forwarded_from_user_id) if forwarded_from_user_id is not None else None
+    except (TypeError, ValueError):
+        normalized_user_id = None
+
+    return {
+        "user_id": normalized_user_id,
+        "sender_name": forwarded_from_sender_name or "Пользователь"
+    }
+
+
 def serialize_message_reply(message):
     reply_to_message_id = row_value(message, "reply_to_message_id")
     if not reply_to_message_id:
@@ -165,6 +183,47 @@ def serialize_message_reply(message):
         "sender_name": row_value(message, "reply_preview_sender_name", "") or "Сообщение",
         "text": row_value(message, "reply_preview_text", "") or "",
         "message_type": row_value(message, "reply_preview_message_type", "text") or "text"
+    }
+
+
+def build_forwarded_from_payload(message):
+    existing_forward = serialize_message_forwarded_from(message)
+    if existing_forward:
+        return {
+            "forwarded_from_user_id": existing_forward["user_id"],
+            "forwarded_from_sender_name": str(existing_forward["sender_name"] or "Пользователь")[:255]
+        }
+
+    sender_name = row_value(message, "sender_name", "") or "Пользователь"
+    sender_id = row_value(message, "sender_id")
+    try:
+        normalized_sender_id = int(sender_id) if sender_id is not None else None
+    except (TypeError, ValueError):
+        normalized_sender_id = None
+
+    return {
+        "forwarded_from_user_id": normalized_sender_id,
+        "forwarded_from_sender_name": str(sender_name)[:255]
+    }
+
+
+def clone_forwarded_audio(message):
+    audio = serialize_message_audio(message)
+    if not audio:
+        return None
+
+    source_path = next(iter_voice_file_paths([audio["url"]]), None)
+    if not source_path or not source_path.exists():
+        raise ValueError("Не удалось переслать голосовое сообщение")
+
+    extension = source_path.suffix or ".webm"
+    filename = f"{uuid.uuid4().hex}{extension}"
+    destination_path = VOICE_UPLOAD_DIR / filename
+    shutil.copy2(source_path, destination_path)
+    return {
+        "url": f"/assets/uploads/voice/{filename}",
+        "mime_type": audio["mime_type"],
+        "duration_ms": audio["duration_ms"]
     }
 
 
@@ -448,6 +507,8 @@ def create_direct_message_record(conn, chat_id, sender_id, text, message_type="t
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1227,6 +1288,7 @@ def serialize_direct_message(message):
         "text": message["text"],
         "message_type": row_value(message, "message_type", "text") or "text",
         "reply": serialize_message_reply(message),
+        "forwarded_from": serialize_message_forwarded_from(message),
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "created_at": format_timestamp(message["created_at"]),
@@ -1242,6 +1304,7 @@ def serialize_group_message(message):
         "sender_name": message["sender_name"],
         "text": message["text"],
         "reply": serialize_message_reply(message),
+        "forwarded_from": serialize_message_forwarded_from(message),
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "message_type": message["message_type"] or "text",
@@ -1334,6 +1397,8 @@ def get_direct_message_for_chat(conn, chat_id, message_id):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1366,6 +1431,8 @@ def get_group_message_for_group(conn, group_id, message_id):
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
             gm.reply_preview_message_type,
+            gm.forwarded_from_user_id,
+            gm.forwarded_from_sender_name,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1457,6 +1524,8 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1506,6 +1575,8 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
             gm.reply_preview_message_type,
+            gm.forwarded_from_user_id,
+            gm.forwarded_from_sender_name,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1548,6 +1619,8 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1586,6 +1659,8 @@ def search_group_messages(conn, group_id, user_id, query, limit):
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
             gm.reply_preview_message_type,
+            gm.forwarded_from_user_id,
+            gm.forwarded_from_sender_name,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1622,6 +1697,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1656,6 +1733,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1689,6 +1768,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -1757,6 +1838,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
             gm.reply_preview_message_type,
+            gm.forwarded_from_user_id,
+            gm.forwarded_from_sender_name,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1790,6 +1873,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
             gm.reply_preview_message_type,
+            gm.forwarded_from_user_id,
+            gm.forwarded_from_sender_name,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1822,6 +1907,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
             gm.reply_preview_message_type,
+            gm.forwarded_from_user_id,
+            gm.forwarded_from_sender_name,
             gm.preview_url,
             gm.preview_title,
             gm.preview_description,
@@ -1881,9 +1968,58 @@ def get_user_display_name(user):
     return user["name"] or user["username"] or "Пользователь"
 
 
-def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, reply_to_message=None):
+def create_direct_message_record(conn, chat_id, sender_id, text, message_type="text", audio=None, reply_to_message=None, forwarded_from=None):
     preview = extract_message_preview(text) if message_type == "text" else None
     reply_preview = build_reply_preview_payload(reply_to_message)
+    forwarded_payload = forwarded_from or {}
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO messages (
+            chat_id,
+            sender_id,
+            text,
+            message_type,
+            reply_to_message_id,
+            reply_preview_text,
+            reply_preview_sender_name,
+            reply_preview_message_type,
+            forwarded_from_user_id,
+            forwarded_from_sender_name,
+            preview_url,
+            preview_title,
+            preview_description,
+            preview_site_name,
+            audio_url,
+            audio_mime_type,
+            audio_duration_ms
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        chat_id,
+        sender_id,
+        text,
+        message_type,
+        reply_preview["reply_to_message_id"] if reply_preview else None,
+        reply_preview["reply_preview_text"] if reply_preview else None,
+        reply_preview["reply_preview_sender_name"] if reply_preview else None,
+        reply_preview["reply_preview_message_type"] if reply_preview else None,
+        forwarded_payload.get("forwarded_from_user_id"),
+        forwarded_payload.get("forwarded_from_sender_name"),
+        preview["url"] if preview else None,
+        preview["title"][:255] if preview else None,
+        preview["description"][:500] if preview else None,
+        preview["site_name"][:255] if preview else None,
+        audio["url"] if audio else None,
+        audio["mime_type"] if audio else None,
+        parse_duration_ms(audio.get("duration_ms")) if audio else None
+    ))
+    return get_direct_message_for_chat(conn, chat_id, cur.lastrowid)
+
+
+def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, reply_to_message=None, forwarded_from=None):
+    preview = extract_message_preview(text) if message_type == "text" else None
+    reply_preview = build_reply_preview_payload(reply_to_message)
+    forwarded_payload = forwarded_from or {}
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO group_messages (
@@ -1895,6 +2031,8 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             reply_preview_text,
             reply_preview_sender_name,
             reply_preview_message_type,
+            forwarded_from_user_id,
+            forwarded_from_sender_name,
             preview_url,
             preview_title,
             preview_description,
@@ -1903,7 +2041,7 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             audio_mime_type,
             audio_duration_ms
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         group_id,
         sender_id,
@@ -1913,6 +2051,8 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
         reply_preview["reply_preview_text"] if reply_preview else None,
         reply_preview["reply_preview_sender_name"] if reply_preview else None,
         reply_preview["reply_preview_message_type"] if reply_preview else None,
+        forwarded_payload.get("forwarded_from_user_id"),
+        forwarded_payload.get("forwarded_from_sender_name"),
         preview["url"] if preview else None,
         preview["title"][:255] if preview else None,
         preview["description"][:500] if preview else None,
@@ -1939,6 +2079,70 @@ def emit_group_new_message(message, group_id):
     }, exclude_user_id=message["sender_id"])
     conn.close()
     emit_chat_list_updated_for_users(member_ids, "group", group_id)
+
+
+def build_forward_message_data(message):
+    message_type = row_value(message, "message_type", "text") or "text"
+    if message_type == "system":
+        raise ValueError("Системные сообщения нельзя пересылать")
+    if message_type not in {"text", "voice"}:
+        raise ValueError("Этот тип сообщения пока нельзя пересылать")
+
+    return {
+        "text": row_value(message, "text", "") or "",
+        "message_type": message_type,
+        "audio": clone_forwarded_audio(message) if message_type == "voice" else None,
+        "forwarded_from": build_forwarded_from_payload(message)
+    }
+
+
+def forward_message_to_target(conn, sender_id, target_chat_type, target_chat_id, source_message):
+    if target_chat_type == "group":
+        if not can_access_group(conn, sender_id, target_chat_id):
+            raise LookupError("Группа не найдена")
+        message_data = build_forward_message_data(source_message)
+        message = create_group_message_record(
+            conn,
+            target_chat_id,
+            sender_id,
+            message_data["text"],
+            message_data["message_type"],
+            message_data["audio"],
+            None,
+            message_data["forwarded_from"]
+        )
+        conn.commit()
+        emit_group_new_message(message, target_chat_id)
+        return serialize_group_message(message)
+
+    chat = can_access_direct_chat(conn, sender_id, target_chat_id)
+    if not chat:
+        raise LookupError("Чат не найден")
+
+    message_data = build_forward_message_data(source_message)
+    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (target_chat_id,))
+    message = create_direct_message_record(
+        conn,
+        target_chat_id,
+        sender_id,
+        message_data["text"],
+        message_data["message_type"],
+        message_data["audio"],
+        None,
+        message_data["forwarded_from"]
+    )
+    conn.commit()
+    member_ids = get_direct_chat_member_ids(conn, target_chat_id)
+    message_data_payload = serialize_direct_message(message)
+    emit_inbox_message_for_users(member_ids, {
+        **message_data_payload,
+        "chat_type": "direct",
+        "chat_id": int(target_chat_id),
+        "thread_title": message["sender_name"] or "Чат"
+    }, exclude_user_id=sender_id)
+    socketio.emit("new_message", message_data_payload, room=f"direct_{target_chat_id}")
+    emit_chat_list_updated_for_users(member_ids, "direct", target_chat_id)
+    return message_data_payload
 
 
 @socketio.on("connect")
@@ -3276,6 +3480,8 @@ def create_chat_message(chat_id):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -3382,6 +3588,8 @@ def create_chat_voice_message(chat_id):
             m.reply_preview_text,
             m.reply_preview_sender_name,
             m.reply_preview_message_type,
+            m.forwarded_from_user_id,
+            m.forwarded_from_sender_name,
             m.preview_url,
             m.preview_title,
             m.preview_description,
@@ -3408,6 +3616,42 @@ def create_chat_voice_message(chat_id):
     socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
     emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
     return jsonify(message_data), 201
+
+
+@app.post("/chats/<int:chat_id>/messages/<int:message_id>/forward")
+def forward_chat_message(chat_id, message_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    target_chat_type = "group" if str(data.get("target_chat_type", "direct")).strip().lower() == "group" else "direct"
+    try:
+        target_chat_id = int(data.get("target_chat_id"))
+    except (TypeError, ValueError):
+        return jsonify({"message": "Некорректный целевой чат"}), 400
+
+    conn = get_db()
+    if not can_access_direct_chat(conn, user_id, chat_id):
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    message = get_direct_message_for_chat(conn, chat_id, message_id)
+    if not message:
+        conn.close()
+        return jsonify({"message": "Сообщение не найдено"}), 404
+
+    try:
+        forwarded_message = forward_message_to_target(conn, user_id, target_chat_type, target_chat_id, message)
+    except ValueError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 400
+    except LookupError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 404
+
+    conn.close()
+    return jsonify(forwarded_message), 201
 
 
 @app.delete("/chats/<int:chat_id>")
@@ -4614,6 +4858,42 @@ def create_group_voice_message(group_id):
 
     emit_group_new_message(message, group_id)
     return jsonify(serialize_group_message(message)), 201
+
+
+@app.post("/groups/<int:group_id>/messages/<int:message_id>/forward")
+def forward_group_message(group_id, message_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    target_chat_type = "group" if str(data.get("target_chat_type", "direct")).strip().lower() == "group" else "direct"
+    try:
+        target_chat_id = int(data.get("target_chat_id"))
+    except (TypeError, ValueError):
+        return jsonify({"message": "Некорректный целевой чат"}), 400
+
+    conn = get_db()
+    if not can_access_group(conn, user_id, group_id):
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    message = get_group_message_for_group(conn, group_id, message_id)
+    if not message:
+        conn.close()
+        return jsonify({"message": "Сообщение не найдено"}), 404
+
+    try:
+        forwarded_message = forward_message_to_target(conn, user_id, target_chat_type, target_chat_id, message)
+    except ValueError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 400
+    except LookupError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 404
+
+    conn.close()
+    return jsonify(forwarded_message), 201
 
 
 @app.patch("/groups/<int:group_id>/messages/<int:message_id>")

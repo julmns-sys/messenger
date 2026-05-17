@@ -1445,6 +1445,10 @@ body.settings-theme-dark .message-reply-preview-text {
   color: rgba(197, 214, 233, 0.82);
 }
 
+body.settings-theme-dark .message-forwarded-meta {
+  color: #8ec5ff;
+}
+
 body.settings-theme-dark .sidebar-profile-editor-input.is-empty,
 body.settings-theme-dark .sidebar-profile-editor-input:focus {
   border-color: rgba(146, 170, 198, 0.18);
@@ -1551,6 +1555,23 @@ body.settings-theme-dark .message-action-menu button.danger {
 
 body.settings-theme-dark .message-action-menu button.danger:hover {
   background: rgba(217, 83, 79, 0.14);
+}
+
+body.settings-theme-dark .forward-modal-card {
+  border-color: rgba(146, 170, 198, 0.14);
+  background: rgba(18, 28, 40, 0.88);
+  box-shadow: 0 20px 40px rgba(3, 8, 14, 0.34);
+}
+
+body.settings-theme-dark .forward-target-item {
+  border-color: rgba(146, 170, 198, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+body.settings-theme-dark .forward-target-item:hover,
+body.settings-theme-dark .forward-target-item.is-selected {
+  background: rgba(51, 144, 236, 0.16);
+  border-color: rgba(120, 189, 255, 0.28);
 }
 
 body.settings-theme-dark .delete-undo-toast,
@@ -3799,6 +3820,38 @@ body[data-chat-wallpaper="paper"] .messages {
   text-overflow: ellipsis;
 }
 
+.message-forwarded-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.message-forwarded-meta::before {
+  content: "↪";
+  opacity: 0.72;
+}
+
+.message-forwarded-meta-button {
+  cursor: pointer;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.message-forwarded-meta-button:hover {
+  opacity: 0.82;
+}
+
+.message-forwarded-meta-button:active {
+  transform: translateY(1px);
+}
+
 .message.is-swipe-replying {
   transform: translateX(var(--swipe-reply-offset, 0px));
   box-shadow: 0 12px 24px rgba(51, 144, 236, 0.16);
@@ -4681,6 +4734,129 @@ body.settings-theme-dark .voice-message-wave span {
 
 .message-action-menu button.danger:hover {
   background: rgba(217, 83, 79, 0.08);
+}
+
+.forward-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 48;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.forward-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.forward-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(24, 40, 60, 0.2);
+  backdrop-filter: blur(10px);
+}
+
+.forward-modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 440px);
+  max-height: min(82vh, 720px);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 18px 40px rgba(22, 39, 62, 0.16);
+  backdrop-filter: blur(18px);
+}
+
+.forward-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.forward-modal-title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.forward-modal-subtitle {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+.forward-modal-search {
+  margin-bottom: 12px;
+}
+
+.forward-modal-status {
+  min-height: 18px;
+  margin: 0 0 10px;
+}
+
+.forward-modal-list {
+  display: grid;
+  gap: 8px;
+}
+
+.forward-target-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.forward-target-item:hover,
+.forward-target-item.is-selected {
+  transform: translateY(-1px);
+  border-color: rgba(51, 144, 236, 0.28);
+  background: rgba(51, 144, 236, 0.1);
+  box-shadow: 0 10px 22px rgba(31, 52, 79, 0.08);
+}
+
+.forward-target-avatar {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(51, 144, 236, 0.24), rgba(51, 144, 236, 0.12));
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.forward-target-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.forward-target-copy strong,
+.forward-target-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forward-target-copy span {
+  color: var(--text-soft);
+  font-size: 13px;
 }
 
 .delete-undo-toast {

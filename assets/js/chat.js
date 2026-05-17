@@ -406,6 +406,27 @@ function renderMessageReplyPreview(reply = {}) {
   `;
 }
 
+function renderMessageForwardedMeta(forwardedFrom = {}) {
+  const senderName = String(forwardedFrom?.sender_name || "").trim();
+  if (!senderName) {
+    return "";
+  }
+
+  const forwardedUserId = Number(forwardedFrom?.user_id || 0);
+  const label = `Переслано от ${senderName}`;
+  if (forwardedUserId) {
+    return `
+      <button
+        type="button"
+        class="message-forwarded-meta message-forwarded-meta-button"
+        data-forwarded-from-user-id="${escapeHtml(String(forwardedUserId))}"
+      >${escapeHtml(label)}</button>
+    `;
+  }
+
+  return `<div class="message-forwarded-meta">${escapeHtml(label)}</div>`;
+}
+
 function renderDateDivider(value) {
   const label = formatChatDateDivider(value);
   if (!label) {
@@ -473,6 +494,7 @@ function renderMessageItem(message, currentUserId, chatType) {
   return `
     <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="${escapeHtml(String(message.message_type || "text"))}" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
+      ${renderMessageForwardedMeta(message.forwarded_from)}
       ${renderMessageReplyPreview(message.reply)}
       ${isVoice ? renderVoiceMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
       <p class="message-text">${renderMessageText(message.text || "")}</p>`}
@@ -706,6 +728,7 @@ function buildMessageActionMenu() {
   menu.hidden = true;
   menu.innerHTML = `
     <button type="button" data-action="reply">Ответить</button>
+    <button type="button" data-action="forward">Переслать</button>
     <button type="button" data-action="select">Выбрать</button>
     <button type="button" data-action="edit">Редактировать</button>
     <button type="button" data-action="delete-me">Удалить у меня</button>
@@ -758,6 +781,29 @@ function buildReplyBanner() {
     <button type="button" class="composer-reply-cancel">Отмена</button>
   `;
   return banner;
+}
+
+function buildForwardModal() {
+  const modal = document.createElement("div");
+  modal.className = "forward-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="forward-modal-backdrop" data-forward-close="true"></div>
+    <div class="forward-modal-card" role="dialog" aria-modal="true" aria-labelledby="forwardModalTitle">
+      <div class="forward-modal-header">
+        <div>
+          <h3 class="forward-modal-title" id="forwardModalTitle">Переслать сообщение</h3>
+          <p class="forward-modal-subtitle">Выберите чат, куда отправить сообщение</p>
+        </div>
+        <button type="button" class="icon-button" data-forward-close="true" aria-label="Закрыть">×</button>
+      </div>
+      <input type="search" class="search-input forward-modal-search" placeholder="Поиск по чатам" data-forward-search>
+      <div class="status forward-modal-status" data-forward-status></div>
+      <div class="forward-modal-list" data-forward-list></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  return modal;
 }
 
 function buildDeleteUndoToast() {
@@ -1210,6 +1256,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const messageActionMenu = buildMessageActionMenu();
   const editBanner = buildEditBanner();
   const replyBanner = buildReplyBanner();
+  const forwardModal = buildForwardModal();
   const deleteUndoToast = buildDeleteUndoToast();
   const selectionToolbar = buildSelectionToolbar();
   const threadMemberActionMenu = buildThreadMemberActionMenu();
@@ -1225,6 +1272,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   let hideMessageMenuTimer = null;
   let editingMessageState = null;
   let replyMessageState = null;
+  let forwardMessageState = null;
+  let selectedForwardTargetKey = "";
   let touchMenuPressTimer = null;
   let touchMenuTarget = null;
   let touchMenuPoint = null;
@@ -1926,6 +1975,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     activeThreadInfoType = infoType || chatType;
   }
 
+  function setThreadInfoHeading(title, subtitle) {
+    const titleNode = document.querySelector(".thread-info-title");
+    const subtitleNode = document.querySelector(".thread-info-subtitle");
+    if (titleNode) {
+      titleNode.textContent = title;
+    }
+    if (subtitleNode) {
+      subtitleNode.textContent = subtitle;
+    }
+  }
+
   function closeThreadInfoActionMenu() {
     if (!threadInfoActionMenu || !threadInfoMenuTrigger) {
       return;
@@ -2248,6 +2308,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     closeThreadInfoActionMenu();
     closeThreadMemberAddModal();
     closeThreadGroupEditModal();
+    setThreadInfoHeading("Профиль", "Информация о пользователе");
     setActiveThreadInfoView({
       ...profile,
       title: profile.name || profile.username || "Пользователь"
@@ -2756,6 +2817,154 @@ document.addEventListener("DOMContentLoaded", async () => {
     input.focus();
   }
 
+  function getForwardPreviewText(state = {}) {
+    return getReplyPreviewText({
+      text: state.text,
+      message_type: state.messageType
+    });
+  }
+
+  function getForwardTargets(query = "") {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    const currentChatKey = chatId ? `${chatType}:${chatId}` : "";
+    const chats = Array.isArray(chatState.allChats) ? chatState.allChats : [];
+
+    return chats.filter((chat) => {
+      const targetType = chat.type || "direct";
+      const targetKey = `${targetType}:${chat.id}`;
+      if (!chat?.id || targetKey === currentChatKey) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      const haystack = [
+        chat.title,
+        chat.username ? `@${chat.username}` : "",
+        chat.last_message?.text || ""
+      ].join(" ").toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }
+
+  function renderForwardTargetItem(chat) {
+    const targetType = chat.type || "direct";
+    const targetKey = `${targetType}:${chat.id}`;
+    const subtitle = targetType === "group"
+      ? (chat.description || "Групповой чат")
+      : (chat.username ? `@${chat.username}` : "Личный чат");
+    return `
+      <button
+        type="button"
+        class="forward-target-item${selectedForwardTargetKey === targetKey ? " is-selected" : ""}"
+        data-forward-target-key="${escapeHtml(targetKey)}"
+        data-forward-target-id="${escapeHtml(String(chat.id))}"
+        data-forward-target-type="${escapeHtml(targetType)}"
+      >
+        <span class="forward-target-avatar">${escapeHtml(initials(chat.title || "Чат"))}</span>
+        <span class="forward-target-copy">
+          <strong>${escapeHtml(chat.title || "Чат")}</strong>
+          <span>${escapeHtml(subtitle)}</span>
+        </span>
+      </button>
+    `;
+  }
+
+  function renderForwardTargetList(query = "") {
+    const listNode = forwardModal.querySelector("[data-forward-list]");
+    const statusNode = forwardModal.querySelector("[data-forward-status]");
+    if (!listNode || !statusNode) {
+      return;
+    }
+
+    const targets = getForwardTargets(query);
+    if (!targets.length) {
+      listNode.innerHTML = "";
+      statusNode.textContent = query ? "Ничего не найдено" : "Нет доступных чатов для пересылки";
+      statusNode.className = "status forward-modal-status";
+      return;
+    }
+
+    statusNode.textContent = forwardMessageState
+      ? `Сообщение от ${forwardMessageState.senderName || "пользователя"}`
+      : "";
+    statusNode.className = "status forward-modal-status";
+    listNode.innerHTML = targets.map(renderForwardTargetItem).join("");
+  }
+
+  function closeForwardModal() {
+    forwardModal.classList.remove("visible");
+    window.setTimeout(() => {
+      if (!forwardModal.classList.contains("visible")) {
+        forwardModal.hidden = true;
+      }
+    }, 160);
+    forwardMessageState = null;
+    selectedForwardTargetKey = "";
+    const statusNode = forwardModal.querySelector("[data-forward-status]");
+    const searchNode = forwardModal.querySelector("[data-forward-search]");
+    const listNode = forwardModal.querySelector("[data-forward-list]");
+    if (statusNode) {
+      statusNode.textContent = "";
+      statusNode.className = "status forward-modal-status";
+    }
+    if (searchNode) {
+      searchNode.value = "";
+    }
+    if (listNode) {
+      listNode.innerHTML = "";
+    }
+  }
+
+  function openForwardModal(nextState) {
+    if (!nextState?.messageId) {
+      return;
+    }
+
+    forwardMessageState = nextState;
+    selectedForwardTargetKey = "";
+    renderForwardTargetList("");
+    forwardModal.hidden = false;
+    requestAnimationFrame(() => {
+      forwardModal.classList.add("visible");
+    });
+    forwardModal.querySelector("[data-forward-search]")?.focus();
+  }
+
+  async function submitForwardMessage(targetChatId, targetChatType) {
+    if (!forwardMessageState?.messageId) {
+      return;
+    }
+
+    const statusNode = forwardModal.querySelector("[data-forward-status]");
+    const basePath = chatType === "group"
+      ? `/groups/${chatId}/messages/${forwardMessageState.messageId}`
+      : `/chats/${chatId}/messages/${forwardMessageState.messageId}`;
+
+    if (statusNode) {
+      statusNode.textContent = "Пересылаем сообщение...";
+      statusNode.className = "status forward-modal-status";
+    }
+
+    try {
+      await apiFetch(`${basePath}/forward`, {
+        method: "POST",
+        body: JSON.stringify({
+          target_chat_id: targetChatId,
+          target_chat_type: targetChatType
+        })
+      });
+      closeForwardModal();
+      showAppToast("Сообщение переслано");
+      await loadChats("chatList", { showLoading: false });
+    } catch (error) {
+      if (statusNode) {
+        statusNode.textContent = error.message;
+        statusNode.className = "status forward-modal-status error";
+      }
+    }
+  }
+
   function buildReplyStateFromMessageNode(messageNode) {
     if (!messageNode) {
       return null;
@@ -2772,7 +2981,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       senderName: authorButton?.textContent?.trim()
         || (messageNode.dataset.own === "true" ? (currentUser?.name || currentUser?.username || "Вы") : "")
         || "Сообщение",
-      text: messageNode.querySelector(".message-text")?.textContent || "",
+      text: messageNode.querySelector(".message-text")?.textContent
+        || messageNode.querySelector(".message-forwarded-meta")?.textContent
+        || "",
       messageType: String(messageNode.dataset.messageType || "text")
     };
   }
@@ -2943,7 +3154,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     messageActionMenu.hidden = false;
 
     const menuWidth = 180;
-    const menuHeight = isOwnMessage ? (isTextMessage ? 204 : 164) : 124;
+    const menuHeight = isOwnMessage ? (isTextMessage ? 244 : 204) : 184;
     const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
     const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
     messageActionMenu.style.left = `${Math.max(12, left)}px`;
@@ -3316,6 +3527,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     closeThreadInfoActionMenu();
     closeThreadMemberAddModal();
+    setThreadInfoHeading("Информация", "Панель чата");
     setActiveThreadInfoView(currentThreadInfo, chatType);
     fillThreadInfoPanel(activeThreadInfoView, activeThreadInfoType);
     updateThreadInviteControls();
@@ -3492,16 +3704,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   threadInfoInviteRegenerate?.addEventListener("click", () => {
     void regenerateThreadInviteLink();
-  });
-
-  messagesNode.addEventListener("click", (event) => {
-    const authorTrigger = event.target.closest("[data-message-author-id]");
-    if (authorTrigger && chatType === "group") {
-      event.preventDefault();
-      event.stopPropagation();
-      void openMessageAuthorProfile(authorTrigger.dataset.messageAuthorId);
-      return;
-    }
   });
 
   threadInfoMembersListNode?.addEventListener("contextmenu", (event) => {
@@ -3776,6 +3978,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   messagesNode.addEventListener("click", (event) => {
+    const authorTrigger = event.target.closest("[data-message-author-id]");
+    if (authorTrigger && chatType === "group") {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMessageAuthorProfile(authorTrigger.dataset.messageAuthorId);
+      return;
+    }
+
+    const forwardedTrigger = event.target.closest("[data-forwarded-from-user-id]");
+    if (forwardedTrigger) {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMessageAuthorProfile(forwardedTrigger.dataset.forwardedFromUserId);
+      return;
+    }
+
     const voiceToggle = event.target.closest("[data-voice-toggle]");
     if (voiceToggle) {
       event.preventDefault();
@@ -3943,6 +4161,12 @@ document.addEventListener("DOMContentLoaded", async () => {
           setReplyMessageState(replyState);
         }
         return;
+      } else if (action === "forward") {
+        const forwardState = buildReplyStateFromMessageNode(targetNode);
+        if (forwardState) {
+          openForwardModal(forwardState);
+        }
+        return;
       } else if (action === "select") {
         enterSelectionMode(targetNode);
         return;
@@ -4015,6 +4239,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      if (!forwardModal.hidden) {
+        closeForwardModal();
+        return;
+      }
       if (!threadMemberAddModal?.hidden) {
         closeThreadMemberAddModal();
         return;
@@ -4044,6 +4272,30 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   replyBanner.querySelector(".composer-reply-cancel")?.addEventListener("click", () => {
     setReplyMessageState(null);
+  });
+
+  forwardModal.addEventListener("click", (event) => {
+    const closeTrigger = event.target.closest("[data-forward-close]");
+    if (closeTrigger) {
+      closeForwardModal();
+      return;
+    }
+
+    const targetTrigger = event.target.closest("[data-forward-target-key]");
+    if (!targetTrigger) {
+      return;
+    }
+
+    selectedForwardTargetKey = targetTrigger.dataset.forwardTargetKey || "";
+    renderForwardTargetList(forwardModal.querySelector("[data-forward-search]")?.value || "");
+    void submitForwardMessage(
+      Number(targetTrigger.dataset.forwardTargetId || 0),
+      targetTrigger.dataset.forwardTargetType || "direct"
+    );
+  });
+
+  forwardModal.querySelector("[data-forward-search]")?.addEventListener("input", (event) => {
+    renderForwardTargetList(event.target.value || "");
   });
 
   deleteUndoToast.querySelector(".delete-undo-button")?.addEventListener("click", () => {
