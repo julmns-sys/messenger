@@ -2042,10 +2042,16 @@ body[data-chat-wallpaper="paper"] .messages {
   scrollbar-width: none;
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
+  cursor: grab;
+  user-select: none;
 }
 
 .chat-tag-filter-bar::-webkit-scrollbar {
   display: none;
+}
+
+.chat-tag-filter-bar.is-dragging {
+  cursor: grabbing;
 }
 
 .chat-tag-filter-chip {

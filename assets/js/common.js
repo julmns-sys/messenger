@@ -1874,6 +1874,10 @@ function bindChatTagFilters(listId = "chatList") {
   }
 
   container.dataset.chatTagFiltersBound = "true";
+  let dragStartX = 0;
+  let dragStartScrollLeft = 0;
+  let isDragging = false;
+
   container.addEventListener("click", (event) => {
     const trigger = event.target.closest("[data-chat-tag-filter]");
     if (!trigger) {
@@ -1882,6 +1886,48 @@ function bindChatTagFilters(listId = "chatList") {
 
     activeChatTagFilter = trigger.dataset.chatTagFilter || "all";
     updateChatListView(container.dataset.listId || listId);
+  });
+
+  container.addEventListener("wheel", (event) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) && event.deltaX === 0) {
+      return;
+    }
+    if (container.scrollWidth <= container.clientWidth) {
+      return;
+    }
+
+    event.preventDefault();
+    const delta = Math.abs(event.deltaX) > 0 ? event.deltaX : event.deltaY;
+    container.scrollLeft += delta;
+  }, { passive: false });
+
+  container.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || container.scrollWidth <= container.clientWidth) {
+      return;
+    }
+
+    isDragging = true;
+    dragStartX = event.clientX;
+    dragStartScrollLeft = container.scrollLeft;
+    container.classList.add("is-dragging");
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!isDragging) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragStartX;
+    container.scrollLeft = dragStartScrollLeft - deltaX;
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!isDragging) {
+      return;
+    }
+
+    isDragging = false;
+    container.classList.remove("is-dragging");
   });
 }
 
