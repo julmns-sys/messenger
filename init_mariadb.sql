@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) NULL,
     password_hash VARCHAR(255) NOT NULL,
     bio TEXT NULL,
+    date_of_birth DATE NULL,
     login_alerts_enabled TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -84,6 +85,8 @@ CREATE TABLE IF NOT EXISTS messages (
     audio_url VARCHAR(1000) NULL,
     audio_mime_type VARCHAR(120) NULL,
     audio_duration_ms INT NULL,
+    image_url VARCHAR(1000) NULL,
+    image_mime_type VARCHAR(120) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     read_at TIMESTAMP NULL DEFAULT NULL,
     edited_at TIMESTAMP NULL DEFAULT NULL,
@@ -128,6 +131,8 @@ CREATE TABLE IF NOT EXISTS group_messages (
     audio_url VARCHAR(1000) NULL,
     audio_mime_type VARCHAR(120) NULL,
     audio_duration_ms INT NULL,
+    image_url VARCHAR(1000) NULL,
+    image_mime_type VARCHAR(120) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     edited_at TIMESTAMP NULL DEFAULT NULL,
     INDEX idx_group_messages_group_id (group_id),

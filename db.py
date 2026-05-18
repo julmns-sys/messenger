@@ -351,6 +351,8 @@ def _ensure_message_preview_columns(conn, table_name):
         "audio_url": "VARCHAR(1000) NULL",
         "audio_mime_type": "VARCHAR(120) NULL",
         "audio_duration_ms": "INT NULL",
+        "image_url": "VARCHAR(1000) NULL",
+        "image_mime_type": "VARCHAR(120) NULL",
     }
     cursor = conn.cursor(dictionary=False)
     try:
@@ -366,7 +368,7 @@ def _ensure_message_preview_columns(conn, table_name):
                 continue
             cursor.execute(f"""
                 ALTER TABLE {table_name}
-                ADD COLUMN {column_name} {column_type} NULL
+                ADD COLUMN {column_name} {column_type}
             """)
     finally:
         cursor.close()
@@ -401,10 +403,15 @@ def _ensure_users_security_columns(conn):
               AND TABLE_NAME = 'users'
         """, (DB_NAME,))
         existing = {row[0] for row in cursor.fetchall() or []}
+        if "date_of_birth" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN date_of_birth DATE NULL AFTER bio
+            """)
         if "login_alerts_enabled" not in existing:
             cursor.execute("""
                 ALTER TABLE users
-                ADD COLUMN login_alerts_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER bio
+                ADD COLUMN login_alerts_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER date_of_birth
             """)
     finally:
         cursor.close()

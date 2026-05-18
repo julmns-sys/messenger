@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 messenger.db
 .env
+assets/uploads/photos/

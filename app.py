@@ -2,9 +2,11 @@ from datetime import date, datetime, timezone
 from html import unescape
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+from threading import Lock
 import uuid
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -24,11 +26,16 @@ socket_sessions = {}
 user_last_seen = {}
 typing_sessions = {}
 link_preview_cache = {}
+runtime_init_lock = Lock()
+runtime_initialized = False
 LINK_PREVIEW_TIMEOUT = 4
 MESSAGE_URL_PATTERN = re.compile(r"((?:https?://|www\.)[^\s<]+)", flags=re.IGNORECASE)
 BASE_DIR = Path(__file__).resolve().parent
 VOICE_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "voice"
+PHOTO_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "photos"
 VOICE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+PHOTO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+PHOTO_MESSAGES_ENABLED = str(os.getenv("PHOTO_MESSAGES_ENABLED", "1") or "1").strip().lower() not in {"0", "false", "off", "no"}
 VOICE_EXTENSIONS_BY_MIME = {
     "audio/webm": ".webm",
     "audio/ogg": ".ogg",
@@ -39,11 +46,47 @@ VOICE_EXTENSIONS_BY_MIME = {
     "audio/wav": ".wav",
     "audio/x-wav": ".wav",
 }
+PHOTO_EXTENSIONS_BY_MIME = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
 SYSTEM_USERNAME = "chatik"
 SYSTEM_NAME = "Chatik"
 SYSTEM_EMAIL = "chatik@system.local"
 SYSTEM_BIO = "Системный аккаунт для обновлений и уведомлений безопасности."
 SYSTEM_PASSWORD_PLACEHOLDER = "chatik-system-account"
+
+
+@app.context_processor
+def inject_feature_flags():
+    return {
+        "photo_messages_enabled": PHOTO_MESSAGES_ENABLED
+    }
+
+
+def ensure_photo_messages_enabled():
+    if not PHOTO_MESSAGES_ENABLED:
+        raise PermissionError("Отправка фото временно отключена")
+
+
+def ensure_runtime_initialized():
+    global runtime_initialized
+    if runtime_initialized:
+        return
+
+    with runtime_init_lock:
+        if runtime_initialized:
+            return
+        init_db()
+        bootstrap_system_account()
+        runtime_initialized = True
+
+
+@app.before_request
+def initialize_runtime_before_request():
+    ensure_runtime_initialized()
 
 
 def format_timestamp(value):
@@ -154,6 +197,17 @@ def serialize_message_audio(message):
         "url": audio_url,
         "mime_type": row_value(message, "audio_mime_type", "") or "audio/webm",
         "duration_ms": parse_duration_ms(row_value(message, "audio_duration_ms", 0))
+    }
+
+
+def serialize_message_image(message):
+    image_url = row_value(message, "image_url", "")
+    if not image_url:
+        return None
+
+    return {
+        "url": image_url,
+        "mime_type": row_value(message, "image_mime_type", "") or "image/jpeg"
     }
 
 
@@ -277,10 +331,31 @@ def clone_forwarded_audio(message):
     }
 
 
+def clone_forwarded_image(message):
+    image = serialize_message_image(message)
+    if not image:
+        return None
+
+    source_path = next(iter_photo_file_paths([image["url"]]), None)
+    if not source_path or not source_path.exists():
+        raise ValueError("Не удалось переслать фотографию")
+
+    extension = source_path.suffix or ".jpg"
+    filename = f"{uuid.uuid4().hex}{extension}"
+    destination_path = PHOTO_UPLOAD_DIR / filename
+    shutil.copy2(source_path, destination_path)
+    return {
+        "url": f"/assets/uploads/photos/{filename}",
+        "mime_type": image["mime_type"]
+    }
+
+
 def get_forwarded_dialog_item_text(message):
     message_type = row_value(message, "message_type", "text") or "text"
     if message_type == "voice":
         return "Голосовое сообщение"
+    if message_type == "photo":
+        return "Фотография"
     return row_value(message, "text", "") or ""
 
 
@@ -291,7 +366,7 @@ def build_forwarded_dialog_payload(messages, owner_user_id):
         message_type = row_value(message, "message_type", "text") or "text"
         if message_type == "system":
             raise ValueError("Системные сообщения нельзя пересылать как диалог")
-        if message_type not in {"text", "voice"}:
+        if message_type not in {"text", "voice", "photo"}:
             raise ValueError("Некоторые выбранные сообщения нельзя переслать как диалог")
 
         original_sender_id = int(row_value(message, "sender_id", 0) or 0)
@@ -321,6 +396,8 @@ def build_reply_preview_payload(reply_message):
     reply_message_type = row_value(reply_message, "message_type", "text") or "text"
     if reply_message_type == "voice":
         reply_preview_text = "Голосовое сообщение"
+    elif reply_message_type == "photo":
+        reply_preview_text = "Фотография"
     elif reply_message_type == "system":
         reply_preview_text = row_value(reply_message, "text", "") or "Системное сообщение"
     else:
@@ -484,6 +561,25 @@ def save_voice_upload(uploaded_file):
     }
 
 
+def save_photo_upload(uploaded_file):
+    if not PHOTO_MESSAGES_ENABLED:
+        raise ValueError("Отправка фото временно отключена")
+    if not uploaded_file or not uploaded_file.filename:
+        raise ValueError("Файл фотографии не найден")
+
+    mime_type = str(uploaded_file.mimetype or "").split(";", 1)[0].strip().lower()
+    if mime_type not in PHOTO_EXTENSIONS_BY_MIME:
+        raise ValueError("Поддерживаются только JPG, PNG, WEBP и GIF")
+
+    extension = PHOTO_EXTENSIONS_BY_MIME.get(mime_type) or Path(uploaded_file.filename).suffix.lower() or ".jpg"
+    filename = f"{uuid.uuid4().hex}{extension}"
+    uploaded_file.save(PHOTO_UPLOAD_DIR / filename)
+    return {
+        "url": f"/assets/uploads/photos/{filename}",
+        "mime_type": mime_type
+    }
+
+
 def iter_voice_file_paths(audio_urls):
     for audio_url in audio_urls or []:
         value = str(audio_url or "").strip()
@@ -495,8 +591,28 @@ def iter_voice_file_paths(audio_urls):
         yield VOICE_UPLOAD_DIR / filename
 
 
+def iter_photo_file_paths(image_urls):
+    for image_url in image_urls or []:
+        value = str(image_url or "").strip()
+        if not value or not value.startswith("/assets/uploads/photos/"):
+            continue
+        filename = Path(value).name
+        if not filename:
+            continue
+        yield PHOTO_UPLOAD_DIR / filename
+
+
 def remove_voice_files(audio_urls):
     for file_path in iter_voice_file_paths(audio_urls):
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError:
+            continue
+
+
+def remove_photo_files(image_urls):
+    for file_path in iter_photo_file_paths(image_urls):
         try:
             if file_path.exists():
                 file_path.unlink()
@@ -604,6 +720,8 @@ def create_direct_message_record(conn, chat_id, sender_id, text, message_type="t
             m.audio_url,
             m.audio_mime_type,
             m.audio_duration_ms,
+            m.image_url,
+            m.image_mime_type,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -902,6 +1020,7 @@ def serialize_user_profile(user):
         "username": user["username"],
         "email": user["email"],
         "bio": user["bio"],
+        "date_of_birth": format_date_value(row_value(user, "date_of_birth")),
         "login_alerts_enabled": bool(row_value(user, "login_alerts_enabled", True)),
         "is_online": False if hide_presence else is_user_online(user["id"]),
         "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
@@ -916,6 +1035,7 @@ def serialize_public_user(user):
         "name": user["name"],
         "username": user["username"],
         "bio": user["bio"],
+        "date_of_birth": format_date_value(row_value(user, "date_of_birth")),
         "badges": serialize_user_badges(user),
         "is_online": False if hide_presence else is_user_online(user["id"]),
         "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
@@ -951,6 +1071,7 @@ def serialize_user_panel_payload(user):
         "name": user["name"],
         "username": user["username"],
         "bio": row_value(user, "bio"),
+        "date_of_birth": format_date_value(row_value(user, "date_of_birth")),
         "contact_alias": row_value(user, "contact_alias"),
         "is_contact": bool(row_value(user, "is_contact", False)),
         "badges": serialize_user_badges(user),
@@ -965,6 +1086,27 @@ def serialize_user_panel_payload(user):
 
 def should_hide_presence_for_username(username):
     return str(username or "").strip().lower() == SYSTEM_USERNAME
+
+
+def format_date_value(value):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def parse_profile_date(value, field_name="date_of_birth"):
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError:
+        raise ValueError(f"{field_name} должна быть в формате YYYY-MM-DD")
 
 
 def is_user_muted(conn, owner_user_id, target_user_id):
@@ -1023,6 +1165,7 @@ def fetch_user_panel_payload(conn, viewer_user_id, target_user_id):
             u.name,
             u.username,
             u.bio,
+            u.date_of_birth,
             ct.alias AS contact_alias,
             (ct.id IS NOT NULL) AS is_contact,
             EXISTS (
@@ -1464,6 +1607,7 @@ def serialize_direct_message(message):
         "forwarded_dialog": serialize_message_forwarded_dialog(message),
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
+        "image": serialize_message_image(message),
         "created_at": format_timestamp(message["created_at"]),
         "is_read": bool(message["read_at"]),
         "is_edited": bool(message["edited_at"])
@@ -1481,6 +1625,7 @@ def serialize_group_message(message):
         "forwarded_dialog": serialize_message_forwarded_dialog(message),
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
+        "image": serialize_message_image(message),
         "message_type": message["message_type"] or "text",
         "created_at": format_timestamp(message["created_at"]),
         "is_edited": bool(message["edited_at"])
@@ -1616,6 +1761,8 @@ def get_group_message_for_group(conn, group_id, message_id):
             gm.audio_url,
             gm.audio_mime_type,
             gm.audio_duration_ms,
+            gm.image_url,
+            gm.image_mime_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1710,6 +1857,8 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
             m.audio_url,
             m.audio_mime_type,
             m.audio_duration_ms,
+            m.image_url,
+            m.image_mime_type,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1762,6 +1911,8 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             gm.audio_url,
             gm.audio_mime_type,
             gm.audio_duration_ms,
+            gm.image_url,
+            gm.image_mime_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1807,6 +1958,8 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
             m.audio_url,
             m.audio_mime_type,
             m.audio_duration_ms,
+            m.image_url,
+            m.image_mime_type,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1848,6 +2001,8 @@ def search_group_messages(conn, group_id, user_id, query, limit):
             gm.audio_url,
             gm.audio_mime_type,
             gm.audio_duration_ms,
+            gm.image_url,
+            gm.image_mime_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1887,6 +2042,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.audio_url,
             m.audio_mime_type,
             m.audio_duration_ms,
+            m.image_url,
+            m.image_mime_type,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1924,6 +2081,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.audio_url,
             m.audio_mime_type,
             m.audio_duration_ms,
+            m.image_url,
+            m.image_mime_type,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1960,6 +2119,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.audio_url,
             m.audio_mime_type,
             m.audio_duration_ms,
+            m.image_url,
+            m.image_mime_type,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -2031,6 +2192,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.audio_url,
             gm.audio_mime_type,
             gm.audio_duration_ms,
+            gm.image_url,
+            gm.image_mime_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -2067,6 +2230,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.audio_url,
             gm.audio_mime_type,
             gm.audio_duration_ms,
+            gm.image_url,
+            gm.image_mime_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -2102,6 +2267,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.audio_url,
             gm.audio_mime_type,
             gm.audio_duration_ms,
+            gm.image_url,
+            gm.image_mime_type,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -2154,7 +2321,7 @@ def get_user_display_name(user):
     return user["name"] or user["username"] or "Пользователь"
 
 
-def create_direct_message_record(conn, chat_id, sender_id, text, message_type="text", audio=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
+def create_direct_message_record(conn, chat_id, sender_id, text, message_type="text", audio=None, image=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
     preview = extract_message_preview(text) if message_type == "text" else None
     reply_preview = build_reply_preview_payload(reply_to_message)
     forwarded_payload = forwarded_from or {}
@@ -2179,9 +2346,11 @@ def create_direct_message_record(conn, chat_id, sender_id, text, message_type="t
             preview_site_name,
             audio_url,
             audio_mime_type,
-            audio_duration_ms
+            audio_duration_ms,
+            image_url,
+            image_mime_type
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         chat_id,
         sender_id,
@@ -2200,12 +2369,14 @@ def create_direct_message_record(conn, chat_id, sender_id, text, message_type="t
         preview["site_name"][:255] if preview else None,
         audio["url"] if audio else None,
         audio["mime_type"] if audio else None,
-        parse_duration_ms(audio.get("duration_ms")) if audio else None
+        parse_duration_ms(audio.get("duration_ms")) if audio else None,
+        image["url"] if image else None,
+        image["mime_type"] if image else None
     ))
     return get_direct_message_for_chat(conn, chat_id, cur.lastrowid)
 
 
-def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
+def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, image=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
     preview = extract_message_preview(text) if message_type == "text" else None
     reply_preview = build_reply_preview_payload(reply_to_message)
     forwarded_payload = forwarded_from or {}
@@ -2230,9 +2401,11 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             preview_site_name,
             audio_url,
             audio_mime_type,
-            audio_duration_ms
+            audio_duration_ms,
+            image_url,
+            image_mime_type
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         group_id,
         sender_id,
@@ -2251,7 +2424,9 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
         preview["site_name"][:255] if preview else None,
         audio["url"] if audio else None,
         audio["mime_type"] if audio else None,
-        parse_duration_ms(audio.get("duration_ms")) if audio else None
+        parse_duration_ms(audio.get("duration_ms")) if audio else None,
+        image["url"] if image else None,
+        image["mime_type"] if image else None
     ))
     return get_group_message_for_group(conn, group_id, cur.lastrowid)
 
@@ -2277,13 +2452,14 @@ def build_forward_message_data(message):
     message_type = row_value(message, "message_type", "text") or "text"
     if message_type == "system":
         raise ValueError("Системные сообщения нельзя пересылать")
-    if message_type not in {"text", "voice"}:
+    if message_type not in {"text", "voice", "photo"}:
         raise ValueError("Этот тип сообщения пока нельзя пересылать")
 
     return {
         "text": row_value(message, "text", "") or "",
         "message_type": message_type,
         "audio": clone_forwarded_audio(message) if message_type == "voice" else None,
+        "image": clone_forwarded_image(message) if message_type == "photo" else None,
         "forwarded_from": build_forwarded_from_payload(message)
     }
 
@@ -2343,9 +2519,9 @@ def forward_message_to_target(conn, sender_id, target_chat_type, target_chat_id,
             sender_id,
             message_data["text"],
             message_data["message_type"],
-            message_data["audio"],
-            None,
-            message_data["forwarded_from"]
+            audio=message_data["audio"],
+            image=message_data["image"],
+            forwarded_from=message_data["forwarded_from"]
         )
         conn.commit()
         emit_group_new_message(message, target_chat_id)
@@ -2366,9 +2542,9 @@ def forward_message_to_target(conn, sender_id, target_chat_type, target_chat_id,
         sender_id,
         message_data["text"],
         message_data["message_type"],
-        message_data["audio"],
-        None,
-        message_data["forwarded_from"]
+        audio=message_data["audio"],
+        image=message_data["image"],
+        forwarded_from=message_data["forwarded_from"]
     )
     conn.commit()
     member_ids = get_direct_chat_member_ids(conn, target_chat_id)
@@ -2395,10 +2571,7 @@ def forward_dialog_to_target(conn, sender_id, target_chat_type, target_chat_id, 
             sender_id,
             dialog_title,
             "forwarded_dialog",
-            None,
-            None,
-            None,
-            dialog_payload
+            forwarded_dialog_payload=dialog_payload
         )
         conn.commit()
         emit_group_new_message(message, target_chat_id)
@@ -2418,10 +2591,7 @@ def forward_dialog_to_target(conn, sender_id, target_chat_type, target_chat_id, 
         sender_id,
         dialog_title,
         "forwarded_dialog",
-        None,
-        None,
-        None,
-        dialog_payload
+        forwarded_dialog_payload=dialog_payload
     )
     conn.commit()
     member_ids = get_direct_chat_member_ids(conn, target_chat_id)
@@ -2828,7 +2998,8 @@ def register():
             "name": name,
             "username": username,
             "email": email,
-            "bio": ""
+            "bio": "",
+            "date_of_birth": None
         }
     })
 
@@ -2874,7 +3045,7 @@ def get_me():
 
     conn = get_db()
     user = conn.execute("""
-        SELECT id, name, username, email, bio, login_alerts_enabled
+        SELECT id, name, username, email, bio, date_of_birth, login_alerts_enabled
         FROM users
         WHERE id = %s
     """, (user_id,)).fetchone()
@@ -2975,6 +3146,12 @@ def update_me():
             return jsonify({"message": f"{field} слишком длинный"}), 400
         updates[field] = value
 
+    if "date_of_birth" in data:
+        try:
+            updates["date_of_birth"] = parse_profile_date(data.get("date_of_birth"), "Дата рождения")
+        except ValueError as error:
+            return jsonify({"message": str(error)}), 400
+
     if not updates:
         return jsonify({"message": "Нет данных для обновления"}), 400
 
@@ -3007,7 +3184,7 @@ def update_me():
     conn.commit()
 
     user = conn.execute("""
-        SELECT id, name, username, email, bio
+        SELECT id, name, username, email, bio, date_of_birth, login_alerts_enabled
         FROM users
         WHERE id = %s
     """, (user_id,)).fetchone()
@@ -3031,6 +3208,7 @@ def search_users():
             u.name,
             u.username,
             u.bio,
+            u.date_of_birth,
             ct.alias AS contact_alias,
             EXISTS (
                 SELECT 1
@@ -3082,6 +3260,7 @@ def get_contacts():
             u.name,
             u.username,
             u.bio,
+            u.date_of_birth,
             ct.alias AS contact_alias,
             c.id AS chat_id
         FROM contacts ct
@@ -3673,6 +3852,7 @@ def get_chat(chat_id):
             u.username,
             u.name,
             u.bio,
+            u.date_of_birth,
             ct.alias AS contact_alias,
             (ct.id IS NOT NULL) AS is_contact,
             EXISTS (
@@ -3736,6 +3916,7 @@ def get_chat(chat_id):
         "name": chat["name"],
         "username": chat["username"],
         "bio": chat["bio"],
+        "date_of_birth": format_date_value(chat["date_of_birth"]),
         "contact_alias": chat["contact_alias"],
         "is_contact": bool(chat["is_contact"]),
         "badges": serialize_user_badges(chat),
@@ -4071,6 +4252,63 @@ def create_chat_voice_message(chat_id):
     return jsonify(message_data), 201
 
 
+@app.post("/chats/<int:chat_id>/photo")
+def create_chat_photo_message(chat_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    chat = can_access_direct_chat(conn, user_id, chat_id)
+    if not chat:
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    recipient_user_id = get_direct_chat_recipient_id(conn, chat_id, user_id)
+    try:
+        ensure_photo_messages_enabled()
+        ensure_direct_target_is_writable(conn, user_id, recipient_user_id)
+        image = save_photo_upload(request.files.get("photo"))
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
+    except ValueError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 400
+
+    reply_to_id = request.form.get("reply_to_id")
+    reply_to_message = None
+    if reply_to_id is not None and str(reply_to_id).strip():
+        reply_to_message = get_direct_reply_target(conn, chat_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+
+    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
+    message = create_direct_message_record(
+        conn,
+        chat_id,
+        user_id,
+        "",
+        "photo",
+        image=image,
+        reply_to_message=reply_to_message
+    )
+    conn.commit()
+    member_ids = get_direct_chat_member_ids(conn, chat_id)
+    message_data = serialize_direct_message(message)
+    emit_inbox_message_for_users(member_ids, {
+        **message_data,
+        "chat_type": "direct",
+        "chat_id": int(chat_id),
+        "thread_title": message["sender_name"] or "Чат"
+    }, exclude_user_id=user_id)
+    conn.close()
+    socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
+    emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
+    return jsonify(message_data), 201
+
+
 @app.post("/chats/<int:chat_id>/messages/<int:message_id>/forward")
 def forward_chat_message(chat_id, message_id):
     user_id = current_user_id()
@@ -4177,12 +4415,13 @@ def delete_direct_chat(chat_id):
         return jsonify({"message": "Чат не найден"}), 404
 
     if scope == "all":
-        message_rows = conn.execute("SELECT id, audio_url FROM messages WHERE chat_id = %s", (chat_id,)).fetchall()
+        message_rows = conn.execute("SELECT id, audio_url, image_url FROM messages WHERE chat_id = %s", (chat_id,)).fetchall()
         message_ids = [
             row["id"]
             for row in message_rows
         ]
         voice_urls = [row["audio_url"] for row in message_rows]
+        image_urls = [row["image_url"] for row in message_rows]
 
         if message_ids:
             placeholders = ",".join("%s" for _ in message_ids)
@@ -4194,6 +4433,7 @@ def delete_direct_chat(chat_id):
         conn.commit()
         conn.close()
         remove_voice_files(voice_urls)
+        remove_photo_files(image_urls)
 
         socketio.emit("chat_deleted", {
             "chat_id": chat_id,
@@ -4326,11 +4566,13 @@ def delete_chat_message(chat_id, message_id):
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
         voice_url = message.get("audio_url")
+        image_url = message.get("image_url")
         conn.execute("DELETE FROM hidden_messages WHERE message_id = %s", (message_id,))
         conn.execute("DELETE FROM messages WHERE id = %s AND chat_id = %s", (message_id, chat_id))
         conn.commit()
         conn.close()
         remove_voice_files([voice_url])
+        remove_photo_files([image_url])
 
         socketio.emit("message_deleted", {
             "chat_id": chat_id,
@@ -4370,7 +4612,7 @@ def bulk_delete_chat_messages(chat_id):
 
     placeholders = ",".join("%s" for _ in message_ids)
     message_rows = conn.execute(f"""
-        SELECT id, sender_id, audio_url
+        SELECT id, sender_id, audio_url, image_url
         FROM messages
         WHERE chat_id = %s AND id IN ({placeholders})
     """, [chat_id, *message_ids]).fetchall()
@@ -4388,11 +4630,13 @@ def bulk_delete_chat_messages(chat_id):
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
         voice_urls = [row["audio_url"] for row in message_rows]
+        image_urls = [row["image_url"] for row in message_rows]
         conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
         conn.execute(f"DELETE FROM messages WHERE chat_id = %s AND id IN ({placeholders})", [chat_id, *message_ids])
         conn.commit()
         conn.close()
         remove_voice_files(voice_urls)
+        remove_photo_files(image_urls)
 
         for message_id in message_ids:
             socketio.emit("message_deleted", {
@@ -4907,6 +5151,14 @@ def delete_group(group_id):
             WHERE group_id = %s
         """, (group_id,)).fetchall()
     ]
+    image_urls = [
+        row["image_url"]
+        for row in conn.execute("""
+            SELECT image_url
+            FROM group_messages
+            WHERE group_id = %s
+        """, (group_id,)).fetchall()
+    ]
 
     if group_message_ids:
         placeholders = ",".join("%s" for _ in group_message_ids)
@@ -4923,6 +5175,7 @@ def delete_group(group_id):
     conn.commit()
     conn.close()
     remove_voice_files(voice_urls)
+    remove_photo_files(image_urls)
 
     return jsonify({
         "ok": True,
@@ -5319,7 +5572,7 @@ def create_group_message(group_id):
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
 
-    message = create_group_message_record(conn, group_id, user_id, text, "text", None, reply_to_message)
+    message = create_group_message_record(conn, group_id, user_id, text, "text", reply_to_message=reply_to_message)
     conn.commit()
     conn.close()
 
@@ -5355,11 +5608,65 @@ def create_group_voice_message(group_id):
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
 
-    message = create_group_message_record(conn, group_id, user_id, "", "voice", {
-        "url": audio["url"],
-        "mime_type": audio["mime_type"],
-        "duration_ms": duration_ms
-    }, reply_to_message)
+    message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        "",
+        "voice",
+        audio={
+            "url": audio["url"],
+            "mime_type": audio["mime_type"],
+            "duration_ms": duration_ms
+        },
+        reply_to_message=reply_to_message
+    )
+    conn.commit()
+    conn.close()
+
+    emit_group_new_message(message, group_id)
+    return jsonify(serialize_group_message(message)), 201
+
+
+@app.post("/groups/<int:group_id>/photo")
+def create_group_photo_message(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    member = can_access_group(conn, user_id, group_id)
+    if not member:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    try:
+        ensure_photo_messages_enabled()
+        image = save_photo_upload(request.files.get("photo"))
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
+    except ValueError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 400
+
+    reply_to_id = request.form.get("reply_to_id")
+    reply_to_message = None
+    if reply_to_id is not None and str(reply_to_id).strip():
+        reply_to_message = get_group_reply_target(conn, group_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+
+    message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        "",
+        "photo",
+        image=image,
+        reply_to_message=reply_to_message
+    )
     conn.commit()
     conn.close()
 
@@ -5552,11 +5859,13 @@ def delete_group_message(group_id, message_id):
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
         voice_url = message.get("audio_url")
+        image_url = message.get("image_url")
         conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id = %s", (message_id,))
         conn.execute("DELETE FROM group_messages WHERE id = %s AND group_id = %s", (message_id, group_id))
         conn.commit()
         conn.close()
         remove_voice_files([voice_url])
+        remove_photo_files([image_url])
 
         socketio.emit("message_deleted", {
             "group_id": group_id,
@@ -5596,7 +5905,7 @@ def bulk_delete_group_messages(group_id):
 
     placeholders = ",".join("%s" for _ in message_ids)
     message_rows = conn.execute(f"""
-        SELECT id, sender_id, message_type, audio_url
+        SELECT id, sender_id, message_type, audio_url, image_url
         FROM group_messages
         WHERE group_id = %s AND id IN ({placeholders})
     """, [group_id, *message_ids]).fetchall()
@@ -5619,11 +5928,13 @@ def bulk_delete_group_messages(group_id):
             return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
 
         voice_urls = [row["audio_url"] for row in message_rows]
+        image_urls = [row["image_url"] for row in message_rows]
         conn.execute(f"DELETE FROM hidden_group_messages WHERE group_message_id IN ({placeholders})", message_ids)
         conn.execute(f"DELETE FROM group_messages WHERE group_id = %s AND id IN ({placeholders})", [group_id, *message_ids])
         conn.commit()
         conn.close()
         remove_voice_files(voice_urls)
+        remove_photo_files(image_urls)
 
         for message_id in message_ids:
             socketio.emit("message_deleted", {

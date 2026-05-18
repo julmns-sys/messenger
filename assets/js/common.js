@@ -202,6 +202,9 @@ function getChatListPreviewText(lastMessage) {
   if (messageType === "voice") {
     return "Голосовое сообщение";
   }
+  if (messageType === "photo") {
+    return "Фотография";
+  }
   if (messageType === "system") {
     return lastMessage.text || "Системное сообщение";
   }
@@ -869,13 +872,18 @@ function getIncomingNotificationTitle(payload = {}) {
 
 function getIncomingNotificationBody(payload = {}, settings = getLiveNotificationSettings()) {
   const messageType = String(payload.message_type || "text");
-  const fallbackLabel = messageType === "voice" ? "Голосовое сообщение" : "Новое сообщение";
+  const fallbackLabel = messageType === "voice"
+    ? "Голосовое сообщение"
+    : (messageType === "photo" ? "Фотография" : "Новое сообщение");
   if (!settings.notificationTextPreview) {
     return fallbackLabel;
   }
 
   if (messageType === "voice") {
     return "Голосовое сообщение";
+  }
+  if (messageType === "photo") {
+    return "Фотография";
   }
 
   const text = String(payload.text || "").trim();
@@ -1036,6 +1044,7 @@ function renderUserProfilePanel(user = {}, options = {}) {
   const displayName = getUserProfileDisplayName(user);
   const originalName = getUserProfileOriginalName(user);
   const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "";
+  const birthDate = formatProfileBirthDate(user?.date_of_birth);
   const username = user?.username ? `@${user.username}` : "";
   const currentUser = getCurrentUser() || {};
   const canManageRelations = String(currentUser.id || "") !== String(user?.id || "");
@@ -1110,6 +1119,14 @@ function renderUserProfilePanel(user = {}, options = {}) {
           </div>
         ` : ""}
         ${bio ? `<p class="thread-info-description user-profile-bio">${escapeHtml(bio)}</p>` : ""}
+        ${birthDate ? `
+          <div class="user-profile-details">
+            <div class="user-profile-detail">
+              <span class="user-profile-detail-label">Дата рождения</span>
+              <strong class="user-profile-detail-value">${escapeHtml(birthDate)}</strong>
+            </div>
+          </div>
+        ` : ""}
         <div class="status user-profile-actions-status" data-user-profile-status></div>
       </div>
     </section>
@@ -1311,8 +1328,34 @@ function getSidebarProfileFields() {
     name: document.getElementById("sidebarProfileNameField"),
     email: document.getElementById("sidebarProfileEmail"),
     username: document.getElementById("sidebarProfileHandle"),
-    bio: document.getElementById("sidebarProfileBio")
+    bio: document.getElementById("sidebarProfileBio"),
+    date_of_birth: document.getElementById("sidebarProfileDateOfBirth")
   };
+}
+
+function formatProfileBirthDate(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return normalized;
+  }
+
+  const [, year, month, day] = match;
+  const dateValue = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  if (Number.isNaN(dateValue.getTime())) {
+    return normalized;
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(dateValue);
 }
 
 function getSidebarProfileFieldValue(field, user) {
@@ -1327,6 +1370,8 @@ function getSidebarProfileFieldValue(field, user) {
       return user.username ? `@${user.username}` : "Не указан";
     case "bio":
       return user.bio || "Не указана";
+    case "date_of_birth":
+      return formatProfileBirthDate(user.date_of_birth) || "Не указана";
     default:
       return "";
   }
@@ -1339,7 +1384,7 @@ function fillSidebarProfile() {
   const username = document.getElementById("sidebarProfileUsername");
   const fields = getSidebarProfileFields();
 
-  if (!user || !avatar || !name || !username || !fields.name || !fields.email || !fields.username || !fields.bio) {
+  if (!user || !avatar || !name || !username || !fields.name || !fields.email || !fields.username || !fields.bio || !fields.date_of_birth) {
     return;
   }
 
@@ -1351,8 +1396,10 @@ function fillSidebarProfile() {
   username.textContent = usernameValue;
   fields.name.textContent = getSidebarProfileFieldValue("name", user);
   fields.username.textContent = getSidebarProfileFieldValue("username", user);
+  fields.username.setAttribute("aria-label", user.username ? "Скопировать username" : "Username не указан");
   fields.bio.textContent = getSidebarProfileFieldValue("bio", user);
   fields.bio.classList.toggle("multiline", Boolean(user.bio));
+  fields.date_of_birth.textContent = getSidebarProfileFieldValue("date_of_birth", user);
 
   fields.email.textContent = getSidebarProfileFieldValue("email", user);
   fields.email.classList.toggle("is-blurred", Boolean(user.email));
@@ -1404,6 +1451,13 @@ function getSidebarProfileEditConfig(field) {
       editor: "contenteditable",
       maxLength: 50,
       value: (user) => user?.bio || ""
+    },
+    date_of_birth: {
+      label: "Дата рождения",
+      editor: "input",
+      inputType: "date",
+      maxLength: 10,
+      value: (user) => user?.date_of_birth || ""
     }
   }[field];
 }
@@ -1426,7 +1480,7 @@ function createSidebarProfileEditorControl(field, config, value) {
   const input = document.createElement("input");
   input.className = "sidebar-profile-editor-input";
   input.dataset.editorField = field;
-  input.type = field === "email" ? "email" : "text";
+  input.type = config.inputType || (field === "email" ? "email" : "text");
   if (config.maxLength) {
     input.maxLength = config.maxLength;
   }
@@ -1699,7 +1753,6 @@ function buildQuickActionsMenu() {
   menu.hidden = true;
   menu.innerHTML = `
     <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">Написать пользователю</button>
-    <button class="quick-actions-menu-item" type="button" data-quick-action="open-graph">Граф общения</button>
     <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">Создать группу</button>
   `;
   document.body.appendChild(menu);
@@ -1838,6 +1891,7 @@ function initSidebarProfile() {
   const badge = document.getElementById("currentUserBadge");
   const backButton = document.getElementById("sidebarProfileBack");
   const emailButton = document.getElementById("sidebarProfileEmail");
+  const usernameButton = document.getElementById("sidebarProfileHandle");
   const profileFacts = document.querySelector(".sidebar-profile-facts");
   const menuTrigger = document.getElementById("sidebarProfileMenuTrigger");
   const menu = document.getElementById("sidebarProfileMenu");
@@ -1915,6 +1969,23 @@ function initSidebarProfile() {
       emailButton.classList.toggle("is-blurred", nextBlurState);
       emailButton.setAttribute("aria-pressed", nextBlurState ? "false" : "true");
       emailButton.setAttribute("aria-label", nextBlurState ? "Показать email" : "Скрыть email");
+    });
+  }
+
+  if (usernameButton && !usernameButton.dataset.copyBound) {
+    usernameButton.dataset.copyBound = "true";
+    usernameButton.addEventListener("click", async () => {
+      const user = getCurrentUser();
+      const usernameValue = String(user?.username || "").trim();
+      if (!usernameValue) {
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(`@${usernameValue}`);
+      } catch {
+        // Silent fail to match lightweight sidebar interactions.
+      }
     });
   }
 

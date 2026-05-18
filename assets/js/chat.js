@@ -142,6 +142,35 @@ function getMessageAudioData(message = {}) {
   };
 }
 
+function getMessageImageData(message = {}) {
+  const image = message?.image;
+  if (!image?.url) {
+    return null;
+  }
+  return {
+    url: image.url,
+    mime_type: image.mime_type || "image/jpeg"
+  };
+}
+
+function renderPhotoMessageBody(message = {}, pending = false) {
+  const image = getMessageImageData(message);
+  const imageUrl = escapeHtml(image?.url || "");
+  const imageType = escapeHtml(image?.mime_type || "image/jpeg");
+  return `
+    <div class="photo-message${pending ? " pending" : ""}">
+      <img class="photo-message-image" src="${imageUrl}" alt="Фотография" loading="lazy" ${pending ? "" : `data-photo-message="true" data-photo-type="${imageType}"`}>
+      ${pending ? '<span class="photo-message-status">Отправляем фото...</span>' : ""}
+    </div>
+  `;
+}
+
+const COMPOSER_ACTION_ICONS = {
+  idle: "/assets/icons/ui/Mic.svg",
+  save: "/assets/icons/ui/Check_fill.svg",
+  recording: "/assets/icons/ui/Stop_fill.svg"
+};
+
 function formatVoiceDuration(durationMs = 0) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -415,6 +444,9 @@ function getReplyPreviewText(reply = {}) {
   if (messageType === "voice") {
     return "Голосовое сообщение";
   }
+  if (messageType === "photo") {
+    return "Фотография";
+  }
   if (messageType === "system") {
     return String(reply?.text || "").trim() || "Системное сообщение";
   }
@@ -472,6 +504,9 @@ function getForwardedDialogItemText(item = {}) {
   const messageType = String(item?.message_type || "text");
   if (messageType === "voice") {
     return "Голосовое сообщение";
+  }
+  if (messageType === "photo") {
+    return "Фотография";
   }
   return String(item?.text || "").trim() || "Сообщение";
 }
@@ -553,6 +588,7 @@ function formatThreadInfoCount(value) {
 function renderMessageItem(message, currentUserId, chatType) {
   const isSystem = (message.message_type || "text") === "system";
   const isVoice = (message.message_type || "text") === "voice";
+  const isPhoto = (message.message_type || "text") === "photo";
   const isForwardedDialog = (message.message_type || "text") === "forwarded_dialog";
   const own = !isSystem && String(message.sender_id) === String(currentUserId);
   const messageClasses = ["message"];
@@ -588,7 +624,7 @@ function renderMessageItem(message, currentUserId, chatType) {
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
       ${renderMessageForwardedMeta(message.forwarded_from)}
       ${renderMessageReplyPreview(message.reply)}
-      ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
+      ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : isPhoto ? renderPhotoMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
       <p class="message-text">${renderMessageText(message.text || "")}</p>`}
       <div class="message-meta">
         ${renderEditedIndicator(message)}
@@ -606,6 +642,23 @@ function renderPendingMessageItem(text, chatType, options = {}) {
       <article class="message own pending${directClass}" data-pending-message="true" data-message-type="voice" data-own="true">
         ${renderVoiceMessageBody({
           audio: { duration_ms: Number(options.durationMs || 0) }
+        }, true)}
+        <div class="message-meta">
+          <span class="message-status-indicator" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+        </div>
+      </article>
+    `;
+  }
+
+  if (options.type === "photo") {
+    return `
+      <article class="message own pending${directClass}" data-pending-message="true" data-message-type="photo" data-own="true">
+        ${renderPhotoMessageBody({
+          image: { url: options.previewUrl || "" }
         }, true)}
         <div class="message-meta">
           <span class="message-status-indicator" aria-hidden="true">
@@ -1348,7 +1401,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadGroupEditSubmit = document.getElementById("threadGroupEditSubmit");
   const composerWrap = composer?.closest(".composer-wrap");
   const sendButton = composer?.querySelector('button[type="submit"]');
-  const voiceRecordButton = document.getElementById("voiceRecordButton");
+  const photoMessageButton = document.getElementById("photoMessageButton");
+  const photoMessageInput = document.getElementById("photoMessageInput");
+  const COMPOSER_MAX_HEIGHT = 144;
   const messageActionMenu = buildMessageActionMenu();
   const editBanner = buildEditBanner();
   const replyBanner = buildReplyBanner();
@@ -1435,28 +1490,48 @@ document.addEventListener("DOMContentLoaded", async () => {
   function setComposerBusyState(isBusy) {
     input.disabled = isBusy;
     if (sendButton) {
-      sendButton.disabled = isBusy || isRecordingVoice;
+      sendButton.disabled = isBusy;
     }
-    if (voiceRecordButton) {
-      voiceRecordButton.disabled = isBusy && !isRecordingVoice;
+    if (photoMessageButton) {
+      photoMessageButton.disabled = isBusy;
     }
+    updateComposerActionButton();
   }
 
-  function updateVoiceRecordingUI() {
-    if (!voiceRecordButton) {
+  function resizeComposerInput() {
+    if (!input) {
       return;
     }
 
-    voiceRecordButton.classList.toggle("is-recording", isRecordingVoice);
-    voiceRecordButton.style.setProperty("--voice-record-level", isRecordingVoice ? "0.28" : "0");
-    voiceRecordButton.style.setProperty("--voice-record-scale", isRecordingVoice ? "1" : "0");
-    voiceRecordButton.setAttribute("aria-label", isRecordingVoice ? "Остановить запись голосового сообщения" : "Записать голосовое сообщение");
-    voiceRecordButton.setAttribute("title", isRecordingVoice ? "Остановить запись" : "Записать голосовое");
-    voiceRecordButton.innerHTML = isRecordingVoice
-      ? '<img class="icon-asset" src="/assets/icons/ui/Stop_fill.svg" alt="">'
-      : '<img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt="">';
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+  }
+
+  function updateComposerActionButton() {
     if (sendButton) {
-      sendButton.disabled = isSendingMessage || isRecordingVoice;
+      const hasText = Boolean(input.value.trim());
+      const state = isRecordingVoice ? "recording" : (editingMessageState ? "save" : (hasText ? "send" : "idle"));
+      const labels = {
+        idle: "Записать голосовое сообщение",
+        send: "Отправить сообщение",
+        save: "Сохранить изменения",
+        recording: "Остановить запись голосового сообщения"
+      };
+      const titles = {
+        idle: "Голосовое сообщение",
+        send: "Отправить",
+        save: "Сохранить",
+        recording: "Остановить запись"
+      };
+      sendButton.dataset.composerState = state;
+      sendButton.setAttribute("aria-label", labels[state]);
+      sendButton.setAttribute("title", titles[state]);
+      sendButton.innerHTML = state === "send"
+        ? '<span class="composer-action-glyph" aria-hidden="true">➤</span>'
+        : `<img class="icon-asset" src="${COMPOSER_ACTION_ICONS[state]}" alt="">`;
+      sendButton.disabled = isSendingMessage || (Boolean(input.disabled) && !isRecordingVoice);
+      sendButton.style.setProperty("--voice-record-level", isRecordingVoice ? "0.28" : "0");
+      sendButton.style.setProperty("--voice-record-scale", isRecordingVoice ? "1" : "0");
     }
   }
 
@@ -1471,9 +1546,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     recordingAnalyser = null;
     recordingAnalyserData = null;
-    if (voiceRecordButton) {
-      voiceRecordButton.style.setProperty("--voice-record-level", "0");
-      voiceRecordButton.style.setProperty("--voice-record-scale", "0");
+    if (sendButton) {
+      sendButton.style.setProperty("--voice-record-level", "0");
+      sendButton.style.setProperty("--voice-record-scale", "0");
     }
   }
 
@@ -1493,7 +1568,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       source.connect(recordingAnalyser);
 
       const tick = () => {
-        if (!recordingAnalyser || !recordingAnalyserData || !voiceRecordButton || !isRecordingVoice) {
+        if (!recordingAnalyser || !recordingAnalyserData || !isRecordingVoice) {
           return;
         }
 
@@ -1507,8 +1582,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         const level = Math.min(1, rms * 4.8);
         const glow = 0.24 + level * 0.42;
         const scale = 0.62 + level * 0.85;
-        voiceRecordButton.style.setProperty("--voice-record-level", glow.toFixed(3));
-        voiceRecordButton.style.setProperty("--voice-record-scale", scale.toFixed(3));
+        if (sendButton) {
+          sendButton.style.setProperty("--voice-record-level", glow.toFixed(3));
+          sendButton.style.setProperty("--voice-record-scale", scale.toFixed(3));
+        }
         recordingLevelRafId = window.requestAnimationFrame(tick);
       };
 
@@ -1585,6 +1662,77 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  async function sendPhotoMessage(file) {
+    if (!file) {
+      return;
+    }
+
+    const shouldStickToBottom = isNearBottom(messagesNode);
+    const previewUrl = URL.createObjectURL(file);
+    const pendingMessageNode = appendPendingMessage(messagesNode, "", chatType, {
+      type: "photo",
+      previewUrl
+    });
+    pendingMessageState = { text: "", node: pendingMessageNode, type: "photo" };
+    setComposerBusyState(true);
+    if (shouldStickToBottom) {
+      scrollMessagesToBottom(messagesNode);
+    }
+    updateScrollDownButton(messagesNode, scrollDownButton);
+    status.textContent = "";
+    status.className = "status thread-status";
+
+    try {
+      const hadChatId = Boolean(chatId);
+      if (!hadChatId && chatType !== "group") {
+        await createDirectChatOnFirstMessage();
+      }
+
+      const formData = new FormData();
+      formData.append("photo", file, file.name || "photo-message");
+      if (replyMessageState?.messageId) {
+        formData.append("reply_to_id", String(replyMessageState.messageId));
+      }
+      const path = chatType === "group" ? `/groups/${chatId}/photo` : `/chats/${chatId}/photo`;
+      const sentMessage = await apiFetch(path, {
+        method: "POST",
+        body: formData
+      });
+
+      removePendingMessage(pendingMessageNode);
+      pendingMessageState = null;
+      appendMessage(messagesNode, sentMessage, currentUser.id, chatType);
+      syncMessageSelectionState(sentMessage.id);
+      if (shouldStickToBottom) {
+        scrollMessagesToBottom(messagesNode);
+      }
+
+      if (!hadChatId && chatType !== "group") {
+        await loadChats("chatList", { showLoading: false });
+        await loadThread();
+        await markCurrentChatAsRead();
+        connectRealtime();
+      }
+      setReplyMessageState(null);
+      status.textContent = "";
+      status.className = "status thread-status";
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = "status error";
+    } finally {
+      URL.revokeObjectURL(previewUrl);
+      if (pendingMessageState?.node === pendingMessageNode) {
+        removePendingMessage(pendingMessageNode);
+        pendingMessageState = null;
+      }
+      setComposerBusyState(false);
+      updateScrollDownButton(messagesNode, scrollDownButton);
+      if (photoMessageInput) {
+        photoMessageInput.value = "";
+      }
+    }
+  }
+
   async function startVoiceRecording() {
     if (isSendingMessage || isRecordingVoice || editingMessageState) {
       return;
@@ -1621,8 +1769,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         mediaRecorder = null;
         releaseRecordingStream();
         isRecordingVoice = false;
-        updateVoiceRecordingUI();
         setComposerBusyState(false);
+        updateComposerActionButton();
 
         if (!blob.size || durationMs < 400) {
           status.textContent = "Запись слишком короткая";
@@ -1647,14 +1795,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       recordingStartedAt = Date.now();
       isRecordingVoice = true;
       input.disabled = true;
-      updateVoiceRecordingUI();
-      status.textContent = "Идет запись голосового...";
+      if (photoMessageButton) {
+        photoMessageButton.disabled = true;
+      }
+      updateComposerActionButton();
+      status.textContent = "";
       status.className = "status thread-status";
     } catch (error) {
       releaseRecordingStream();
       mediaRecorder = null;
       isRecordingVoice = false;
-      updateVoiceRecordingUI();
+      updateComposerActionButton();
       status.textContent = "Не удалось начать запись";
       status.className = "status error";
     }
@@ -2966,18 +3117,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (nextState) {
       input.value = nextState.text;
       input.placeholder = "Редактирование сообщения";
-      if (sendButton) {
-        sendButton.textContent = "✓";
-        sendButton.setAttribute("aria-label", "Сохранить");
-      }
     } else {
       input.placeholder = chatType === "group" ? "Сообщение в группу..." : "Напишите сообщение...";
-      if (sendButton) {
-        sendButton.textContent = "➤";
-        sendButton.setAttribute("aria-label", "Отправить");
-      }
     }
 
+    resizeComposerInput();
+    updateComposerActionButton();
     input.focus();
     const caretPos = input.value.length;
     input.setSelectionRange(caretPos, caretPos);
@@ -4172,6 +4317,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   input.addEventListener("input", () => {
+    resizeComposerInput();
+    updateComposerActionButton();
     handleComposerTyping();
   });
 
@@ -4179,12 +4326,38 @@ document.addEventListener("DOMContentLoaded", async () => {
     emitTypingStop();
   });
 
-  voiceRecordButton?.addEventListener("click", async () => {
+  photoMessageButton?.addEventListener("click", () => {
+    if (isSendingMessage || isRecordingVoice) {
+      return;
+    }
+    photoMessageInput?.click();
+  });
+
+  photoMessageInput?.addEventListener("change", () => {
+    const file = photoMessageInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    void sendPhotoMessage(file);
+  });
+
+  sendButton?.addEventListener("click", async (event) => {
+    if (isSendingMessage) {
+      event.preventDefault();
+      return;
+    }
+
+    const hasText = Boolean(input.value.trim());
     if (isRecordingVoice) {
+      event.preventDefault();
       stopVoiceRecording();
       return;
     }
-    await startVoiceRecording();
+
+    if (!hasText && !editingMessageState) {
+      event.preventDefault();
+      await startVoiceRecording();
+    }
   });
 
   messagesNode.addEventListener("scroll", () => {
@@ -4606,6 +4779,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (text === editingMessageState.text.trim()) {
         setEditingMessageState(null);
         input.value = "";
+        resizeComposerInput();
+        updateComposerActionButton();
         status.textContent = "";
         status.className = "status thread-status";
         return;
@@ -4624,6 +4799,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         setEditingMessageState(null);
         input.value = "";
+        resizeComposerInput();
+        updateComposerActionButton();
         replaceMessageNode(messagesNode, updatedMessage, currentUser.id, chatType);
         syncMessageSelectionState(updatedMessage.id);
         await loadChats("chatList", { showLoading: false });
@@ -4646,6 +4823,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const pendingMessageNode = appendPendingMessage(messagesNode, text, chatType);
     pendingMessageState = { text, node: pendingMessageNode };
     input.value = "";
+    resizeComposerInput();
+    updateComposerActionButton();
     setComposerBusyState(true);
     if (shouldStickToBottom) {
       scrollMessagesToBottom(messagesNode);
@@ -4696,6 +4875,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
       typingState.isSending = false;
       setComposerBusyState(false);
+      updateComposerActionButton();
       input.focus();
       isSendingMessage = false;
       updateScrollDownButton(messagesNode, scrollDownButton);
@@ -4704,9 +4884,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   window.addEventListener("pagehide", () => {
     emitTypingStop();
-    if (isRecordingVoice) {
-      stopVoiceRecording();
-    }
     releaseRecordingStream();
     if (typingCooldownTimer) {
       window.clearTimeout(typingCooldownTimer);
@@ -4733,6 +4910,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       socket = null;
     }
   });
+
+  resizeComposerInput();
+  updateComposerActionButton();
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && isMobileThreadSearchOpen) {

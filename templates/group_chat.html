@@ -34,9 +34,16 @@
       <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down"><img class="icon-asset" src="/assets/icons/ui/Arrow_down.svg" alt=""></button>
       <div class="composer-wrap">
         <form class="composer" id="messageForm">
-          <button class="composer-voice-button" id="voiceRecordButton" type="button" aria-label="Записать голосовое сообщение" title="Записать голосовое"><img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt=""></button>
-          <textarea class="textarea" id="messageInput" placeholder="Сообщение в группу..." required></textarea>
-          <button class="send-button" type="submit" aria-label="Отправить">➤</button>
+          {% if photo_messages_enabled %}
+            <input id="photoMessageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+            <button class="composer-attach-button" id="photoMessageButton" type="button" aria-label="Прикрепить фотографию" title="Прикрепить фото"><img class="icon-asset" src="/assets/icons/ui/Upload.svg" alt=""></button>
+          {% endif %}
+          <div class="composer-input-shell">
+            <textarea class="textarea composer-textarea" id="messageInput" placeholder="Сообщение в группу..." rows="1" required></textarea>
+          </div>
+          <button class="send-button composer-action-button" type="submit" aria-label="Записать голосовое сообщение" title="Записать голосовое">
+            <img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt="">
+          </button>
         </form>
         <div id="messageStatus" class="status thread-status"></div>
       </div>

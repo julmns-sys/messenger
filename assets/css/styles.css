@@ -647,6 +647,24 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.sidebar-profile-copyable {
+  width: auto;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-profile-copyable:hover {
+  color: var(--accent);
+}
+
 .sidebar-profile-secret.is-blurred {
   filter: blur(5px);
 }
@@ -701,6 +719,10 @@ textarea {
 
 .sidebar.profile-edit-mode .sidebar-profile-fact:nth-child(4) .sidebar-profile-edit {
   transition-delay: 0.14s;
+}
+
+.sidebar.profile-edit-mode .sidebar-profile-fact:nth-child(5) .sidebar-profile-edit {
+  transition-delay: 0.18s;
 }
 
 .sidebar-profile-line .multiline {
@@ -1207,6 +1229,32 @@ textarea {
   margin-bottom: 12px;
 }
 
+.sidebar-settings-section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.sidebar-settings-section-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-1px);
+}
+
+.sidebar-settings-section-icon .icon-asset {
+  width: 17px;
+  height: 17px;
+  filter: brightness(0) saturate(100%) invert(52%) sepia(87%) saturate(1484%) hue-rotate(186deg) brightness(95%) contrast(95%);
+}
+
+.sidebar-settings-section-head h3 {
+  margin: 0;
+  line-height: 1.15;
+}
+
 .sidebar-settings-section.is-collapsible > .sidebar-settings-section-head {
   position: relative;
   margin-bottom: 0;
@@ -1475,10 +1523,15 @@ body.settings-theme-dark .user-profile-badge-chip {
 }
 
 body.settings-theme-dark .user-profile-action-menu {
-  border-color: rgba(120, 149, 184, 0.2) !important;
+  border-color: rgba(120, 149, 184, 0.26) !important;
   background:
-    linear-gradient(180deg, rgba(40, 55, 72, 0.96), rgba(26, 38, 52, 0.94)) !important;
-  box-shadow: 0 20px 40px rgba(3, 8, 14, 0.34);
+    linear-gradient(180deg, rgba(53, 67, 84, 0.94), rgba(33, 45, 59, 0.92)) !important;
+  box-shadow:
+    0 22px 46px rgba(3, 8, 14, 0.42),
+    0 0 0 1px rgba(111, 182, 255, 0.04);
+  backdrop-filter: blur(10px) saturate(112%);
+  -webkit-backdrop-filter: blur(10px) saturate(112%);
+  isolation: isolate;
 }
 
 body.settings-theme-dark .app-toast {
@@ -1504,7 +1557,7 @@ body.settings-theme-dark .scroll-down-button .icon-asset {
   filter: brightness(0) saturate(100%) invert(93%) sepia(15%) saturate(294%) hue-rotate(176deg) brightness(102%) contrast(95%);
 }
 
-body.settings-theme-dark .sidebar-profile-menu,
+body.settings-theme-dark .sidebar-profile-menu:not(.user-profile-action-menu),
 body.settings-theme-dark .quick-actions-menu,
 body.settings-theme-dark .thread-info-card,
 body.settings-theme-dark .thread-info-fact,
@@ -1529,6 +1582,18 @@ body.settings-theme-dark .settings-launch-tile:hover {
 
 body.settings-theme-dark .settings-launch-tile-icon {
   background: rgba(96, 177, 255, 0.14);
+}
+
+body.settings-theme-dark .user-profile-action-menu {
+  border-color: rgba(120, 149, 184, 0.26) !important;
+  background:
+    linear-gradient(180deg, rgba(52, 66, 83, 0.998), rgba(32, 44, 58, 0.996)) !important;
+  box-shadow:
+    0 22px 46px rgba(3, 8, 14, 0.42),
+    0 0 0 1px rgba(111, 182, 255, 0.04);
+  backdrop-filter: blur(10px) saturate(112%);
+  -webkit-backdrop-filter: blur(10px) saturate(112%);
+  isolation: isolate;
 }
 
 body.settings-theme-dark .thread-info-card::before {
@@ -1796,6 +1861,11 @@ body.settings-theme-dark .input::placeholder,
 body.settings-theme-dark .textarea::placeholder,
 body.settings-theme-dark .composer .textarea::placeholder {
   color: rgba(159, 176, 195, 0.72);
+}
+
+body.settings-theme-dark .composer .textarea {
+  background: transparent !important;
+  box-shadow: none;
 }
 
 body.settings-theme-dark .message {
@@ -2168,7 +2238,9 @@ body[data-chat-wallpaper="paper"] .messages {
   width: var(--icon-size-md);
   height: var(--icon-size-md);
   object-fit: contain;
+  object-position: center;
   flex: 0 0 auto;
+  pointer-events: none;
 }
 
 .icon-button .icon-asset,
@@ -2177,7 +2249,7 @@ body[data-chat-wallpaper="paper"] .messages {
 .profile-logout-close .icon-asset,
 .thread-member-menu-hint .icon-asset,
 .button-secondary .icon-asset,
-.composer-voice-button .icon-asset,
+.composer-attach-button .icon-asset,
 .scroll-down-button .icon-asset {
   filter: brightness(0) saturate(100%) invert(52%) sepia(87%) saturate(1484%) hue-rotate(186deg) brightness(95%) contrast(95%);
 }
@@ -3045,6 +3117,37 @@ body[data-chat-wallpaper="paper"] .messages {
 
 .user-profile-bio {
   margin-top: 4px;
+}
+
+.user-profile-details {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.user-profile-detail {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(116, 139, 168, 0.14);
+}
+
+.user-profile-detail-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+.user-profile-detail-value {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text);
+  text-align: right;
 }
 
 .user-profile-menu-trigger {
@@ -3959,6 +4062,11 @@ body[data-chat-wallpaper="paper"] .messages {
   border-radius: var(--message-direct-radius);
 }
 
+.message[data-message-type="photo"] {
+  max-width: min(76%, 348px);
+  padding: 8px;
+}
+
 .message.system {
   align-self: center;
   max-width: min(88%, 520px);
@@ -4326,6 +4434,26 @@ body.settings-link-previews-off .message-link-preview {
   color: var(--text-soft);
 }
 
+.photo-message {
+  display: grid;
+  gap: 8px;
+}
+
+.photo-message-image {
+  display: block;
+  width: 100%;
+  max-width: min(320px, 62vw);
+  max-height: 360px;
+  object-fit: cover;
+  border-radius: 18px;
+  background: rgba(218, 228, 238, 0.5);
+}
+
+.photo-message-status {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
 .voice-message {
   display: grid;
   gap: 10px;
@@ -4530,26 +4658,26 @@ body.settings-theme-dark .message-link-preview-description {
   color: rgba(224, 233, 242, 0.72);
 }
 
-body.settings-theme-dark .composer-voice-button {
+body.settings-theme-dark .photo-message-image {
+  background: rgba(34, 49, 67, 0.9);
+}
+
+body.settings-theme-dark .photo-message-status {
+  color: rgba(224, 233, 242, 0.72);
+}
+
+body.settings-theme-dark .composer-attach-button,
+body.settings-theme-dark .composer-action-button,
+body.settings-theme-dark .composer-input-shell {
   border-color: rgba(130, 182, 245, 0.2);
   background: linear-gradient(180deg, rgba(34, 49, 67, 0.94), rgba(23, 34, 48, 0.92));
   color: #8fc3ff;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 20px rgba(3, 8, 14, 0.24);
 }
 
-body.settings-theme-dark .composer-voice-button:hover {
+body.settings-theme-dark .composer-attach-button:hover,
+body.settings-theme-dark .composer-action-button:hover {
   background: linear-gradient(180deg, rgba(40, 58, 78, 0.98), rgba(28, 41, 58, 0.96));
-}
-
-body.settings-theme-dark .composer-voice-button.is-recording::before {
-  border-color: rgba(255, 129, 129, calc(0.24 + var(--voice-record-level)));
-  box-shadow:
-    0 0 0 calc(2px + 8px * var(--voice-record-scale)) rgba(255, 95, 95, calc(0.06 + 0.08 * var(--voice-record-level))),
-    0 0 calc(12px + 18px * var(--voice-record-scale)) rgba(255, 95, 95, calc(0.14 + 0.2 * var(--voice-record-level)));
-}
-
-body.settings-theme-dark .composer-voice-button.is-recording::after {
-  border-color: rgba(255, 129, 129, calc(0.14 + 0.2 * var(--voice-record-level)));
 }
 
 body.settings-theme-dark .voice-message-icon {
@@ -4620,6 +4748,10 @@ body.settings-theme-dark .voice-message-wave span {
   justify-content: flex-end;
   gap: 4px;
   margin-top: var(--message-meta-margin-top);
+}
+
+.message[data-message-type="photo"] .message-meta {
+  margin-top: 8px;
 }
 
 .message.message-direct .message-meta {
@@ -5497,15 +5629,18 @@ body.settings-theme-dark .voice-message-wave span {
 }
 
 .composer .textarea {
-  flex: 1;
-  min-height: 56px;
-  max-height: 180px;
-  padding: 16px 20px;
-  border: 1px solid rgba(255, 255, 255, 0.44);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.42);
-  box-shadow: 0 10px 20px rgba(31, 52, 79, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.42);
-  backdrop-filter: blur(14px);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 52px;
+  max-height: 144px;
+  padding: 15px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  color: var(--text);
+  line-height: 1.45;
   overflow-y: auto;
   resize: none;
   scrollbar-width: none;
@@ -5513,8 +5648,7 @@ body.settings-theme-dark .voice-message-wave span {
 }
 
 .composer.is-editing .textarea {
-  border-color: rgba(51, 144, 236, 0.3);
-  background: rgba(235, 245, 255, 0.54);
+  background: transparent;
 }
 
 .composer .textarea::-webkit-scrollbar {
@@ -5780,26 +5914,64 @@ body.settings-theme-dark .voice-message-wave span {
   color: var(--accent-dark);
 }
 
-.composer-voice-button {
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 6px 20px 10px;
+  border-top: 0;
+  background: transparent;
+}
+
+.composer-input-shell {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.44);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.56);
+  box-shadow: 0 14px 28px rgba(31, 52, 79, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(16px);
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.composer:focus-within .composer-input-shell {
+  border-color: rgba(51, 144, 236, 0.32);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 16px 32px rgba(31, 52, 79, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.52);
+}
+
+.composer.is-editing .composer-input-shell {
+  border-color: rgba(51, 144, 236, 0.3);
+  background: rgba(235, 245, 255, 0.7);
+}
+
+.composer-attach-button,
+.composer-action-button {
   --voice-record-level: 0;
   --voice-record-scale: 0;
-  flex: 0 0 48px;
-  width: 48px;
-  height: 48px;
+  flex: 0 0 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
   border: 1px solid rgba(255, 255, 255, 0.42);
-  border-radius: 16px;
+  border-radius: 50%;
   background: rgba(255, 255, 255, 0.54);
   color: var(--accent);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 8px 18px rgba(29, 44, 67, 0.05);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 10px 22px rgba(29, 44, 67, 0.08);
   cursor: pointer;
   position: relative;
   isolation: isolate;
-  transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease, border-color 0.18s ease, border-radius 0.18s ease;
+  transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.composer-voice-button::before,
-.composer-voice-button::after {
+.composer-action-button::before,
+.composer-action-button::after {
   content: "";
   position: absolute;
   pointer-events: none;
@@ -5807,9 +5979,9 @@ body.settings-theme-dark .voice-message-wave span {
   transition: opacity 0.18s ease, transform 0.12s linear, box-shadow 0.12s linear, border-radius 0.18s ease, inset 0.18s ease;
 }
 
-.composer-voice-button::before {
+.composer-action-button::before {
   inset: -7px;
-  border-radius: 22px;
+  border-radius: 999px;
   border: 1.5px solid rgba(241, 103, 103, calc(0.22 + var(--voice-record-level)));
   box-shadow:
     0 0 0 calc(2px + 8px * var(--voice-record-scale)) rgba(241, 103, 103, calc(0.05 + 0.08 * var(--voice-record-level))),
@@ -5817,47 +5989,83 @@ body.settings-theme-dark .voice-message-wave span {
   transform: scale(calc(1 + 0.08 * var(--voice-record-scale)));
 }
 
-.composer-voice-button::after {
+.composer-action-button::after {
   inset: -13px;
-  border-radius: 26px;
+  border-radius: 999px;
   border: 1px solid rgba(241, 103, 103, calc(0.1 + 0.18 * var(--voice-record-level)));
   transform: scale(calc(0.96 + 0.14 * var(--voice-record-scale)));
 }
 
-.composer-voice-button:hover {
-  transform: translateY(-1px);
-  background: rgba(255, 255, 255, 0.72);
+.composer-attach-button:hover,
+.composer-action-button:hover {
+  transform: translateY(-1px) scale(1.01);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 12px 26px rgba(29, 44, 67, 0.11);
 }
 
-.composer-voice-button .icon-asset {
+.composer-attach-button:active,
+.composer-action-button:active {
+  transform: translateY(0) scale(0.98);
+  box-shadow: 0 6px 14px rgba(29, 44, 67, 0.08);
+}
+
+.composer-attach-button .icon-asset,
+.composer-action-button .icon-asset {
   width: 20px;
   height: 20px;
 }
 
-.composer-voice-button.is-recording {
+.composer-action-button {
+  background: linear-gradient(180deg, rgba(74, 168, 255, 0.96), rgba(46, 130, 228, 0.96));
   color: #fff;
+  box-shadow: var(--shadow-float);
+}
+
+.composer-action-button .icon-asset {
+  filter: brightness(0) invert(1);
+}
+
+.composer-action-glyph {
+  display: block;
+  font-size: 18px;
+  line-height: 1;
+  color: #fff;
+  transform: translateX(1px);
+}
+
+.composer-action-button[data-composer-state="idle"] {
+  background: rgba(255, 255, 255, 0.54);
+  color: var(--accent);
+  box-shadow: 0 10px 22px rgba(29, 44, 67, 0.08);
+}
+
+.composer-action-button[data-composer-state="save"] {
+  background: linear-gradient(180deg, rgba(78, 185, 129, 0.96), rgba(47, 154, 102, 0.96));
+}
+
+.composer-action-button[data-composer-state="recording"] {
   background: linear-gradient(180deg, #f16767, #dd4d4d);
   border-color: rgba(221, 77, 77, 0.56);
-  border-radius: 999px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     0 10px 24px rgba(221, 77, 77, 0.24);
 }
 
-.composer-voice-button.is-recording .icon-asset {
-  filter: brightness(0) invert(1);
-}
-
-.composer-voice-button.is-recording::before,
-.composer-voice-button.is-recording::after {
+.composer-action-button[data-composer-state="recording"]::before,
+.composer-action-button[data-composer-state="recording"]::after {
   opacity: 1;
-  border-radius: 999px;
 }
 
-.composer-voice-button:disabled {
+.composer-action-button[data-composer-state="idle"] .icon-asset {
+  filter: brightness(0) saturate(100%) invert(52%) sepia(87%) saturate(1484%) hue-rotate(186deg) brightness(95%) contrast(95%);
+}
+
+.composer-attach-button:disabled,
+.composer-action-button:disabled {
   opacity: 0.62;
   cursor: not-allowed;
   transform: none;
+  box-shadow: 0 6px 14px rgba(29, 44, 67, 0.06);
 }
 
 .selection-toolbar {
@@ -6033,6 +6241,9 @@ body.settings-theme-dark .voice-message-wave span {
   right: 22px;
   bottom: 96px;
   z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 46px;
   height: 46px;
   border: 1px solid rgba(255, 255, 255, 0.42);
@@ -6989,14 +7200,22 @@ body.settings-theme-dark .graph-mobile-item {
 
   .thread-page .composer .textarea {
     min-height: 46px;
-    max-height: 110px;
-    padding: 12px 14px;
+    max-height: 120px;
+    padding: 12px 0;
   }
 
+  .thread-page .composer-input-shell {
+    padding: 0 14px;
+    border-radius: 24px;
+  }
+
+  .thread-page .composer-attach-button,
   .thread-page .send-button {
     min-width: 48px;
+    width: 48px;
     height: 48px;
-    border-radius: 16px;
+    flex-basis: 48px;
+    border-radius: 50%;
   }
 
   .thread-page .thread-status {
