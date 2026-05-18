@@ -1356,6 +1356,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   const deleteUndoToast = buildDeleteUndoToast();
   const selectionToolbar = buildSelectionToolbar();
   const threadMemberActionMenu = buildThreadMemberActionMenu();
+  const threadBlockNotice = (() => {
+    if (!composerWrap) {
+      return null;
+    }
+    const noticeNode = document.createElement("div");
+    noticeNode.className = "thread-block-notice";
+    noticeNode.hidden = true;
+    composerWrap.prepend(noticeNode);
+    return noticeNode;
+  })();
   let socket = null;
   let selectedUser = null;
   let currentThreadInfo = null;
@@ -2131,10 +2141,48 @@ document.addEventListener("DOMContentLoaded", async () => {
     statusNode.className = `status user-profile-actions-status ${type}`.trim();
   }
 
+  function updateThreadBlockNotice() {
+    if (!threadBlockNotice) {
+      return;
+    }
+
+    if (chatType !== "direct") {
+      threadBlockNotice.hidden = true;
+      threadBlockNotice.textContent = "";
+      return;
+    }
+
+    const targetInfo = currentThreadInfo || activeThreadInfoView;
+    if (!targetInfo) {
+      threadBlockNotice.hidden = true;
+      threadBlockNotice.textContent = "";
+      return;
+    }
+
+    if (targetInfo.is_blocked) {
+      threadBlockNotice.hidden = false;
+      threadBlockNotice.className = "thread-block-notice is-blocked";
+      threadBlockNotice.textContent = "Вы заблокировали этого пользователя";
+      return;
+    }
+
+    if (targetInfo.is_blocked_by) {
+      threadBlockNotice.hidden = false;
+      threadBlockNotice.className = "thread-block-notice is-restricted";
+      threadBlockNotice.textContent = "Пользователь ограничил сообщения от вас";
+      return;
+    }
+
+    threadBlockNotice.hidden = true;
+    threadBlockNotice.textContent = "";
+  }
+
   function syncThreadUserProfileState(nextProfile) {
     if (!nextProfile?.id) {
       return;
     }
+
+    syncUserRelationStateFromProfile(nextProfile);
 
     const targetUserId = String(nextProfile.id);
     if (currentThreadInfo && String(currentThreadInfo.user_id || currentThreadInfo.id || "") === targetUserId) {
@@ -2168,6 +2216,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
       activeThreadInfoType === chatType ? chatType : activeThreadInfoType
     );
+    updateThreadBlockNotice();
   }
 
   async function refreshThreadUserProfile(userId) {
@@ -2187,6 +2236,45 @@ document.addEventListener("DOMContentLoaded", async () => {
     setThreadProfileStatus("", "");
 
     try {
+      const currentProfile = activeThreadInfoView && String(activeThreadInfoView.id || activeThreadInfoView.user_id || "") === String(profileUserId)
+        ? activeThreadInfoView
+        : currentThreadInfo;
+      const profileName = getUserProfileDisplayName(currentProfile || { id: profileUserId, name: "Пользователь" });
+
+      if (action === "mute" || action === "unmute") {
+        setThreadProfileStatus(action === "mute" ? "Отключаем уведомления..." : "Включаем уведомления...", "");
+        const profile = await apiFetch(`/users/${encodeURIComponent(profileUserId)}/mute`, {
+          method: action === "mute" ? "POST" : "DELETE"
+        });
+        syncThreadUserProfileState(profile);
+        await loadChats("chatList", { showLoading: false });
+        setThreadProfileStatus(action === "mute" ? "Уведомления отключены" : "Уведомления включены", "success");
+        return;
+      }
+
+      if (action === "block" || action === "unblock") {
+        const confirmed = await openUserRelationConfirmModal({
+          title: action === "block" ? "Заблокировать пользователя?" : "Разблокировать пользователя?",
+          body: action === "block"
+            ? `${profileName} больше не сможет писать вам первым, а новые сообщения от него будут скрыты.`
+            : `${profileName} снова сможет писать вам как обычный пользователь.`,
+          confirmText: action === "block" ? "Заблокировать" : "Разблокировать",
+          danger: action === "block"
+        });
+        if (!confirmed) {
+          return;
+        }
+
+        setThreadProfileStatus(action === "block" ? "Блокируем пользователя..." : "Снимаем блокировку...", "");
+        const profile = await apiFetch(`/users/${encodeURIComponent(profileUserId)}/block`, {
+          method: action === "block" ? "POST" : "DELETE"
+        });
+        syncThreadUserProfileState(profile);
+        await loadChats("chatList", { showLoading: false });
+        setThreadProfileStatus(action === "block" ? "Пользователь заблокирован" : "Пользователь разблокирован", "success");
+        return;
+      }
+
       if (action === "add") {
         setThreadProfileStatus("Добавляем контакт...", "");
         await apiFetch("/contacts", {
@@ -2209,9 +2297,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       if (action === "rename") {
-        const currentProfile = activeThreadInfoView && String(activeThreadInfoView.id || activeThreadInfoView.user_id || "") === String(profileUserId)
-          ? activeThreadInfoView
-          : currentThreadInfo;
         const nextAlias = window.prompt("Новое имя контакта", currentProfile?.contact_alias || currentProfile?.name || "");
         if (nextAlias == null) {
           return;
@@ -2292,8 +2377,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     selectedUser = await apiFetch(`/users/${encodeURIComponent(userId)}`);
+    syncUserRelationStateFromProfile(selectedUser);
     currentThreadInfo = selectedUser;
     setActiveThreadInfoView(currentThreadInfo, chatType);
+    updateThreadBlockNotice();
     return selectedUser;
   }
 
@@ -2312,6 +2399,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       ...data,
       title
     };
+    syncUserRelationStateFromProfile(currentThreadInfo);
     if (chatType === "group") {
       setChatTitle(title);
       renderHeaderStatus();
@@ -2333,6 +2421,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       activeThreadInfoType === chatType ? chatType : activeThreadInfoType
     );
     updateThreadInviteControls();
+    updateThreadBlockNotice();
   }
 
   async function copyThreadInviteLink() {
@@ -3346,6 +3435,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       { path: "/chats/direct", body: { user_id: userId } }
     ];
 
+    let lastError = null;
     for (const attempt of attempts) {
       try {
         const data = await apiFetch(attempt.path, {
@@ -3360,12 +3450,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         chatId = createdChatId;
         window.history.replaceState({}, "", getDirectChatRoute(chatId));
         return chatId;
-      } catch {
-        continue;
+      } catch (error) {
+        lastError = error;
+        if (/ограничил сообщения/i.test(String(error?.message || ""))) {
+          throw error;
+        }
       }
     }
 
-    throw new Error("Не удалось создать личный чат");
+    throw lastError || new Error("Не удалось создать личный чат");
   }
 
   async function fetchMessagesPage(beforeMessageId = null) {

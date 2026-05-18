@@ -410,6 +410,35 @@ def _ensure_users_security_columns(conn):
         cursor.close()
 
 
+def _ensure_user_relations_tables(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_muted_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                owner_user_id INT NOT NULL,
+                muted_user_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_user_muted_pair (owner_user_id, muted_user_id),
+                INDEX idx_user_muted_owner (owner_user_id),
+                INDEX idx_user_muted_target (muted_user_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_blocked_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                owner_user_id INT NOT NULL,
+                blocked_user_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_user_blocked_pair (owner_user_id, blocked_user_id),
+                INDEX idx_user_blocked_owner (owner_user_id),
+                INDEX idx_user_blocked_target (blocked_user_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+    finally:
+        cursor.close()
+
+
 def init_db():
     if not INIT_SQL_PATH.exists():
         raise FileNotFoundError(f"MariaDB schema file not found: {INIT_SQL_PATH}")
@@ -425,6 +454,7 @@ def init_db():
         _ensure_message_preview_columns(conn, "group_messages")
         _ensure_user_login_devices_table(conn)
         _ensure_users_security_columns(conn)
+        _ensure_user_relations_tables(conn)
         _ensure_group_invites(conn)
         conn.commit()
         cursor.close()

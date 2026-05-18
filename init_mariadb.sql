@@ -44,6 +44,26 @@ CREATE TABLE IF NOT EXISTS contacts (
     UNIQUE KEY uniq_contact_pair (owner_user_id, contact_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS user_muted_users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    owner_user_id INT NOT NULL,
+    muted_user_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_user_muted_pair (owner_user_id, muted_user_id),
+    INDEX idx_user_muted_owner (owner_user_id),
+    INDEX idx_user_muted_target (muted_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_blocked_users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    owner_user_id INT NOT NULL,
+    blocked_user_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_user_blocked_pair (owner_user_id, blocked_user_id),
+    INDEX idx_user_blocked_owner (owner_user_id),
+    INDEX idx_user_blocked_target (blocked_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS messages (
     id INT AUTO_INCREMENT PRIMARY KEY,
     chat_id INT NOT NULL,

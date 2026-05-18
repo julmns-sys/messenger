@@ -1463,6 +1463,23 @@ body.settings-theme-dark .composer-reply-banner {
   box-shadow: 0 14px 30px rgba(3, 8, 14, 0.2);
 }
 
+body.settings-theme-dark .thread-block-notice {
+  border-color: rgba(231, 117, 117, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    rgba(217, 83, 79, 0.12);
+  color: #ffb6b3;
+  box-shadow: 0 14px 30px rgba(3, 8, 14, 0.2);
+}
+
+body.settings-theme-dark .thread-block-notice.is-restricted {
+  border-color: rgba(120, 189, 255, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    rgba(51, 144, 236, 0.14);
+  color: #9dcfff;
+}
+
 body.settings-theme-dark .message-reply-preview {
   background: rgba(51, 144, 236, 0.14);
   border-left-color: rgba(120, 189, 255, 0.82);
@@ -5592,6 +5609,33 @@ body.settings-theme-dark .voice-message-wave span {
 .composer-wrap {
   flex: 0 0 auto;
   background: transparent;
+}
+
+.thread-block-notice {
+  margin: 0 20px 8px;
+  padding: 10px 14px;
+  border: 1px solid rgba(217, 83, 79, 0.16);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.22)),
+    rgba(217, 83, 79, 0.08);
+  color: #b54a47;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  backdrop-filter: blur(12px);
+}
+
+.thread-block-notice[hidden] {
+  display: none !important;
+}
+
+.thread-block-notice.is-restricted {
+  border-color: rgba(51, 144, 236, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.22)),
+    rgba(51, 144, 236, 0.08);
+  color: var(--accent-dark);
 }
 
 .composer-voice-button {

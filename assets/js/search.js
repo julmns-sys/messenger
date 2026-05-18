@@ -87,6 +87,7 @@ async function refreshActiveProfile() {
   }
 
   const user = await apiFetch(`/users/${encodeURIComponent(searchState.activeProfileUserId)}`);
+  syncUserRelationStateFromProfile(user);
   searchState.activeProfile = getProfileCardUser(user);
   fillSearchUserInfoPanel(searchState.activeProfile);
 }
@@ -97,6 +98,7 @@ async function openSearchUserInfo(userId) {
   }
 
   const user = await apiFetch(`/users/${encodeURIComponent(userId)}`);
+  syncUserRelationStateFromProfile(user);
   searchState.activeProfileUserId = String(user.id);
   searchState.activeProfile = getProfileCardUser(user);
   fillSearchUserInfoPanel(searchState.activeProfile);
@@ -412,6 +414,45 @@ document.addEventListener("DOMContentLoaded", async () => {
         setSearchProfileStatus("Удаляем контакт...", "");
         await removeContact(userId);
         setSearchProfileStatus("Контакт удален", "success");
+        return;
+      }
+
+      if (action === "mute" || action === "unmute") {
+        setSearchProfileStatus(action === "mute" ? "Отключаем уведомления..." : "Включаем уведомления...", "");
+        const profile = await apiFetch(`/users/${encodeURIComponent(userId)}/mute`, {
+          method: action === "mute" ? "POST" : "DELETE"
+        });
+        syncUserRelationStateFromProfile(profile);
+        searchState.activeProfile = getProfileCardUser(profile);
+        fillSearchUserInfoPanel(searchState.activeProfile);
+        await loadChats("chatList", { showLoading: false });
+        setSearchProfileStatus(action === "mute" ? "Уведомления отключены" : "Уведомления включены", "success");
+        return;
+      }
+
+      if (action === "block" || action === "unblock") {
+        const profileName = getUserProfileDisplayName(searchState.activeProfile || { id: userId, name: "Пользователь" });
+        const confirmed = await openUserRelationConfirmModal({
+          title: action === "block" ? "Заблокировать пользователя?" : "Разблокировать пользователя?",
+          body: action === "block"
+            ? `${profileName} больше не сможет писать вам первым, а новые сообщения от него будут скрыты.`
+            : `${profileName} снова сможет писать вам как обычный пользователь.`,
+          confirmText: action === "block" ? "Заблокировать" : "Разблокировать",
+          danger: action === "block"
+        });
+        if (!confirmed) {
+          return;
+        }
+
+        setSearchProfileStatus(action === "block" ? "Блокируем пользователя..." : "Снимаем блокировку...", "");
+        const profile = await apiFetch(`/users/${encodeURIComponent(userId)}/block`, {
+          method: action === "block" ? "POST" : "DELETE"
+        });
+        syncUserRelationStateFromProfile(profile);
+        searchState.activeProfile = getProfileCardUser(profile);
+        fillSearchUserInfoPanel(searchState.activeProfile);
+        await loadChats("chatList", { showLoading: false });
+        setSearchProfileStatus(action === "block" ? "Пользователь заблокирован" : "Пользователь разблокирован", "success");
         return;
       }
 

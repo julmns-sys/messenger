@@ -24,6 +24,7 @@ let pendingChatDeleteState = null;
 let chatDeleteUndoCountdownTimer = null;
 let activeChatTagFilter = "all";
 const pendingDeletedChatKeys = new Set();
+let userRelationConfirmModal = null;
 const defaultAppSettings = {
   theme: "light",
   accentColor: "#3390ec",
@@ -49,6 +50,96 @@ const defaultAppSettings = {
   typingStatus: true,
   screenshotProtection: false
 };
+
+function getUserRelationStorageKey() {
+  const currentUser = getCurrentUser() || {};
+  return `messenger:user-relations:${currentUser.id || "guest"}`;
+}
+
+function readUserRelationState() {
+  const rawValue = window.localStorage.getItem(getUserRelationStorageKey());
+  if (!rawValue) {
+    return { mutedUserIds: [], blockedUserIds: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return {
+      mutedUserIds: Array.isArray(parsed?.mutedUserIds) ? parsed.mutedUserIds.map((value) => String(value)) : [],
+      blockedUserIds: Array.isArray(parsed?.blockedUserIds) ? parsed.blockedUserIds.map((value) => String(value)) : []
+    };
+  } catch {
+    return { mutedUserIds: [], blockedUserIds: [] };
+  }
+}
+
+function writeUserRelationState(state) {
+  window.localStorage.setItem(getUserRelationStorageKey(), JSON.stringify({
+    mutedUserIds: [...new Set((state?.mutedUserIds || []).map((value) => String(value)))],
+    blockedUserIds: [...new Set((state?.blockedUserIds || []).map((value) => String(value)))]
+  }));
+}
+
+function setMutedUserState(userId, isMuted) {
+  if (!userId) return;
+  const state = readUserRelationState();
+  const mutedUserIds = new Set(state.mutedUserIds);
+  if (isMuted) {
+    mutedUserIds.add(String(userId));
+  } else {
+    mutedUserIds.delete(String(userId));
+  }
+  writeUserRelationState({
+    ...state,
+    mutedUserIds: [...mutedUserIds]
+  });
+}
+
+function setBlockedUserState(userId, isBlocked) {
+  if (!userId) return;
+  const state = readUserRelationState();
+  const blockedUserIds = new Set(state.blockedUserIds);
+  if (isBlocked) {
+    blockedUserIds.add(String(userId));
+  } else {
+    blockedUserIds.delete(String(userId));
+  }
+  writeUserRelationState({
+    ...state,
+    blockedUserIds: [...blockedUserIds]
+  });
+}
+
+function syncUserRelationStateFromProfile(user = {}) {
+  if (!user?.id) {
+    return;
+  }
+  if (typeof user.is_muted === "boolean") {
+    setMutedUserState(user.id, user.is_muted);
+  }
+  if (typeof user.is_blocked === "boolean") {
+    setBlockedUserState(user.id, user.is_blocked);
+  }
+}
+
+function syncUserRelationStateFromChats(chats = []) {
+  chats
+    .filter((chat) => (chat?.type || "direct") === "direct" && chat?.user_id)
+    .forEach((chat) => {
+      syncUserRelationStateFromProfile({
+        id: chat.user_id,
+        is_muted: Boolean(chat.is_muted),
+        is_blocked: Boolean(chat.is_blocked)
+      });
+    });
+}
+
+function isUserMutedLocally(userId) {
+  if (!userId) {
+    return false;
+  }
+  return readUserRelationState().mutedUserIds.includes(String(userId));
+}
 
 function getChatStateKey(chatId, chatType = "direct") {
   return `${chatType}:${chatId}`;
@@ -876,6 +967,10 @@ function handleGlobalIncomingNotification(payload = {}) {
     return;
   }
 
+  if (isUserMutedLocally(payload.sender_id)) {
+    return;
+  }
+
   const route = getCurrentRouteInfo();
   const payloadChatType = String(payload.chat_type || "direct");
   const payloadChatId = String(payload.chat_id || "");
@@ -937,10 +1032,13 @@ function toggleUserProfileActionMenu(card) {
 }
 
 function renderUserProfilePanel(user = {}, options = {}) {
+  syncUserRelationStateFromProfile(user);
   const displayName = getUserProfileDisplayName(user);
   const originalName = getUserProfileOriginalName(user);
   const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "";
   const username = user?.username ? `@${user.username}` : "";
+  const currentUser = getCurrentUser() || {};
+  const canManageRelations = String(currentUser.id || "") !== String(user?.id || "");
   const presence = user?.hide_presence
     ? ""
     : renderPresenceBadge(user, { compact: true, includeUsername: false, showDot: false });
@@ -962,6 +1060,14 @@ function renderUserProfilePanel(user = {}, options = {}) {
         <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="copy-username" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
           Скопировать username
         </button>
+        ${canManageRelations ? `
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="${user?.is_muted ? "unmute" : "mute"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            ${user?.is_muted ? "Включить уведомления" : "Отключить уведомления"}
+          </button>
+          <button class="sidebar-profile-menu-item ${user?.is_blocked ? "" : "danger"}" type="button" data-profile-contact-action="${user?.is_blocked ? "unblock" : "block"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            ${user?.is_blocked ? "Разблокировать пользователя" : "Заблокировать пользователя"}
+          </button>
+        ` : ""}
         ${!isContact ? `
           <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="add" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
             Добавить в контакты
@@ -1105,6 +1211,91 @@ function openProfileLogoutModal() {
   modal.hidden = false;
   requestAnimationFrame(() => {
     modal.classList.add("visible");
+  });
+}
+
+function buildUserRelationConfirmModal() {
+  if (userRelationConfirmModal) {
+    return userRelationConfirmModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "profile-logout-modal user-relation-confirm-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="profile-logout-backdrop" data-user-relation-close="true"></div>
+    <div class="profile-logout-card" role="dialog" aria-modal="true" aria-labelledby="userRelationConfirmTitle">
+      <div class="profile-logout-header">
+        <h3 id="userRelationConfirmTitle">Подтвердите действие</h3>
+        <button type="button" class="profile-logout-close" data-user-relation-close="true" aria-label="Закрыть">×</button>
+      </div>
+      <div class="profile-logout-body">
+        <p class="profile-logout-copy" id="userRelationConfirmBody"></p>
+        <div class="profile-logout-actions">
+          <button type="button" class="button button-secondary" data-user-relation-close="true">Отмена</button>
+          <button type="button" class="button button-danger" id="userRelationConfirmSubmit">Подтвердить</button>
+        </div>
+        <div class="status profile-logout-status" id="userRelationConfirmStatus"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  userRelationConfirmModal = modal;
+  return modal;
+}
+
+function closeUserRelationConfirmModal() {
+  if (!userRelationConfirmModal) {
+    return;
+  }
+  userRelationConfirmModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (userRelationConfirmModal && !userRelationConfirmModal.classList.contains("visible")) {
+      userRelationConfirmModal.hidden = true;
+    }
+  }, 180);
+}
+
+function openUserRelationConfirmModal(options = {}) {
+  const modal = buildUserRelationConfirmModal();
+  const titleNode = modal.querySelector("#userRelationConfirmTitle");
+  const bodyNode = modal.querySelector("#userRelationConfirmBody");
+  const confirmButton = modal.querySelector("#userRelationConfirmSubmit");
+  const statusNode = modal.querySelector("#userRelationConfirmStatus");
+
+  if (!titleNode || !bodyNode || !confirmButton || !statusNode) {
+    return Promise.resolve(false);
+  }
+
+  titleNode.textContent = options.title || "Подтвердите действие";
+  bodyNode.textContent = options.body || "";
+  statusNode.textContent = "";
+  statusNode.className = "status profile-logout-status";
+  confirmButton.textContent = options.confirmText || "Подтвердить";
+  confirmButton.className = `button ${options.danger === false ? "" : "button-danger"}`.trim() || "button";
+  confirmButton.disabled = false;
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      closeUserRelationConfirmModal();
+      resolve(result);
+    };
+
+    confirmButton.onclick = () => finish(true);
+    modal.onclick = (event) => {
+      if (event.target.closest("[data-user-relation-close='true']")) {
+        finish(false);
+      }
+    };
+
+    modal.hidden = false;
+    requestAnimationFrame(() => {
+      modal.classList.add("visible");
+    });
   });
 }
 
@@ -2009,6 +2200,7 @@ async function loadChats(listId = "chatList", options = {}) {
     const chats = await apiFetch("/chats");
     const normalizedChats = Array.isArray(chats) ? chats : chats.items || [];
     chatState.allChats = normalizedChats;
+    syncUserRelationStateFromChats(normalizedChats);
     bindChatSearch(listId);
     updateChatListView(listId);
     return normalizedChats;

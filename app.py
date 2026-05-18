@@ -916,6 +916,7 @@ def serialize_public_user(user):
         "name": user["name"],
         "username": user["username"],
         "bio": user["bio"],
+        "badges": serialize_user_badges(user),
         "is_online": False if hide_presence else is_user_online(user["id"]),
         "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
         "hide_presence": hide_presence
@@ -953,6 +954,9 @@ def serialize_user_panel_payload(user):
         "contact_alias": row_value(user, "contact_alias"),
         "is_contact": bool(row_value(user, "is_contact", False)),
         "badges": serialize_user_badges(user),
+        "is_muted": bool(row_value(user, "is_muted", False)),
+        "is_blocked": bool(row_value(user, "is_blocked", False)),
+        "is_blocked_by": bool(row_value(user, "is_blocked_by", False)),
         "is_online": False if hide_presence else is_user_online(user["id"]),
         "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
         "hide_presence": hide_presence
@@ -961,6 +965,86 @@ def serialize_user_panel_payload(user):
 
 def should_hide_presence_for_username(username):
     return str(username or "").strip().lower() == SYSTEM_USERNAME
+
+
+def is_user_muted(conn, owner_user_id, target_user_id):
+    if not owner_user_id or not target_user_id:
+        return False
+    row = conn.execute("""
+        SELECT 1
+        FROM user_muted_users
+        WHERE owner_user_id = %s AND muted_user_id = %s
+        LIMIT 1
+    """, (owner_user_id, target_user_id)).fetchone()
+    return row is not None
+
+
+def is_user_blocked(conn, owner_user_id, target_user_id):
+    if not owner_user_id or not target_user_id:
+        return False
+    row = conn.execute("""
+        SELECT 1
+        FROM user_blocked_users
+        WHERE owner_user_id = %s AND blocked_user_id = %s
+        LIMIT 1
+    """, (owner_user_id, target_user_id)).fetchone()
+    return row is not None
+
+
+def can_user_message_target(conn, sender_user_id, target_user_id):
+    if not sender_user_id or not target_user_id:
+        return False
+    return not is_user_blocked(conn, target_user_id, sender_user_id)
+
+
+def get_direct_chat_recipient_id(conn, chat_id, sender_user_id):
+    row = conn.execute("""
+        SELECT
+            CASE
+                WHEN user1_id = %s THEN user2_id
+                ELSE user1_id
+            END AS recipient_id
+        FROM chats
+        WHERE id = %s AND (user1_id = %s OR user2_id = %s)
+    """, (sender_user_id, chat_id, sender_user_id, sender_user_id)).fetchone()
+    return int(row["recipient_id"]) if row and row["recipient_id"] is not None else None
+
+
+def ensure_direct_target_is_writable(conn, sender_user_id, target_user_id):
+    if can_user_message_target(conn, sender_user_id, target_user_id):
+        return True
+    raise PermissionError("Пользователь ограничил сообщения от вас")
+
+
+def fetch_user_panel_payload(conn, viewer_user_id, target_user_id):
+    return conn.execute("""
+        SELECT
+            u.id,
+            u.name,
+            u.username,
+            u.bio,
+            ct.alias AS contact_alias,
+            (ct.id IS NOT NULL) AS is_contact,
+            EXISTS (
+                SELECT 1
+                FROM user_muted_users umu
+                WHERE umu.owner_user_id = %s AND umu.muted_user_id = u.id
+            ) AS is_muted,
+            EXISTS (
+                SELECT 1
+                FROM user_blocked_users ubu
+                WHERE ubu.owner_user_id = %s AND ubu.blocked_user_id = u.id
+            ) AS is_blocked,
+            EXISTS (
+                SELECT 1
+                FROM user_blocked_users ubu
+                WHERE ubu.owner_user_id = u.id AND ubu.blocked_user_id = %s
+            ) AS is_blocked_by
+        FROM users u
+        LEFT JOIN contacts ct
+            ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
+        WHERE u.id = %s
+    """, (viewer_user_id, viewer_user_id, viewer_user_id, viewer_user_id, target_user_id)).fetchone()
 
 
 def can_manage_group_admins(conn, user_id, group_id):
@@ -2271,6 +2355,9 @@ def forward_message_to_target(conn, sender_id, target_chat_type, target_chat_id,
     if not chat:
         raise LookupError("Чат не найден")
 
+    recipient_user_id = get_direct_chat_recipient_id(conn, target_chat_id, sender_id)
+    ensure_direct_target_is_writable(conn, sender_id, recipient_user_id)
+
     message_data = build_forward_message_data(source_message)
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (target_chat_id,))
     message = create_direct_message_record(
@@ -2320,6 +2407,9 @@ def forward_dialog_to_target(conn, sender_id, target_chat_type, target_chat_id, 
     chat = can_access_direct_chat(conn, sender_id, target_chat_id)
     if not chat:
         raise LookupError("Чат не найден")
+
+    recipient_user_id = get_direct_chat_recipient_id(conn, target_chat_id, sender_id)
+    ensure_direct_target_is_writable(conn, sender_id, recipient_user_id)
 
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (target_chat_id,))
     message = create_direct_message_record(
@@ -3171,25 +3261,109 @@ def get_user(target_user_id):
         return jsonify({"message": "Не авторизован"}), 401
 
     conn = get_db()
-    user = conn.execute("""
-        SELECT
-            u.id,
-            u.name,
-            u.username,
-            u.bio,
-            ct.alias AS contact_alias,
-            (ct.id IS NOT NULL) AS is_contact
-        FROM users u
-        LEFT JOIN contacts ct
-            ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
-        WHERE u.id = %s
-    """, (user_id, target_user_id)).fetchone()
+    user = fetch_user_panel_payload(conn, user_id, target_user_id)
     conn.close()
 
     if not user:
         return jsonify({"message": "Пользователь не найден"}), 404
 
     return jsonify(serialize_user_panel_payload(user))
+
+
+@app.post("/users/<int:target_user_id>/mute")
+def mute_user(target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+    if target_user_id == user_id:
+        return jsonify({"message": "Нельзя отключить уведомления для самого себя"}), 400
+
+    conn = get_db()
+    target_user = conn.execute("SELECT id FROM users WHERE id = %s", (target_user_id,)).fetchone()
+    if not target_user:
+        conn.close()
+        return jsonify({"message": "Пользователь не найден"}), 404
+
+    conn.execute("""
+        INSERT OR IGNORE INTO user_muted_users (owner_user_id, muted_user_id)
+        VALUES (%s, %s)
+    """, (user_id, target_user_id))
+    conn.commit()
+    payload = fetch_user_panel_payload(conn, user_id, target_user_id)
+    conn.close()
+    return jsonify(serialize_user_panel_payload(payload))
+
+
+@app.delete("/users/<int:target_user_id>/mute")
+def unmute_user(target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+    if target_user_id == user_id:
+        return jsonify({"message": "Нельзя изменить уведомления для самого себя"}), 400
+
+    conn = get_db()
+    target_user = conn.execute("SELECT id FROM users WHERE id = %s", (target_user_id,)).fetchone()
+    if not target_user:
+        conn.close()
+        return jsonify({"message": "Пользователь не найден"}), 404
+
+    conn.execute("""
+        DELETE FROM user_muted_users
+        WHERE owner_user_id = %s AND muted_user_id = %s
+    """, (user_id, target_user_id))
+    conn.commit()
+    payload = fetch_user_panel_payload(conn, user_id, target_user_id)
+    conn.close()
+    return jsonify(serialize_user_panel_payload(payload))
+
+
+@app.post("/users/<int:target_user_id>/block")
+def block_user(target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+    if target_user_id == user_id:
+        return jsonify({"message": "Нельзя заблокировать самого себя"}), 400
+
+    conn = get_db()
+    target_user = conn.execute("SELECT id FROM users WHERE id = %s", (target_user_id,)).fetchone()
+    if not target_user:
+        conn.close()
+        return jsonify({"message": "Пользователь не найден"}), 404
+
+    conn.execute("""
+        INSERT OR IGNORE INTO user_blocked_users (owner_user_id, blocked_user_id)
+        VALUES (%s, %s)
+    """, (user_id, target_user_id))
+    conn.commit()
+    payload = fetch_user_panel_payload(conn, user_id, target_user_id)
+    conn.close()
+    return jsonify(serialize_user_panel_payload(payload))
+
+
+@app.delete("/users/<int:target_user_id>/block")
+def unblock_user(target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+    if target_user_id == user_id:
+        return jsonify({"message": "Нельзя изменить блокировку для самого себя"}), 400
+
+    conn = get_db()
+    target_user = conn.execute("SELECT id FROM users WHERE id = %s", (target_user_id,)).fetchone()
+    if not target_user:
+        conn.close()
+        return jsonify({"message": "Пользователь не найден"}), 404
+
+    conn.execute("""
+        DELETE FROM user_blocked_users
+        WHERE owner_user_id = %s AND blocked_user_id = %s
+    """, (user_id, target_user_id))
+    conn.commit()
+    payload = fetch_user_panel_payload(conn, user_id, target_user_id)
+    conn.close()
+    return jsonify(serialize_user_panel_payload(payload))
 
 
 @app.get("/link-preview")
@@ -3229,6 +3403,21 @@ def get_chats():
             u.name AS original_name,
             ct.alias AS contact_alias,
             u.name AS title,
+            EXISTS (
+                SELECT 1
+                FROM user_muted_users umu
+                WHERE umu.owner_user_id = %s AND umu.muted_user_id = u.id
+            ) AS is_muted,
+            EXISTS (
+                SELECT 1
+                FROM user_blocked_users ubu
+                WHERE ubu.owner_user_id = %s AND ubu.blocked_user_id = u.id
+            ) AS is_blocked,
+            EXISTS (
+                SELECT 1
+                FROM user_blocked_users ubu
+                WHERE ubu.owner_user_id = u.id AND ubu.blocked_user_id = %s
+            ) AS is_blocked_by,
             (
                 SELECT m.text
                 FROM messages m
@@ -3281,7 +3470,7 @@ def get_chats():
               FROM hidden_direct_chats hdc
               WHERE hdc.chat_id = c.id AND hdc.user_id = %s
           )
-    """, (user_id, user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
 
     group_chats = conn.execute("""
         SELECT
@@ -3355,6 +3544,9 @@ def get_chats():
             "title": chat["contact_alias"] or chat["title"],
             "name": chat["original_name"],
             "contact_alias": chat["contact_alias"],
+            "is_muted": bool(chat["is_muted"]),
+            "is_blocked": bool(chat["is_blocked"]),
+            "is_blocked_by": bool(chat["is_blocked_by"]),
             "is_online": False if should_hide_presence_for_username(chat["username"]) else is_user_online(chat["user_id"]),
             "last_seen": None if should_hide_presence_for_username(chat["username"]) else format_timestamp(get_user_last_seen(chat["user_id"])),
             "hide_presence": should_hide_presence_for_username(chat["username"]),
@@ -3429,6 +3621,12 @@ def create_direct_chat():
         conn.close()
         return jsonify({"message": "Пользователь не найден"}), 404
 
+    try:
+        ensure_direct_target_is_writable(conn, user_id, participant_id)
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
+
     chat = conn.execute("""
         SELECT id
         FROM chats
@@ -3477,6 +3675,21 @@ def get_chat(chat_id):
             u.bio,
             ct.alias AS contact_alias,
             (ct.id IS NOT NULL) AS is_contact,
+            EXISTS (
+                SELECT 1
+                FROM user_muted_users umu
+                WHERE umu.owner_user_id = %s AND umu.muted_user_id = u.id
+            ) AS is_muted,
+            EXISTS (
+                SELECT 1
+                FROM user_blocked_users ubu
+                WHERE ubu.owner_user_id = %s AND ubu.blocked_user_id = u.id
+            ) AS is_blocked,
+            EXISTS (
+                SELECT 1
+                FROM user_blocked_users ubu
+                WHERE ubu.owner_user_id = u.id AND ubu.blocked_user_id = %s
+            ) AS is_blocked_by,
             (
                 SELECT COUNT(*)
                 FROM messages m
@@ -3496,7 +3709,7 @@ def get_chat(chat_id):
         LEFT JOIN contacts ct
             ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
         WHERE c.id = %s AND (c.user1_id = %s OR c.user2_id = %s)
-    """, (user_id, user_id, user_id, chat_id, user_id, user_id)).fetchone()
+    """, (user_id, user_id, user_id, user_id, user_id, user_id, chat_id, user_id, user_id)).fetchone()
 
     if not chat:
         conn.close()
@@ -3526,6 +3739,9 @@ def get_chat(chat_id):
         "contact_alias": chat["contact_alias"],
         "is_contact": bool(chat["is_contact"]),
         "badges": serialize_user_badges(chat),
+        "is_muted": bool(chat["is_muted"]),
+        "is_blocked": bool(chat["is_blocked"]),
+        "is_blocked_by": bool(chat["is_blocked_by"]),
         "is_online": False if hide_presence else is_user_online(chat["user_id"]),
         "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(chat["user_id"])),
         "hide_presence": hide_presence,
@@ -3640,6 +3856,13 @@ def create_chat_message(chat_id):
         conn.close()
         return jsonify({"message": "Чат не найден"}), 404
 
+    recipient_user_id = get_direct_chat_recipient_id(conn, chat_id, user_id)
+    try:
+        ensure_direct_target_is_writable(conn, user_id, recipient_user_id)
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
+
     member_ids = get_direct_chat_member_ids(conn, chat_id)
     preview = extract_message_preview(text)
     reply_to_message = None
@@ -3745,6 +3968,13 @@ def create_chat_voice_message(chat_id):
     if not chat:
         conn.close()
         return jsonify({"message": "Чат не найден"}), 404
+
+    recipient_user_id = get_direct_chat_recipient_id(conn, chat_id, user_id)
+    try:
+        ensure_direct_target_is_writable(conn, user_id, recipient_user_id)
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
 
     try:
         audio = save_voice_upload(request.files.get("voice"))
@@ -3869,6 +4099,9 @@ def forward_chat_message(chat_id, message_id):
     except ValueError as error:
         conn.close()
         return jsonify({"message": str(error)}), 400
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
     except LookupError as error:
         conn.close()
         return jsonify({"message": str(error)}), 404
@@ -3917,6 +4150,9 @@ def forward_chat_messages_as_dialog(chat_id):
     except ValueError as error:
         conn.close()
         return jsonify({"message": str(error)}), 400
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
     except LookupError as error:
         conn.close()
         return jsonify({"message": str(error)}), 404
@@ -5159,6 +5395,9 @@ def forward_group_message(group_id, message_id):
     except ValueError as error:
         conn.close()
         return jsonify({"message": str(error)}), 400
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
     except LookupError as error:
         conn.close()
         return jsonify({"message": str(error)}), 404
@@ -5207,6 +5446,9 @@ def forward_group_messages_as_dialog(group_id):
     except ValueError as error:
         conn.close()
         return jsonify({"message": str(error)}), 400
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
     except LookupError as error:
         conn.close()
         return jsonify({"message": str(error)}), 404
