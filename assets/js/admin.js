@@ -65,6 +65,9 @@ function renderAdminUserCard(user = {}) {
         <button class="button ${user.is_banned ? "button-secondary" : "button-danger"}" type="button" data-admin-ban-action="${user.is_banned ? "unban" : "ban"}" ${user.role === "system_owner" ? "disabled" : ""}>
           ${user.is_banned ? "Разбанить" : "Забанить"}
         </button>
+        <button class="button button-danger" type="button" data-admin-delete-user="true" ${user.role === "system_owner" ? "disabled" : ""}>
+          Удалить аккаунт
+        </button>
       </div>
     </article>
   `;
@@ -238,6 +241,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   list?.addEventListener("click", async (event) => {
+    const deleteButton = event.target.closest("[data-admin-delete-user]");
+    const deleteCard = event.target.closest("[data-admin-user-id]");
+    if (deleteButton && deleteCard) {
+      const userId = deleteCard.dataset.adminUserId;
+      const reason = String(deleteCard.querySelector("[data-ban-reason]")?.value || "").trim();
+      if (!window.confirm("Удалить аккаунт полностью? Это удалит чаты, сообщения, группы и связанные данные пользователя.")) {
+        return;
+      }
+      try {
+        await apiFetch(`/admin/users/${encodeURIComponent(userId)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ reason })
+        });
+        adminState.users = adminState.users.filter((user) => Number(user.id) !== Number(userId));
+        renderAdminUsers();
+        setAdminStatus("Аккаунт удалён", "success");
+      } catch (error) {
+        setAdminStatus(error.message, "error");
+      }
+      return;
+    }
+
     const actionButton = event.target.closest("[data-admin-ban-action]");
     const card = event.target.closest("[data-admin-user-id]");
     if (!actionButton || !card) {

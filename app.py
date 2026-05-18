@@ -1450,6 +1450,103 @@ def validate_moderation_target(actor_user, target_user):
         raise PermissionError("Нельзя изменять собственный аккаунт")
 
 
+def delete_group_with_dependencies(conn, group_id):
+    group_message_rows = conn.execute("""
+        SELECT id, audio_url, image_url
+        FROM group_messages
+        WHERE group_id = %s
+    """, (group_id,)).fetchall()
+    remove_voice_files(row["audio_url"] for row in group_message_rows)
+    remove_photo_files(row["image_url"] for row in group_message_rows)
+
+    conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id IN (SELECT id FROM group_messages WHERE group_id = %s)", (group_id,))
+    conn.execute("DELETE FROM group_read_states WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM group_members WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM group_invites WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM group_messages WHERE group_id = %s", (group_id,))
+    conn.execute("DELETE FROM `groups` WHERE id = %s", (group_id,))
+
+
+def delete_user_account(conn, target_user_id):
+    owned_groups = conn.execute("""
+        SELECT id
+        FROM `groups`
+        WHERE owner_id = %s
+    """, (target_user_id,)).fetchall()
+    for group in owned_groups:
+        delete_group_with_dependencies(conn, group["id"])
+
+    direct_message_rows = conn.execute("""
+        SELECT id, audio_url, image_url
+        FROM messages
+        WHERE sender_id = %s
+           OR chat_id IN (
+               SELECT id
+               FROM chats
+               WHERE user1_id = %s OR user2_id = %s
+           )
+    """, (target_user_id, target_user_id, target_user_id)).fetchall()
+    direct_message_ids = [row["id"] for row in direct_message_rows]
+    remove_voice_files(row["audio_url"] for row in direct_message_rows)
+    remove_photo_files(row["image_url"] for row in direct_message_rows)
+
+    if direct_message_ids:
+        placeholders = ",".join("%s" for _ in direct_message_ids)
+        conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", direct_message_ids)
+
+    conn.execute("""
+        DELETE FROM messages
+        WHERE sender_id = %s
+           OR chat_id IN (
+               SELECT id
+               FROM chats
+               WHERE user1_id = %s OR user2_id = %s
+           )
+    """, (target_user_id, target_user_id, target_user_id))
+    conn.execute("DELETE FROM hidden_direct_chats WHERE user_id = %s OR chat_id IN (SELECT id FROM chats WHERE user1_id = %s OR user2_id = %s)", (target_user_id, target_user_id, target_user_id))
+    conn.execute("DELETE FROM chats WHERE user1_id = %s OR user2_id = %s", (target_user_id, target_user_id))
+
+    group_message_rows = conn.execute("""
+        SELECT id, audio_url, image_url
+        FROM group_messages
+        WHERE sender_id = %s
+    """, (target_user_id,)).fetchall()
+    group_message_ids = [row["id"] for row in group_message_rows]
+    remove_voice_files(row["audio_url"] for row in group_message_rows)
+    remove_photo_files(row["image_url"] for row in group_message_rows)
+    if group_message_ids:
+        placeholders = ",".join("%s" for _ in group_message_ids)
+        conn.execute(f"DELETE FROM hidden_group_messages WHERE group_message_id IN ({placeholders})", group_message_ids)
+    conn.execute("DELETE FROM group_messages WHERE sender_id = %s", (target_user_id,))
+    conn.execute("DELETE FROM hidden_group_messages WHERE user_id = %s", (target_user_id,))
+    conn.execute("DELETE FROM group_read_states WHERE user_id = %s", (target_user_id,))
+    conn.execute("DELETE FROM group_members WHERE user_id = %s", (target_user_id,))
+    conn.execute("DELETE FROM group_invites WHERE created_by = %s", (target_user_id,))
+
+    owned_pack_ids = [
+        row["id"]
+        for row in conn.execute("""
+            SELECT id
+            FROM sticker_packs
+            WHERE owner_user_id = %s
+        """, (target_user_id,)).fetchall()
+    ]
+    if owned_pack_ids:
+        placeholders = ",".join("%s" for _ in owned_pack_ids)
+        conn.execute(f"DELETE FROM user_sticker_packs WHERE pack_id IN ({placeholders})", owned_pack_ids)
+        conn.execute(f"DELETE FROM stickers WHERE pack_id IN ({placeholders})", owned_pack_ids)
+        conn.execute(f"DELETE FROM sticker_packs WHERE id IN ({placeholders})", owned_pack_ids)
+    conn.execute("DELETE FROM user_sticker_packs WHERE user_id = %s", (target_user_id,))
+
+    conn.execute("DELETE FROM contacts WHERE owner_user_id = %s OR contact_user_id = %s", (target_user_id, target_user_id))
+    conn.execute("DELETE FROM user_muted_users WHERE owner_user_id = %s OR muted_user_id = %s", (target_user_id, target_user_id))
+    conn.execute("DELETE FROM user_blocked_users WHERE owner_user_id = %s OR blocked_user_id = %s", (target_user_id, target_user_id))
+    conn.execute("DELETE FROM auth_tokens WHERE user_id = %s", (target_user_id,))
+    conn.execute("DELETE FROM user_login_devices WHERE user_id = %s", (target_user_id,))
+    conn.execute("DELETE FROM admin_audit_log WHERE target_user_id = %s", (target_user_id,))
+    conn.execute("DELETE FROM users WHERE id = %s", (target_user_id,))
+
+
 def current_user_id():
     if getattr(g, "current_user", None):
         current_id = int(row_value(g.current_user, "id", 0) or 0)
@@ -4171,6 +4268,49 @@ def unban_admin_user(target_user_id):
         append_admin_audit_log(conn, actor_user["id"], target_user_id, "unban_user", reason, details={})
         conn.commit()
         return jsonify(serialize_admin_user(get_moderation_target(conn, target_user_id)))
+    except LookupError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 404
+    except PermissionError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 403
+    finally:
+        conn.close()
+
+
+@app.delete("/admin/users/<int:target_user_id>")
+def delete_admin_user(target_user_id):
+    access_error = ensure_admin_access()
+    if access_error:
+        return access_error
+
+    actor_user = getattr(g, "current_user", None) or {}
+    reason = collapse_spaces((request.json or {}).get("reason", ""))
+    conn = get_db()
+    try:
+        target_user = get_moderation_target(conn, target_user_id)
+        validate_moderation_target(actor_user, target_user)
+        target_summary = {
+            "id": int(target_user["id"]),
+            "username": target_user["username"],
+            "email": target_user["email"],
+            "role": target_user["role"]
+        }
+        delete_user_account(conn, target_user_id)
+        append_admin_audit_log(
+            conn,
+            actor_user["id"],
+            target_user_id,
+            "delete_user",
+            reason,
+            details=target_summary
+        )
+        conn.commit()
+        disconnect_user_sockets(target_user_id)
+        return jsonify({
+            "ok": True,
+            "deleted_user_id": target_user_id
+        })
     except LookupError as error:
         conn.rollback()
         return jsonify({"message": str(error)}), 404
