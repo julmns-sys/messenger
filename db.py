@@ -353,6 +353,8 @@ def _ensure_message_preview_columns(conn, table_name):
         "audio_duration_ms": "INT NULL",
         "image_url": "VARCHAR(1000) NULL",
         "image_mime_type": "VARCHAR(120) NULL",
+        "sticker_id": "INT NULL",
+        "sticker_asset_path": "VARCHAR(1000) NULL",
     }
     cursor = conn.cursor(dictionary=False)
     try:
@@ -403,10 +405,45 @@ def _ensure_users_security_columns(conn):
               AND TABLE_NAME = 'users'
         """, (DB_NAME,))
         existing = {row[0] for row in cursor.fetchall() or []}
+        if "role" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'user' AFTER password_hash
+            """)
         if "date_of_birth" not in existing:
             cursor.execute("""
                 ALTER TABLE users
                 ADD COLUMN date_of_birth DATE NULL AFTER bio
+            """)
+        if "is_banned" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN is_banned TINYINT(1) NOT NULL DEFAULT 0 AFTER date_of_birth
+            """)
+        if "banned_reason" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN banned_reason TEXT NULL AFTER is_banned
+            """)
+        if "banned_until" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN banned_until DATETIME NULL AFTER banned_reason
+            """)
+        if "can_send_messages" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN can_send_messages TINYINT(1) NOT NULL DEFAULT 1 AFTER banned_until
+            """)
+        if "can_upload_files" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN can_upload_files TINYINT(1) NOT NULL DEFAULT 1 AFTER can_send_messages
+            """)
+        if "can_create_groups" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN can_create_groups TINYINT(1) NOT NULL DEFAULT 1 AFTER can_upload_files
             """)
         if "login_alerts_enabled" not in existing:
             cursor.execute("""
@@ -446,6 +483,87 @@ def _ensure_user_relations_tables(conn):
         cursor.close()
 
 
+def _ensure_sticker_tables(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sticker_packs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                owner_user_id INT NULL,
+                title VARCHAR(120) NOT NULL,
+                description VARCHAR(255) NULL,
+                cover_path VARCHAR(1000) NULL,
+                visibility VARCHAR(16) NOT NULL DEFAULT 'private',
+                is_default TINYINT(1) NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_sticker_packs_owner (owner_user_id),
+                INDEX idx_sticker_packs_default (is_default),
+                INDEX idx_sticker_packs_visibility (visibility)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stickers (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                pack_id INT NOT NULL,
+                title VARCHAR(120) NULL,
+                file_path VARCHAR(1000) NOT NULL,
+                mime_type VARCHAR(120) NOT NULL,
+                position INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_stickers_pack (pack_id),
+                INDEX idx_stickers_pack_position (pack_id, position)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_sticker_packs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                pack_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_user_sticker_pack (user_id, pack_id),
+                INDEX idx_user_sticker_packs_user (user_id),
+                INDEX idx_user_sticker_packs_pack (pack_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+    finally:
+        cursor.close()
+
+
+def _ensure_admin_audit_table(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                actor_user_id INT NOT NULL,
+                target_user_id INT NOT NULL,
+                action VARCHAR(64) NOT NULL,
+                reason TEXT NULL,
+                details_json LONGTEXT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_admin_audit_actor (actor_user_id),
+                INDEX idx_admin_audit_target (target_user_id),
+                INDEX idx_admin_audit_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+    finally:
+        cursor.close()
+
+
+def _ensure_runtime_settings_table(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS app_runtime_settings (
+                setting_key VARCHAR(120) PRIMARY KEY,
+                setting_value VARCHAR(4000) NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+    finally:
+        cursor.close()
+
+
 def init_db():
     if not INIT_SQL_PATH.exists():
         raise FileNotFoundError(f"MariaDB schema file not found: {INIT_SQL_PATH}")
@@ -462,6 +580,9 @@ def init_db():
         _ensure_user_login_devices_table(conn)
         _ensure_users_security_columns(conn)
         _ensure_user_relations_tables(conn)
+        _ensure_sticker_tables(conn)
+        _ensure_admin_audit_table(conn)
+        _ensure_runtime_settings_table(conn)
         _ensure_group_invites(conn)
         conn.commit()
         cursor.close()

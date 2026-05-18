@@ -1,0 +1,52 @@
+{% extends "base_app.html" %}
+
+{% block content %}
+  <section class="content">
+    <div class="page-header">
+      <a class="icon-button mobile-only page-back" href="/" aria-label="Назад"></a>
+      <div class="page-header-copy">
+        <h1 class="page-title">Мои стикеры</h1>
+        <p class="page-subtitle">Создавайте свои sticker packs, загружайте PNG/WEBP и подключайте публичные наборы.</p>
+      </div>
+    </div>
+
+    <div class="panel stack stickers-page-panel">
+      <form class="stickers-create-form" id="stickerPackCreateForm">
+        <input class="input" id="stickerPackTitle" type="text" maxlength="120" placeholder="Название пака" required>
+        <input class="input" id="stickerPackDescription" type="text" maxlength="255" placeholder="Описание (необязательно)">
+        <select class="settings-select" id="stickerPackVisibility">
+          <option value="private">Private</option>
+          <option value="public">Public</option>
+        </select>
+        <button class="button" type="submit">Создать pack</button>
+      </form>
+      <div class="status" id="stickerPackCreateStatus"></div>
+    </div>
+
+    <div class="panel stack">
+      <div class="contacts-panel-header">
+        <div>
+          <h2 class="page-title contacts-panel-title">Мои паки</h2>
+          <p class="page-subtitle contacts-panel-subtitle">Редактируйте метаданные, загружайте стикеры и удаляйте их отсюда.</p>
+        </div>
+      </div>
+      <div class="status" id="myStickerPacksStatus"></div>
+      <div class="result-list stickers-pack-list" id="myStickerPacksList"></div>
+    </div>
+
+    <div class="panel stack">
+      <div class="contacts-panel-header">
+        <div>
+          <h2 class="page-title contacts-panel-title">Публичные и дефолтные паки</h2>
+          <p class="page-subtitle contacts-panel-subtitle">Подключайте чужие public-паки и используйте дефолтный набор в sticker popup.</p>
+        </div>
+      </div>
+      <div class="status" id="stickerLibraryStatus"></div>
+      <div class="result-list stickers-pack-list" id="stickerLibraryList"></div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block page_scripts %}
+  <script src="/assets/js/stickers.js"></script>
+{% endblock %}

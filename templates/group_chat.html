@@ -34,9 +34,14 @@
       <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down"><img class="icon-asset" src="/assets/icons/ui/Arrow_down.svg" alt=""></button>
       <div class="composer-wrap">
         <form class="composer" id="messageForm">
-          {% if photo_messages_enabled %}
+          {% if photo_messages_enabled and global_file_uploads_enabled %}
             <input id="photoMessageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
             <button class="composer-attach-button" id="photoMessageButton" type="button" aria-label="Прикрепить фотографию" title="Прикрепить фото"><img class="icon-asset" src="/assets/icons/ui/Upload.svg" alt=""></button>
+          {% endif %}
+          {% if global_stickers_enabled %}
+            <button class="composer-sticker-button" id="stickerPickerButton" type="button" aria-label="Открыть стикеры" title="Стикеры">
+              <img class="icon-asset" src="/assets/icons/ui/Bubble.svg" alt="">
+            </button>
           {% endif %}
           <div class="composer-input-shell">
             <textarea class="textarea composer-textarea" id="messageInput" placeholder="Сообщение в группу..." rows="1" required></textarea>
@@ -45,6 +50,13 @@
             <img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt="">
           </button>
         </form>
+        <div class="sticker-picker-popup" id="stickerPickerPopup" hidden>
+          <div class="sticker-picker-head">
+            <div class="sticker-pack-tabs" id="stickerPackTabs"></div>
+          </div>
+          <div class="sticker-picker-status" id="stickerPickerStatus"></div>
+          <div class="sticker-grid" id="stickerGrid"></div>
+        </div>
         <div id="messageStatus" class="status thread-status"></div>
       </div>
     </div>

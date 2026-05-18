@@ -43,6 +43,14 @@ function getCreateGroupRoute() {
   return "/create-group";
 }
 
+function getStickersRoute() {
+  return "/stickers";
+}
+
+function getAdminRoute() {
+  return "/admin";
+}
+
 function getLoginRoute() {
   return "/login";
 }
@@ -99,6 +107,10 @@ function getCurrentRouteInfo() {
     page = "graph";
   } else if (segments[0] === "create-group" || segments[0] === "create_group.html") {
     page = "create-group";
+  } else if (segments[0] === "stickers" || segments[0] === "stickers.html") {
+    page = "stickers";
+  } else if (segments[0] === "admin" || segments[0] === "admin.html") {
+    page = "admin";
   } else if (segments[0] === "login" || segments[0] === "login.html") {
     page = "login";
   } else if (segments[0] === "register" || segments[0] === "register.html") {

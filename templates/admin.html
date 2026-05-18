@@ -1,0 +1,55 @@
+{% extends "base_app.html" %}
+
+{% block content %}
+  <section class="content">
+    <div class="page-header">
+      <a class="icon-button mobile-only page-back" href="/" aria-label="Назад"></a>
+      <div class="page-header-copy">
+        <h1 class="page-title">Админ-панель</h1>
+        <p class="page-subtitle">Модерация пользователей, баны и ограничения аккаунтов.</p>
+      </div>
+    </div>
+
+    <div class="panel stack admin-page-panel">
+      <div class="admin-global-setting">
+        <div class="admin-global-setting-copy">
+          <strong>Глобально отключить отправку файлов</strong>
+          <span>Скрывает кнопку прикрепления в чатах и блокирует file upload на сервере.</span>
+        </div>
+        <label class="settings-switch" aria-label="Глобальная отправка файлов">
+          <input id="adminGlobalFilesToggle" type="checkbox">
+          <span class="settings-switch-ui"></span>
+        </label>
+      </div>
+      <div class="admin-global-setting">
+        <div class="admin-global-setting-copy">
+          <strong>Глобально отключить стикеры</strong>
+          <span>Скрывает кнопку стикеров в чатах и блокирует отправку sticker-сообщений на сервере.</span>
+        </div>
+        <label class="settings-switch" aria-label="Глобальная отправка стикеров">
+          <input id="adminGlobalStickersToggle" type="checkbox">
+          <span class="settings-switch-ui"></span>
+        </label>
+      </div>
+      <div class="admin-toolbar">
+        <input class="search-input admin-search-input" id="adminUserSearchInput" type="search" placeholder="Поиск по username, id или email">
+        <button class="button button-secondary" id="adminUserSearchButton" type="button">Найти</button>
+      </div>
+      <div class="status" id="adminUsersStatus"></div>
+    </div>
+
+    <div class="panel stack">
+      <div class="contacts-panel-header">
+        <div>
+          <h2 class="page-title contacts-panel-title">Пользователи</h2>
+          <p class="page-subtitle contacts-panel-subtitle">Бан, разбан и ограничения сообщений, загрузок и групп.</p>
+        </div>
+      </div>
+      <div class="result-list admin-users-list" id="adminUsersList"></div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block page_scripts %}
+  <script src="/assets/js/admin.js"></script>
+{% endblock %}

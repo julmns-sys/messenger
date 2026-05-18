@@ -4,10 +4,72 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(32) NOT NULL UNIQUE,
     email VARCHAR(255) NULL,
     password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(32) NOT NULL DEFAULT 'user',
     bio TEXT NULL,
     date_of_birth DATE NULL,
+    is_banned TINYINT(1) NOT NULL DEFAULT 0,
+    banned_reason TEXT NULL,
+    banned_until DATETIME NULL,
+    can_send_messages TINYINT(1) NOT NULL DEFAULT 1,
+    can_upload_files TINYINT(1) NOT NULL DEFAULT 1,
+    can_create_groups TINYINT(1) NOT NULL DEFAULT 1,
     login_alerts_enabled TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    actor_user_id INT NOT NULL,
+    target_user_id INT NOT NULL,
+    action VARCHAR(64) NOT NULL,
+    reason TEXT NULL,
+    details_json LONGTEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_admin_audit_actor (actor_user_id),
+    INDEX idx_admin_audit_target (target_user_id),
+    INDEX idx_admin_audit_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS app_runtime_settings (
+    setting_key VARCHAR(120) PRIMARY KEY,
+    setting_value VARCHAR(4000) NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sticker_packs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    owner_user_id INT NULL,
+    title VARCHAR(120) NOT NULL,
+    description VARCHAR(255) NULL,
+    cover_path VARCHAR(1000) NULL,
+    visibility VARCHAR(16) NOT NULL DEFAULT 'private',
+    is_default TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sticker_packs_owner (owner_user_id),
+    INDEX idx_sticker_packs_default (is_default),
+    INDEX idx_sticker_packs_visibility (visibility)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS stickers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    pack_id INT NOT NULL,
+    title VARCHAR(120) NULL,
+    file_path VARCHAR(1000) NOT NULL,
+    mime_type VARCHAR(120) NOT NULL,
+    position INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_stickers_pack (pack_id),
+    INDEX idx_stickers_pack_position (pack_id, position)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_sticker_packs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    pack_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_user_sticker_pack (user_id, pack_id),
+    INDEX idx_user_sticker_packs_user (user_id),
+    INDEX idx_user_sticker_packs_pack (pack_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS auth_tokens (
@@ -87,6 +149,8 @@ CREATE TABLE IF NOT EXISTS messages (
     audio_duration_ms INT NULL,
     image_url VARCHAR(1000) NULL,
     image_mime_type VARCHAR(120) NULL,
+    sticker_id INT NULL,
+    sticker_asset_path VARCHAR(1000) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     read_at TIMESTAMP NULL DEFAULT NULL,
     edited_at TIMESTAMP NULL DEFAULT NULL,
@@ -133,6 +197,8 @@ CREATE TABLE IF NOT EXISTS group_messages (
     audio_duration_ms INT NULL,
     image_url VARCHAR(1000) NULL,
     image_mime_type VARCHAR(120) NULL,
+    sticker_id INT NULL,
+    sticker_asset_path VARCHAR(1000) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     edited_at TIMESTAMP NULL DEFAULT NULL,
     INDEX idx_group_messages_group_id (group_id),

@@ -11,7 +11,7 @@ import uuid
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from flask import Flask, request, jsonify, send_from_directory, redirect, render_template
+from flask import Flask, request, jsonify, send_from_directory, redirect, render_template, g
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -33,8 +33,12 @@ MESSAGE_URL_PATTERN = re.compile(r"((?:https?://|www\.)[^\s<]+)", flags=re.IGNOR
 BASE_DIR = Path(__file__).resolve().parent
 VOICE_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "voice"
 PHOTO_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "photos"
+STICKER_LIBRARY_DIR = BASE_DIR / "assets" / "stickers"
+STICKER_UPLOAD_DIR = STICKER_LIBRARY_DIR / "uploads" / "packs"
+DEFAULT_STICKER_MANIFEST_PATH = STICKER_LIBRARY_DIR / "default" / "manifest.json"
 VOICE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PHOTO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+STICKER_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PHOTO_MESSAGES_ENABLED = str(os.getenv("PHOTO_MESSAGES_ENABLED", "1") or "1").strip().lower() not in {"0", "false", "off", "no"}
 VOICE_EXTENSIONS_BY_MIME = {
     "audio/webm": ".webm",
@@ -52,23 +56,87 @@ PHOTO_EXTENSIONS_BY_MIME = {
     "image/webp": ".webp",
     "image/gif": ".gif",
 }
+STICKER_EXTENSIONS_BY_MIME = {
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+MAX_STICKER_FILE_BYTES = 1 * 1024 * 1024
 SYSTEM_USERNAME = "chatik"
 SYSTEM_NAME = "Chatik"
 SYSTEM_EMAIL = "chatik@system.local"
 SYSTEM_BIO = "Системный аккаунт для обновлений и уведомлений безопасности."
 SYSTEM_PASSWORD_PLACEHOLDER = "chatik-system-account"
+ROLE_USER = "user"
+ROLE_ADMIN = "admin"
+ROLE_SYSTEM_OWNER = "system_owner"
+SYSTEM_OWNER_USERNAME = str(os.getenv("SYSTEM_OWNER_USERNAME", "owner") or "owner").strip().replace("@", "")
+SYSTEM_OWNER_NAME = str(os.getenv("SYSTEM_OWNER_NAME", "Messenger Owner") or "Messenger Owner").strip() or "Messenger Owner"
+SYSTEM_OWNER_EMAIL = str(os.getenv("SYSTEM_OWNER_EMAIL", "owner@system.local") or "owner@system.local").strip()
+SYSTEM_OWNER_PASSWORD = str(os.getenv("SYSTEM_OWNER_PASSWORD", "change-me-owner") or "change-me-owner")
+GLOBAL_FILES_SETTING_KEY = "global_file_uploads_enabled"
+GLOBAL_STICKERS_SETTING_KEY = "global_stickers_enabled"
 
 
 @app.context_processor
 def inject_feature_flags():
     return {
-        "photo_messages_enabled": PHOTO_MESSAGES_ENABLED
+        "photo_messages_enabled": PHOTO_MESSAGES_ENABLED,
+        "global_file_uploads_enabled": is_global_file_uploads_enabled(),
+        "global_stickers_enabled": is_global_stickers_enabled()
     }
 
 
 def ensure_photo_messages_enabled():
     if not PHOTO_MESSAGES_ENABLED:
         raise PermissionError("Отправка фото временно отключена")
+
+
+def read_runtime_setting(conn, key, default=""):
+    row = conn.execute("""
+        SELECT setting_value
+        FROM app_runtime_settings
+        WHERE setting_key = %s
+        LIMIT 1
+    """, (key,)).fetchone()
+    if not row:
+        return default
+    return row_value(row, "setting_value", default)
+
+
+def write_runtime_setting(conn, key, value):
+    conn.execute("""
+        INSERT INTO app_runtime_settings (setting_key, setting_value)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
+    """, (key, value))
+
+
+def is_global_file_uploads_enabled():
+    conn = get_db()
+    try:
+        raw_value = read_runtime_setting(conn, GLOBAL_FILES_SETTING_KEY, "1")
+        return str(raw_value or "1").strip().lower() not in {"0", "false", "off", "no"}
+    finally:
+        conn.close()
+
+
+def ensure_global_file_uploads_enabled():
+    if not is_global_file_uploads_enabled():
+        raise PermissionError("Отправка файлов по всему мессенджеру отключена")
+
+
+def is_global_stickers_enabled():
+    conn = get_db()
+    try:
+        raw_value = read_runtime_setting(conn, GLOBAL_STICKERS_SETTING_KEY, "1")
+        return str(raw_value or "1").strip().lower() not in {"0", "false", "off", "no"}
+    finally:
+        conn.close()
+
+
+def ensure_global_stickers_enabled():
+    if not is_global_stickers_enabled():
+        raise PermissionError("Отправка стикеров по всему мессенджеру отключена")
 
 
 def ensure_runtime_initialized():
@@ -81,12 +149,36 @@ def ensure_runtime_initialized():
             return
         init_db()
         bootstrap_system_account()
+        bootstrap_system_owner_account()
+        ensure_default_sticker_pack()
         runtime_initialized = True
 
 
 @app.before_request
 def initialize_runtime_before_request():
     ensure_runtime_initialized()
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+
+    token = auth.replace("Bearer ", "", 1).strip()
+    user_id = lookup_user_id_by_token(token)
+    if not user_id:
+        return None
+
+    conn = get_db()
+    try:
+        user = fetch_user_auth_state(conn, user_id)
+    finally:
+        conn.close()
+
+    if not user:
+        return None
+
+    g.current_user = user
+    if is_ban_active(user):
+        return jsonify({"message": "Аккаунт заблокирован"}), 403
+    return None
 
 
 def format_timestamp(value):
@@ -208,6 +300,23 @@ def serialize_message_image(message):
     return {
         "url": image_url,
         "mime_type": row_value(message, "image_mime_type", "") or "image/jpeg"
+    }
+
+
+def serialize_message_sticker(message):
+    sticker_id = row_value(message, "sticker_id")
+    sticker_path = row_value(message, "sticker_asset_path", "")
+    if not sticker_id and not sticker_path:
+        return None
+
+    try:
+        normalized_sticker_id = int(sticker_id) if sticker_id is not None else None
+    except (TypeError, ValueError):
+        normalized_sticker_id = None
+
+    return {
+        "id": normalized_sticker_id,
+        "url": sticker_path or None
     }
 
 
@@ -350,12 +459,25 @@ def clone_forwarded_image(message):
     }
 
 
+def clone_forwarded_sticker(message):
+    sticker = serialize_message_sticker(message)
+    if not sticker:
+        return None
+
+    return {
+        "id": sticker["id"],
+        "url": sticker["url"]
+    }
+
+
 def get_forwarded_dialog_item_text(message):
     message_type = row_value(message, "message_type", "text") or "text"
     if message_type == "voice":
         return "Голосовое сообщение"
     if message_type == "photo":
         return "Фотография"
+    if message_type == "sticker":
+        return "Стикер"
     return row_value(message, "text", "") or ""
 
 
@@ -366,7 +488,7 @@ def build_forwarded_dialog_payload(messages, owner_user_id):
         message_type = row_value(message, "message_type", "text") or "text"
         if message_type == "system":
             raise ValueError("Системные сообщения нельзя пересылать как диалог")
-        if message_type not in {"text", "voice", "photo"}:
+        if message_type not in {"text", "voice", "photo", "sticker"}:
             raise ValueError("Некоторые выбранные сообщения нельзя переслать как диалог")
 
         original_sender_id = int(row_value(message, "sender_id", 0) or 0)
@@ -398,6 +520,8 @@ def build_reply_preview_payload(reply_message):
         reply_preview_text = "Голосовое сообщение"
     elif reply_message_type == "photo":
         reply_preview_text = "Фотография"
+    elif reply_message_type == "sticker":
+        reply_preview_text = "Стикер"
     elif reply_message_type == "system":
         reply_preview_text = row_value(reply_message, "text", "") or "Системное сообщение"
     else:
@@ -580,6 +704,155 @@ def save_photo_upload(uploaded_file):
     }
 
 
+def normalize_pack_visibility(value):
+    normalized = str(value or "").strip().lower()
+    return "public" if normalized == "public" else "private"
+
+
+def load_default_sticker_manifest():
+    if not DEFAULT_STICKER_MANIFEST_PATH.exists():
+        return None
+
+    try:
+        raw_manifest = json.loads(DEFAULT_STICKER_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+    stickers = []
+    for index, item in enumerate(raw_manifest.get("stickers", []) or []):
+        if not isinstance(item, dict):
+            continue
+        filename = Path(str(item.get("file") or "")).name
+        if not filename:
+            continue
+        relative_path = f"/assets/stickers/default/{filename}"
+        absolute_path = STICKER_LIBRARY_DIR / "default" / filename
+        if not absolute_path.exists():
+            continue
+        mime_type = str(item.get("mime_type") or "").strip().lower() or ("image/webp" if filename.lower().endswith(".webp") else "image/png")
+        stickers.append({
+            "title": str(item.get("title") or "")[:120],
+            "file_path": relative_path,
+            "mime_type": mime_type,
+            "position": index
+        })
+
+    if not stickers:
+        return None
+
+    return {
+        "title": str(raw_manifest.get("title") or "Default stickers")[:120],
+        "description": str(raw_manifest.get("description") or "")[:255] or None,
+        "cover_path": str(raw_manifest.get("cover_path") or stickers[0]["file_path"])[:1000],
+        "stickers": stickers
+    }
+
+
+def ensure_default_sticker_pack():
+    manifest = load_default_sticker_manifest()
+    if not manifest:
+        return
+
+    conn = get_db()
+    try:
+        pack = conn.execute("""
+            SELECT id
+            FROM sticker_packs
+            WHERE is_default = 1
+            ORDER BY id ASC
+            LIMIT 1
+        """).fetchone()
+
+        if not pack:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO sticker_packs (
+                    owner_user_id,
+                    title,
+                    description,
+                    cover_path,
+                    visibility,
+                    is_default
+                )
+                VALUES (NULL, %s, %s, %s, 'public', 1)
+            """, (manifest["title"], manifest["description"], manifest["cover_path"]))
+            pack_id = cur.lastrowid
+        else:
+            pack_id = pack["id"]
+            conn.execute("""
+                UPDATE sticker_packs
+                SET title = %s,
+                    description = %s,
+                    cover_path = %s,
+                    visibility = 'public',
+                    is_default = 1
+                WHERE id = %s
+            """, (manifest["title"], manifest["description"], manifest["cover_path"], pack_id))
+
+        existing_rows = conn.execute("""
+            SELECT id, file_path
+            FROM stickers
+            WHERE pack_id = %s
+        """, (pack_id,)).fetchall()
+        existing_by_path = {row["file_path"]: row for row in existing_rows}
+        manifest_paths = {item["file_path"] for item in manifest["stickers"]}
+
+        for sticker in manifest["stickers"]:
+            existing = existing_by_path.get(sticker["file_path"])
+            if existing:
+                conn.execute("""
+                    UPDATE stickers
+                    SET title = %s,
+                        mime_type = %s,
+                        position = %s
+                    WHERE id = %s
+                """, (sticker["title"], sticker["mime_type"], sticker["position"], existing["id"]))
+                continue
+
+            conn.execute("""
+                INSERT INTO stickers (
+                    pack_id,
+                    title,
+                    file_path,
+                    mime_type,
+                    position
+                )
+                VALUES (%s, %s, %s, %s, %s)
+            """, (pack_id, sticker["title"], sticker["file_path"], sticker["mime_type"], sticker["position"]))
+
+        stale_ids = [row["id"] for row in existing_rows if row["file_path"] not in manifest_paths]
+        if stale_ids:
+            conn.executemany("DELETE FROM stickers WHERE id = %s", [(sticker_id,) for sticker_id in stale_ids])
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_sticker_upload(uploaded_file):
+    if not uploaded_file or not uploaded_file.filename:
+        raise ValueError("Файл стикера не найден")
+
+    mime_type = str(uploaded_file.mimetype or "").split(";", 1)[0].strip().lower()
+    if mime_type not in STICKER_EXTENSIONS_BY_MIME:
+        raise ValueError("Разрешены только PNG и WEBP")
+
+    uploaded_file.stream.seek(0, os.SEEK_END)
+    file_size = uploaded_file.stream.tell()
+    uploaded_file.stream.seek(0)
+    if file_size > MAX_STICKER_FILE_BYTES:
+        raise ValueError("Стикер не должен превышать 1MB")
+
+    extension = STICKER_EXTENSIONS_BY_MIME[mime_type]
+    filename = f"{uuid.uuid4().hex}{extension}"
+    relative_url = f"/assets/stickers/uploads/packs/{filename}"
+    uploaded_file.save(STICKER_UPLOAD_DIR / filename)
+    return {
+        "url": relative_url,
+        "mime_type": mime_type
+    }
+
+
 def iter_voice_file_paths(audio_urls):
     for audio_url in audio_urls or []:
         value = str(audio_url or "").strip()
@@ -602,6 +875,17 @@ def iter_photo_file_paths(image_urls):
         yield PHOTO_UPLOAD_DIR / filename
 
 
+def iter_sticker_file_paths(sticker_urls):
+    for sticker_url in sticker_urls or []:
+        value = str(sticker_url or "").strip()
+        if not value or not value.startswith("/assets/stickers/uploads/packs/"):
+            continue
+        filename = Path(value).name
+        if not filename:
+            continue
+        yield STICKER_UPLOAD_DIR / filename
+
+
 def remove_voice_files(audio_urls):
     for file_path in iter_voice_file_paths(audio_urls):
         try:
@@ -620,30 +904,97 @@ def remove_photo_files(image_urls):
             continue
 
 
+def remove_sticker_files(sticker_urls):
+    for file_path in iter_sticker_file_paths(sticker_urls):
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError:
+            continue
+
+
 def ensure_system_account(conn):
     user = conn.execute("""
-        SELECT id, name, username, email, bio
+        SELECT id, name, username, email, bio, role
         FROM users
         WHERE username = %s
         LIMIT 1
     """, (SYSTEM_USERNAME,)).fetchone()
     if user:
+        conn.execute("""
+            UPDATE users
+            SET role = %s
+            WHERE id = %s
+        """, (ROLE_ADMIN, user["id"]))
         return user
 
     password_hash = generate_password_hash(SYSTEM_PASSWORD_PLACEHOLDER)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO users (name, username, email, password_hash, bio)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO users (name, username, email, password_hash, role, bio)
+        VALUES (%s, %s, %s, %s, %s, %s)
     """, (
         SYSTEM_NAME,
         SYSTEM_USERNAME,
         SYSTEM_EMAIL,
         password_hash,
+        ROLE_ADMIN,
         SYSTEM_BIO
     ))
     return conn.execute("""
-        SELECT id, name, username, email, bio
+        SELECT id, name, username, email, bio, role
+        FROM users
+        WHERE id = %s
+    """, (cursor.lastrowid,)).fetchone()
+
+
+def ensure_system_owner_account(conn):
+    user = conn.execute("""
+        SELECT id, name, username, email, bio, role
+        FROM users
+        WHERE username = %s
+        LIMIT 1
+    """, (SYSTEM_OWNER_USERNAME,)).fetchone()
+    if user:
+        conn.execute("""
+            UPDATE users
+            SET role = %s,
+                is_banned = 0,
+                banned_reason = NULL,
+                banned_until = NULL,
+                can_send_messages = 1,
+                can_upload_files = 1,
+                can_create_groups = 1
+            WHERE id = %s
+        """, (ROLE_SYSTEM_OWNER, user["id"]))
+        return user
+
+    password_hash = generate_password_hash(SYSTEM_OWNER_PASSWORD)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO users (
+            name,
+            username,
+            email,
+            password_hash,
+            role,
+            bio,
+            is_banned,
+            can_send_messages,
+            can_upload_files,
+            can_create_groups
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, 0, 1, 1, 1)
+    """, (
+        SYSTEM_OWNER_NAME,
+        SYSTEM_OWNER_USERNAME,
+        SYSTEM_OWNER_EMAIL,
+        password_hash,
+        ROLE_SYSTEM_OWNER,
+        "Владелец и главный администратор мессенджера."
+    ))
+    return conn.execute("""
+        SELECT id, name, username, email, bio, role
         FROM users
         WHERE id = %s
     """, (cursor.lastrowid,)).fetchone()
@@ -665,70 +1016,6 @@ def ensure_direct_chat_between(conn, left_user_id, right_user_id):
         VALUES (%s, %s)
     """, (user1_id, user2_id))
     return cursor.lastrowid
-
-
-def create_direct_message_record(conn, chat_id, sender_id, text, message_type="text", audio=None):
-    preview = extract_message_preview(text) if message_type == "text" else None
-    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO messages (
-            chat_id,
-            sender_id,
-            text,
-            message_type,
-            preview_url,
-            preview_title,
-            preview_description,
-            preview_site_name,
-            audio_url,
-            audio_mime_type,
-            audio_duration_ms
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
-        chat_id,
-        sender_id,
-        text,
-        message_type,
-        preview["url"] if preview else None,
-        preview["title"][:255] if preview else None,
-        preview["description"][:500] if preview else None,
-        preview["site_name"][:255] if preview else None,
-        audio["url"] if audio else None,
-        audio["mime_type"] if audio else None,
-        parse_duration_ms(audio.get("duration_ms")) if audio else None
-    ))
-    return conn.execute("""
-        SELECT
-            m.id,
-            m.sender_id,
-            u.name AS sender_name,
-            m.text,
-            m.message_type,
-            m.reply_to_message_id,
-            m.reply_preview_text,
-            m.reply_preview_sender_name,
-            m.reply_preview_message_type,
-            m.forwarded_from_user_id,
-            m.forwarded_from_sender_name,
-            m.forwarded_dialog_payload,
-            m.preview_url,
-            m.preview_title,
-            m.preview_description,
-            m.preview_site_name,
-            m.audio_url,
-            m.audio_mime_type,
-            m.audio_duration_ms,
-            m.image_url,
-            m.image_mime_type,
-            m.created_at,
-            m.read_at,
-            m.edited_at
-        FROM messages m
-        JOIN users u ON u.id = m.sender_id
-        WHERE m.id = %s
-    """, (cursor.lastrowid,)).fetchone()
 
 
 def build_chatik_welcome_message():
@@ -921,6 +1208,15 @@ def bootstrap_system_account():
         conn.close()
 
 
+def bootstrap_system_owner_account():
+    conn = get_db()
+    try:
+        ensure_system_owner_account(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def persist_token(token, user_id):
     conn = get_db()
     conn.execute("""
@@ -945,7 +1241,219 @@ def lookup_user_id_by_token(token):
     return row["user_id"] if row else None
 
 
+def fetch_user_auth_state(conn, user_id):
+    if not user_id:
+        return None
+    return conn.execute("""
+        SELECT
+            id,
+            name,
+            username,
+            email,
+            role,
+            is_banned,
+            banned_reason,
+            banned_until,
+            can_send_messages,
+            can_upload_files,
+            can_create_groups,
+            login_alerts_enabled
+        FROM users
+        WHERE id = %s
+        LIMIT 1
+    """, (user_id,)).fetchone()
+
+
+def parse_datetime_value(raw_value):
+    if isinstance(raw_value, datetime):
+        return raw_value if raw_value.tzinfo else raw_value.replace(tzinfo=timezone.utc)
+    if not raw_value:
+        return None
+    normalized = str(raw_value).strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def is_ban_active(user):
+    if not bool(row_value(user, "is_banned", False)):
+        return False
+    banned_until = parse_datetime_value(row_value(user, "banned_until"))
+    if banned_until and banned_until <= datetime.now(timezone.utc):
+        return False
+    return True
+
+
+def serialize_user_permissions(user):
+    return {
+        "can_send_messages": bool(row_value(user, "can_send_messages", True)),
+        "can_upload_files": bool(row_value(user, "can_upload_files", True)),
+        "can_create_groups": bool(row_value(user, "can_create_groups", True)),
+    }
+
+
+def current_user_role():
+    user = getattr(g, "current_user", None)
+    if user:
+        return str(row_value(user, "role", ROLE_USER) or ROLE_USER)
+    return ROLE_USER
+
+
+def is_system_owner_user(user):
+    return str(row_value(user, "role", ROLE_USER) or ROLE_USER) == ROLE_SYSTEM_OWNER
+
+
+def is_admin_user(user):
+    role = str(row_value(user, "role", ROLE_USER) or ROLE_USER)
+    return role in {ROLE_ADMIN, ROLE_SYSTEM_OWNER}
+
+
+def current_user_is_system_owner():
+    return current_user_role() == ROLE_SYSTEM_OWNER
+
+
+def current_user_is_admin():
+    return current_user_role() in {ROLE_ADMIN, ROLE_SYSTEM_OWNER}
+
+
+def require_permission_to_send_messages(user):
+    if not bool(row_value(user, "can_send_messages", True)):
+        raise PermissionError("Отправка сообщений отключена для этого аккаунта")
+
+
+def require_permission_to_upload_files(user):
+    if not bool(row_value(user, "can_upload_files", True)):
+        raise PermissionError("Загрузка файлов отключена для этого аккаунта")
+
+
+def require_permission_to_create_groups(user):
+    if not bool(row_value(user, "can_create_groups", True)):
+        raise PermissionError("Создание групп отключено для этого аккаунта")
+
+
+def append_admin_audit_log(conn, actor_user_id, target_user_id, action, reason="", details=None):
+    conn.execute("""
+        INSERT INTO admin_audit_log (actor_user_id, target_user_id, action, reason, details_json)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        actor_user_id,
+        target_user_id,
+        action,
+        (str(reason or "").strip() or None),
+        json.dumps(details or {}, ensure_ascii=False) if details else None
+    ))
+
+
+def serialize_admin_user(user):
+    return {
+        "id": int(row_value(user, "id", 0) or 0),
+        "name": row_value(user, "name", "") or "",
+        "username": row_value(user, "username", "") or "",
+        "email": row_value(user, "email", "") or "",
+        "role": row_value(user, "role", ROLE_USER) or ROLE_USER,
+        "bio": row_value(user, "bio", "") or "",
+        "created_at": format_timestamp(row_value(user, "created_at")),
+        "is_banned": is_ban_active(user),
+        "banned_reason": row_value(user, "banned_reason"),
+        "banned_until": format_timestamp(parse_datetime_value(row_value(user, "banned_until"))),
+        "permissions": serialize_user_permissions(user)
+    }
+
+
+def fetch_admin_user_list(conn, query="", limit=100):
+    normalized_query = collapse_spaces(query)
+    sql = """
+        SELECT
+            id,
+            name,
+            username,
+            email,
+            bio,
+            role,
+            is_banned,
+            banned_reason,
+            banned_until,
+            can_send_messages,
+            can_upload_files,
+            can_create_groups,
+            created_at
+        FROM users
+    """
+    params = []
+    if normalized_query:
+        like_query = f"%{normalized_query}%"
+        sql += """
+            WHERE username LIKE %s
+               OR name LIKE %s
+               OR email LIKE %s
+        """
+        params.extend([like_query, like_query, like_query])
+        if normalized_query.isdigit():
+            sql += " OR id = %s"
+            params.append(int(normalized_query))
+    sql += " ORDER BY created_at DESC LIMIT %s"
+    params.append(max(1, min(int(limit or 100), 200)))
+    rows = conn.execute(sql, params).fetchall()
+    return [serialize_admin_user(row) for row in rows]
+
+
+def ensure_admin_access():
+    user = getattr(g, "current_user", None)
+    if not user:
+        return jsonify({"message": "Не авторизован"}), 401
+    if not is_admin_user(user):
+        return jsonify({"message": "Недостаточно прав"}), 403
+    return None
+
+
+def ensure_system_owner_access():
+    user = getattr(g, "current_user", None)
+    if not user:
+        return jsonify({"message": "Не авторизован"}), 401
+    if not is_system_owner_user(user):
+        return jsonify({"message": "Недостаточно прав"}), 403
+    return None
+
+
+def get_moderation_target(conn, target_user_id):
+    return conn.execute("""
+        SELECT
+            id,
+            name,
+            username,
+            email,
+            bio,
+            role,
+            is_banned,
+            banned_reason,
+            banned_until,
+            can_send_messages,
+            can_upload_files,
+            can_create_groups,
+            created_at
+        FROM users
+        WHERE id = %s
+        LIMIT 1
+    """, (target_user_id,)).fetchone()
+
+
+def validate_moderation_target(actor_user, target_user):
+    if not target_user:
+        raise LookupError("Пользователь не найден")
+    if is_system_owner_user(target_user):
+        raise PermissionError("Нельзя изменять system_owner")
+    if int(row_value(actor_user, "id", 0) or 0) == int(row_value(target_user, "id", 0) or 0):
+        raise PermissionError("Нельзя изменять собственный аккаунт")
+
+
 def current_user_id():
+    if getattr(g, "current_user", None):
+        current_id = int(row_value(g.current_user, "id", 0) or 0)
+        return current_id or None
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
@@ -977,6 +1485,22 @@ def is_user_online(user_id):
     if not user_id:
         return False
     return int(user_id) in get_online_user_ids()
+
+
+def disconnect_user_sockets(user_id):
+    target_user_id = int(user_id or 0)
+    if not target_user_id:
+        return
+    active_session_ids = [
+        session_id
+        for session_id, session_user_id in list(socket_sessions.items())
+        if int(session_user_id or 0) == target_user_id
+    ]
+    for session_id in active_session_ids:
+        try:
+            socketio.server.disconnect(session_id, namespace="/")
+        except Exception:
+            socket_sessions.pop(session_id, None)
 
 
 def get_user_last_seen(user_id):
@@ -1019,9 +1543,14 @@ def serialize_user_profile(user):
         "name": user["name"],
         "username": user["username"],
         "email": user["email"],
+        "role": row_value(user, "role", ROLE_USER) or ROLE_USER,
         "bio": user["bio"],
         "date_of_birth": format_date_value(row_value(user, "date_of_birth")),
         "login_alerts_enabled": bool(row_value(user, "login_alerts_enabled", True)),
+        "is_banned": is_ban_active(user),
+        "banned_reason": row_value(user, "banned_reason"),
+        "banned_until": format_timestamp(parse_datetime_value(row_value(user, "banned_until"))),
+        "permissions": serialize_user_permissions(user),
         "is_online": False if hide_presence else is_user_online(user["id"]),
         "last_seen": None if hide_presence else format_timestamp(get_user_last_seen(user["id"])),
         "hide_presence": hide_presence
@@ -1055,6 +1584,10 @@ def serialize_user_badges(user):
     badges = []
     if str(row_value(user, "username", "")).lower() == SYSTEM_USERNAME:
         badges.append("SYSTEM")
+    if row_value(user, "role", ROLE_USER) == ROLE_SYSTEM_OWNER:
+        badges.append("OWNER")
+    elif row_value(user, "role", ROLE_USER) == ROLE_ADMIN:
+        badges.append("ADMIN")
     if row_value(user, "is_dev", False):
         badges.append("DEV")
     if row_value(user, "is_staff", False):
@@ -1188,6 +1721,156 @@ def fetch_user_panel_payload(conn, viewer_user_id, target_user_id):
             ON ct.owner_user_id = %s AND ct.contact_user_id = u.id
         WHERE u.id = %s
     """, (viewer_user_id, viewer_user_id, viewer_user_id, viewer_user_id, target_user_id)).fetchone()
+
+
+def serialize_sticker_payload_row(row):
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "pack_id": int(row["pack_id"]),
+        "title": row_value(row, "title", "") or "",
+        "url": row["file_path"],
+        "mime_type": row_value(row, "mime_type", "") or "image/png",
+        "position": int(row_value(row, "position", 0) or 0)
+    }
+
+
+def serialize_sticker_pack_payload(pack, stickers):
+    return {
+        "id": int(pack["id"]),
+        "owner_user_id": int(pack["owner_user_id"]) if row_value(pack, "owner_user_id") is not None else None,
+        "title": pack["title"],
+        "description": row_value(pack, "description"),
+        "cover_path": row_value(pack, "cover_path"),
+        "visibility": normalize_pack_visibility(row_value(pack, "visibility", "private")),
+        "is_default": bool(row_value(pack, "is_default", False)),
+        "is_owned": bool(row_value(pack, "is_owned", False)),
+        "is_added": bool(row_value(pack, "is_added", False)),
+        "stickers": stickers
+    }
+
+
+def fetch_sticker_for_user(conn, user_id, sticker_id):
+    return conn.execute("""
+        SELECT
+            s.id,
+            s.pack_id,
+            s.title,
+            s.file_path,
+            s.mime_type,
+            s.position,
+            p.owner_user_id,
+            p.visibility,
+            p.is_default
+        FROM stickers s
+        JOIN sticker_packs p ON p.id = s.pack_id
+        WHERE s.id = %s
+          AND (
+              p.is_default = 1
+              OR p.owner_user_id = %s
+              OR p.visibility = 'public'
+              OR EXISTS (
+                  SELECT 1
+                  FROM user_sticker_packs usp
+                  WHERE usp.user_id = %s AND usp.pack_id = p.id
+              )
+          )
+        LIMIT 1
+    """, (sticker_id, user_id, user_id)).fetchone()
+
+
+def get_owned_sticker_pack(conn, user_id, pack_id):
+    return conn.execute("""
+        SELECT id, owner_user_id, title, description, cover_path, visibility, is_default
+        FROM sticker_packs
+        WHERE id = %s AND owner_user_id = %s
+        LIMIT 1
+    """, (pack_id, user_id)).fetchone()
+
+
+def count_pack_stickers(conn, pack_id):
+    row = conn.execute("""
+        SELECT COUNT(*) AS total
+        FROM stickers
+        WHERE pack_id = %s
+    """, (pack_id,)).fetchone()
+    return int(row["total"] if row else 0)
+
+
+def fetch_sticker_library_payload(conn, user_id):
+    pack_rows = conn.execute("""
+        SELECT
+            p.id,
+            p.owner_user_id,
+            p.title,
+            p.description,
+            p.cover_path,
+            p.visibility,
+            p.is_default,
+            (p.owner_user_id = %s) AS is_owned,
+            EXISTS (
+                SELECT 1
+                FROM user_sticker_packs usp
+                WHERE usp.user_id = %s AND usp.pack_id = p.id
+            ) AS is_added
+        FROM sticker_packs p
+        WHERE p.is_default = 1
+           OR p.owner_user_id = %s
+           OR p.visibility = 'public'
+           OR EXISTS (
+                SELECT 1
+                FROM user_sticker_packs usp
+                WHERE usp.user_id = %s AND usp.pack_id = p.id
+           )
+        ORDER BY
+            p.is_default DESC,
+            (p.owner_user_id = %s) DESC,
+            p.created_at ASC,
+            p.id ASC
+    """, (user_id, user_id, user_id, user_id, user_id)).fetchall()
+
+    if not pack_rows:
+        return {
+            "default_packs": [],
+            "my_packs": [],
+            "added_packs": [],
+            "public_packs": []
+        }
+
+    pack_ids = [row["id"] for row in pack_rows]
+    stickers = conn.execute(f"""
+        SELECT id, pack_id, title, file_path, mime_type, position
+        FROM stickers
+        WHERE pack_id IN ({", ".join(["%s"] * len(pack_ids))})
+        ORDER BY pack_id ASC, position ASC, id ASC
+    """, tuple(pack_ids)).fetchall()
+    stickers_by_pack = {}
+    for sticker_row in stickers:
+        stickers_by_pack.setdefault(int(sticker_row["pack_id"]), []).append(serialize_sticker_payload_row(sticker_row))
+
+    default_packs = []
+    my_packs = []
+    added_packs = []
+    public_packs = []
+
+    for pack in pack_rows:
+        payload = serialize_sticker_pack_payload(pack, stickers_by_pack.get(int(pack["id"]), []))
+        if payload["is_default"]:
+            default_packs.append(payload)
+        elif payload["is_owned"]:
+            my_packs.append(payload)
+        elif payload["is_added"]:
+            added_packs.append(payload)
+        else:
+            public_packs.append(payload)
+
+    return {
+        "default_packs": default_packs,
+        "my_packs": my_packs,
+        "added_packs": added_packs,
+        "public_packs": public_packs
+    }
 
 
 def can_manage_group_admins(conn, user_id, group_id):
@@ -1608,6 +2291,7 @@ def serialize_direct_message(message):
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "image": serialize_message_image(message),
+        "sticker": serialize_message_sticker(message),
         "created_at": format_timestamp(message["created_at"]),
         "is_read": bool(message["read_at"]),
         "is_edited": bool(message["edited_at"])
@@ -1626,6 +2310,7 @@ def serialize_group_message(message):
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "image": serialize_message_image(message),
+        "sticker": serialize_message_sticker(message),
         "message_type": message["message_type"] or "text",
         "created_at": format_timestamp(message["created_at"]),
         "is_edited": bool(message["edited_at"])
@@ -1726,6 +2411,10 @@ def get_direct_message_for_chat(conn, chat_id, message_id):
             m.audio_url,
             m.audio_mime_type,
             m.audio_duration_ms,
+            m.image_url,
+            m.image_mime_type,
+            m.sticker_id,
+            m.sticker_asset_path,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -1763,6 +2452,8 @@ def get_group_message_for_group(conn, group_id, message_id):
             gm.audio_duration_ms,
             gm.image_url,
             gm.image_mime_type,
+            gm.sticker_id,
+            gm.sticker_asset_path,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1913,6 +2604,8 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             gm.audio_duration_ms,
             gm.image_url,
             gm.image_mime_type,
+            gm.sticker_id,
+            gm.sticker_asset_path,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -1960,6 +2653,8 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
             m.audio_duration_ms,
             m.image_url,
             m.image_mime_type,
+            m.sticker_id,
+            m.sticker_asset_path,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -2003,6 +2698,8 @@ def search_group_messages(conn, group_id, user_id, query, limit):
             gm.audio_duration_ms,
             gm.image_url,
             gm.image_mime_type,
+            gm.sticker_id,
+            gm.sticker_asset_path,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -2044,6 +2741,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.audio_duration_ms,
             m.image_url,
             m.image_mime_type,
+            m.sticker_id,
+            m.sticker_asset_path,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -2083,6 +2782,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.audio_duration_ms,
             m.image_url,
             m.image_mime_type,
+            m.sticker_id,
+            m.sticker_asset_path,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -2121,6 +2822,8 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
             m.audio_duration_ms,
             m.image_url,
             m.image_mime_type,
+            m.sticker_id,
+            m.sticker_asset_path,
             m.created_at,
             m.read_at,
             m.edited_at
@@ -2194,6 +2897,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.audio_duration_ms,
             gm.image_url,
             gm.image_mime_type,
+            gm.sticker_id,
+            gm.sticker_asset_path,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -2232,6 +2937,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.audio_duration_ms,
             gm.image_url,
             gm.image_mime_type,
+            gm.sticker_id,
+            gm.sticker_asset_path,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -2269,6 +2976,8 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             gm.audio_duration_ms,
             gm.image_url,
             gm.image_mime_type,
+            gm.sticker_id,
+            gm.sticker_asset_path,
             gm.created_at,
             gm.edited_at
         FROM group_messages gm
@@ -2321,7 +3030,7 @@ def get_user_display_name(user):
     return user["name"] or user["username"] or "Пользователь"
 
 
-def create_direct_message_record(conn, chat_id, sender_id, text, message_type="text", audio=None, image=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
+def create_direct_message_record(conn, chat_id, sender_id, text, message_type="text", audio=None, image=None, sticker=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
     preview = extract_message_preview(text) if message_type == "text" else None
     reply_preview = build_reply_preview_payload(reply_to_message)
     forwarded_payload = forwarded_from or {}
@@ -2348,9 +3057,11 @@ def create_direct_message_record(conn, chat_id, sender_id, text, message_type="t
             audio_mime_type,
             audio_duration_ms,
             image_url,
-            image_mime_type
+            image_mime_type,
+            sticker_id,
+            sticker_asset_path
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         chat_id,
         sender_id,
@@ -2371,12 +3082,14 @@ def create_direct_message_record(conn, chat_id, sender_id, text, message_type="t
         audio["mime_type"] if audio else None,
         parse_duration_ms(audio.get("duration_ms")) if audio else None,
         image["url"] if image else None,
-        image["mime_type"] if image else None
+        image["mime_type"] if image else None,
+        sticker["id"] if sticker else None,
+        sticker["url"] if sticker else None
     ))
     return get_direct_message_for_chat(conn, chat_id, cur.lastrowid)
 
 
-def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, image=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
+def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, image=None, sticker=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
     preview = extract_message_preview(text) if message_type == "text" else None
     reply_preview = build_reply_preview_payload(reply_to_message)
     forwarded_payload = forwarded_from or {}
@@ -2403,9 +3116,11 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             audio_mime_type,
             audio_duration_ms,
             image_url,
-            image_mime_type
+            image_mime_type,
+            sticker_id,
+            sticker_asset_path
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         group_id,
         sender_id,
@@ -2426,7 +3141,9 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
         audio["mime_type"] if audio else None,
         parse_duration_ms(audio.get("duration_ms")) if audio else None,
         image["url"] if image else None,
-        image["mime_type"] if image else None
+        image["mime_type"] if image else None,
+        sticker["id"] if sticker else None,
+        sticker["url"] if sticker else None
     ))
     return get_group_message_for_group(conn, group_id, cur.lastrowid)
 
@@ -2452,7 +3169,7 @@ def build_forward_message_data(message):
     message_type = row_value(message, "message_type", "text") or "text"
     if message_type == "system":
         raise ValueError("Системные сообщения нельзя пересылать")
-    if message_type not in {"text", "voice", "photo"}:
+    if message_type not in {"text", "voice", "photo", "sticker"}:
         raise ValueError("Этот тип сообщения пока нельзя пересылать")
 
     return {
@@ -2460,6 +3177,7 @@ def build_forward_message_data(message):
         "message_type": message_type,
         "audio": clone_forwarded_audio(message) if message_type == "voice" else None,
         "image": clone_forwarded_image(message) if message_type == "photo" else None,
+        "sticker": clone_forwarded_sticker(message) if message_type == "sticker" else None,
         "forwarded_from": build_forwarded_from_payload(message)
     }
 
@@ -2521,6 +3239,7 @@ def forward_message_to_target(conn, sender_id, target_chat_type, target_chat_id,
             message_data["message_type"],
             audio=message_data["audio"],
             image=message_data["image"],
+            sticker=message_data["sticker"],
             forwarded_from=message_data["forwarded_from"]
         )
         conn.commit()
@@ -2544,6 +3263,7 @@ def forward_message_to_target(conn, sender_id, target_chat_type, target_chat_id,
         message_data["message_type"],
         audio=message_data["audio"],
         image=message_data["image"],
+        sticker=message_data["sticker"],
         forwarded_from=message_data["forwarded_from"]
     )
     conn.commit()
@@ -2614,6 +3334,14 @@ def handle_connect(auth):
         token = auth.get("token")
 
     user_id = user_id_from_token(token)
+    if user_id:
+        conn = get_db()
+        try:
+            user = fetch_user_auth_state(conn, user_id)
+        finally:
+            conn.close()
+        if not user or is_ban_active(user):
+            return False
     was_online = is_user_online(user_id)
     socket_sessions[request.sid] = user_id
     if user_id:
@@ -2791,6 +3519,20 @@ def graph_page():
     )
 
 
+@app.get("/stickers")
+def stickers_page():
+    return render_template(
+        "stickers.html",
+        title="Мои стикеры | /Chatik",
+        body_class="page-shell stickers-page",
+        data_chat_type=None,
+        sidebar_action_mode="back",
+        sidebar_back_href="/",
+        sidebar_back_label="Chats",
+        sidebar_back_icon="←",
+    )
+
+
 @app.get("/chat/<int:chat_id>")
 def direct_chat_page(chat_id):
     return render_template(
@@ -2850,6 +3592,20 @@ def profile_page():
 @app.get("/create-group")
 def create_group_page():
     return send_from_directory(".", "create_group.html")
+
+
+@app.get("/admin")
+def admin_page():
+    return render_template(
+        "admin.html",
+        title="Admin | /Chatik",
+        body_class="page-shell chats-page",
+        data_chat_type=None,
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
 
 
 @app.get("/login")
@@ -2916,6 +3672,11 @@ def legacy_create_group_page():
     return redirect("/create-group", code=302)
 
 
+@app.get("/admin.html")
+def legacy_admin_page():
+    return redirect("/admin", code=302)
+
+
 @app.get("/login.html")
 def legacy_login_page():
     return redirect("/login", code=302)
@@ -2961,7 +3722,7 @@ def register():
 
     if not name or not username or not password:
         return jsonify({"message": "Заполните имя, username и пароль"}), 400
-    if username.lower() == SYSTEM_USERNAME:
+    if username.lower() in {SYSTEM_USERNAME.lower(), SYSTEM_OWNER_USERNAME.lower()}:
         return jsonify({"message": "Этот username зарезервирован"}), 400
 
     conn = get_db()
@@ -2971,9 +3732,9 @@ def register():
         password_hash = generate_password_hash(password)
 
         cur.execute("""
-            INSERT INTO users (name, username, email, password_hash)
-            VALUES (%s, %s, %s, %s)
-        """, (name, username, email, password_hash))
+            INSERT INTO users (name, username, email, password_hash, role)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (name, username, email, password_hash, ROLE_USER))
 
         conn.commit()
         user_id = cur.lastrowid
@@ -2998,8 +3759,17 @@ def register():
             "name": name,
             "username": username,
             "email": email,
+            "role": ROLE_USER,
             "bio": "",
-            "date_of_birth": None
+            "date_of_birth": None,
+            "permissions": {
+                "can_send_messages": True,
+                "can_upload_files": True,
+                "can_create_groups": True
+            },
+            "is_banned": False,
+            "banned_reason": None,
+            "banned_until": None
         }
     })
 
@@ -3021,6 +3791,8 @@ def login():
 
     if not user or not check_password_hash(user["password_hash"], password):
         return jsonify({"message": "Неверный логин или пароль"}), 401
+    if is_ban_active(user):
+        return jsonify({"message": "Аккаунт заблокирован"}), 403
 
     token = secrets.token_hex(32)
     persist_token(token, user["id"])
@@ -3045,7 +3817,9 @@ def get_me():
 
     conn = get_db()
     user = conn.execute("""
-        SELECT id, name, username, email, bio, date_of_birth, login_alerts_enabled
+        SELECT id, name, username, email, role, bio, date_of_birth, login_alerts_enabled,
+               is_banned, banned_reason, banned_until,
+               can_send_messages, can_upload_files, can_create_groups
         FROM users
         WHERE id = %s
     """, (user_id,)).fetchone()
@@ -3160,6 +3934,8 @@ def update_me():
 
     if "username" in updates and not updates["username"]:
         return jsonify({"message": "Username не может быть пустым"}), 400
+    if "username" in updates and updates["username"].lower() in {SYSTEM_USERNAME.lower(), SYSTEM_OWNER_USERNAME.lower()}:
+        return jsonify({"message": "Этот username зарезервирован"}), 400
 
     conn = get_db()
 
@@ -3184,13 +3960,225 @@ def update_me():
     conn.commit()
 
     user = conn.execute("""
-        SELECT id, name, username, email, bio, date_of_birth, login_alerts_enabled
+        SELECT id, name, username, email, role, bio, date_of_birth, login_alerts_enabled,
+               is_banned, banned_reason, banned_until,
+               can_send_messages, can_upload_files, can_create_groups
         FROM users
         WHERE id = %s
     """, (user_id,)).fetchone()
     conn.close()
 
     return jsonify(serialize_user_profile(user))
+
+
+@app.get("/admin/users")
+def get_admin_users():
+    access_error = ensure_admin_access()
+    if access_error:
+        return access_error
+
+    conn = get_db()
+    try:
+        return jsonify({
+            "items": fetch_admin_user_list(conn, "", parse_limit_arg(default=80, maximum=200))
+        })
+    finally:
+        conn.close()
+
+
+@app.get("/admin/settings")
+def get_admin_settings():
+    access_error = ensure_system_owner_access()
+    if access_error:
+        return access_error
+
+    return jsonify({
+        "global_file_uploads_enabled": is_global_file_uploads_enabled(),
+        "global_stickers_enabled": is_global_stickers_enabled()
+    })
+
+
+@app.patch("/admin/settings")
+def update_admin_settings():
+    access_error = ensure_system_owner_access()
+    if access_error:
+        return access_error
+
+    actor_user = getattr(g, "current_user", None) or {}
+    data = request.json or {}
+    if "global_file_uploads_enabled" not in data and "global_stickers_enabled" not in data:
+        return jsonify({"message": "Нужен хотя бы один runtime-флаг"}), 400
+
+    reason = collapse_spaces(data.get("reason", ""))
+    conn = get_db()
+    try:
+        details = {}
+        if "global_file_uploads_enabled" in data:
+            details["global_file_uploads_enabled"] = bool(data.get("global_file_uploads_enabled"))
+            write_runtime_setting(conn, GLOBAL_FILES_SETTING_KEY, "1" if details["global_file_uploads_enabled"] else "0")
+        if "global_stickers_enabled" in data:
+            details["global_stickers_enabled"] = bool(data.get("global_stickers_enabled"))
+            write_runtime_setting(conn, GLOBAL_STICKERS_SETTING_KEY, "1" if details["global_stickers_enabled"] else "0")
+        append_admin_audit_log(
+            conn,
+            actor_user["id"],
+            actor_user["id"],
+            "runtime_settings_update",
+            reason,
+            details=details
+        )
+        conn.commit()
+        return jsonify({
+            "global_file_uploads_enabled": is_global_file_uploads_enabled(),
+            "global_stickers_enabled": is_global_stickers_enabled()
+        })
+    finally:
+        conn.close()
+
+
+@app.get("/admin/users/search")
+def search_admin_users():
+    access_error = ensure_admin_access()
+    if access_error:
+        return access_error
+
+    query = request.args.get("query", "") or request.args.get("q", "")
+    conn = get_db()
+    try:
+        return jsonify({
+            "items": fetch_admin_user_list(conn, query, parse_limit_arg(default=40, maximum=200)),
+            "query": collapse_spaces(query)
+        })
+    finally:
+        conn.close()
+
+
+@app.patch("/admin/users/<int:target_user_id>/permissions")
+def update_admin_user_permissions(target_user_id):
+    access_error = ensure_system_owner_access()
+    if access_error:
+        return access_error
+
+    actor_user = getattr(g, "current_user", None) or {}
+    data = request.json or {}
+    updates = {}
+    for field in ("can_send_messages", "can_upload_files", "can_create_groups"):
+        if field in data:
+            updates[field] = 1 if bool(data.get(field)) else 0
+
+    if not updates:
+        return jsonify({"message": "Нет данных для обновления"}), 400
+
+    reason = collapse_spaces(data.get("reason", ""))
+    conn = get_db()
+    try:
+        target_user = get_moderation_target(conn, target_user_id)
+        validate_moderation_target(actor_user, target_user)
+        assignments = ", ".join(f"{field} = %s" for field in updates.keys())
+        conn.execute(f"""
+            UPDATE users
+            SET {assignments}
+            WHERE id = %s
+        """, [*updates.values(), target_user_id])
+        append_admin_audit_log(
+            conn,
+            actor_user["id"],
+            target_user_id,
+            "permissions_update",
+            reason,
+            details={key: bool(value) for key, value in updates.items()}
+        )
+        conn.commit()
+        updated_user = get_moderation_target(conn, target_user_id)
+        return jsonify(serialize_admin_user(updated_user))
+    except LookupError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 404
+    except PermissionError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 403
+    finally:
+        conn.close()
+
+
+@app.post("/admin/users/<int:target_user_id>/ban")
+def ban_admin_user(target_user_id):
+    access_error = ensure_admin_access()
+    if access_error:
+        return access_error
+
+    actor_user = getattr(g, "current_user", None) or {}
+    data = request.json or {}
+    reason = collapse_spaces(data.get("reason", ""))
+    banned_until = parse_datetime_value(data.get("banned_until"))
+
+    conn = get_db()
+    try:
+        target_user = get_moderation_target(conn, target_user_id)
+        validate_moderation_target(actor_user, target_user)
+        conn.execute("""
+            UPDATE users
+            SET is_banned = 1,
+                banned_reason = %s,
+                banned_until = %s
+            WHERE id = %s
+        """, (
+            reason or None,
+            banned_until.astimezone(timezone.utc).replace(tzinfo=None) if banned_until else None,
+            target_user_id
+        ))
+        conn.execute("DELETE FROM auth_tokens WHERE user_id = %s", (target_user_id,))
+        append_admin_audit_log(
+            conn,
+            actor_user["id"],
+            target_user_id,
+            "ban_user",
+            reason,
+            details={"banned_until": format_timestamp(banned_until)}
+        )
+        conn.commit()
+        disconnect_user_sockets(target_user_id)
+        return jsonify(serialize_admin_user(get_moderation_target(conn, target_user_id)))
+    except LookupError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 404
+    except PermissionError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 403
+    finally:
+        conn.close()
+
+
+@app.post("/admin/users/<int:target_user_id>/unban")
+def unban_admin_user(target_user_id):
+    access_error = ensure_admin_access()
+    if access_error:
+        return access_error
+
+    actor_user = getattr(g, "current_user", None) or {}
+    reason = collapse_spaces((request.json or {}).get("reason", ""))
+    conn = get_db()
+    try:
+        target_user = get_moderation_target(conn, target_user_id)
+        validate_moderation_target(actor_user, target_user)
+        conn.execute("""
+            UPDATE users
+            SET is_banned = 0,
+                banned_reason = NULL,
+                banned_until = NULL
+            WHERE id = %s
+        """, (target_user_id,))
+        append_admin_audit_log(conn, actor_user["id"], target_user_id, "unban_user", reason, details={})
+        conn.commit()
+        return jsonify(serialize_admin_user(get_moderation_target(conn, target_user_id)))
+    except LookupError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 404
+    except PermissionError as error:
+        conn.rollback()
+        return jsonify({"message": str(error)}), 403
+    finally:
+        conn.close()
 
 
 @app.get("/users/search")
@@ -3447,6 +4435,290 @@ def get_user(target_user_id):
         return jsonify({"message": "Пользователь не найден"}), 404
 
     return jsonify(serialize_user_panel_payload(user))
+
+
+@app.get("/sticker-library")
+def get_sticker_library():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        library = fetch_sticker_library_payload(conn, user_id)
+        library.update({
+            "limits": {
+                "max_pack_stickers": 120,
+                "max_file_bytes": MAX_STICKER_FILE_BYTES,
+                "allowed_mime_types": sorted(STICKER_EXTENSIONS_BY_MIME.keys())
+            }
+        })
+        return jsonify(library)
+    finally:
+        conn.close()
+
+
+@app.post("/sticker-packs")
+def create_sticker_pack():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    title = str(data.get("title", "") or "").strip()
+    description = str(data.get("description", "") or "").strip()
+    visibility = normalize_pack_visibility(data.get("visibility"))
+
+    if not title:
+        return jsonify({"message": "Название пака обязательно"}), 400
+    if len(title) > 120:
+        return jsonify({"message": "Название пака слишком длинное"}), 400
+    if len(description) > 255:
+        return jsonify({"message": "Описание пака слишком длинное"}), 400
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO sticker_packs (
+                owner_user_id,
+                title,
+                description,
+                cover_path,
+                visibility,
+                is_default
+            )
+            VALUES (%s, %s, %s, NULL, %s, 0)
+        """, (user_id, title, description or None, visibility))
+        conn.commit()
+        pack = get_owned_sticker_pack(conn, user_id, cur.lastrowid)
+        return jsonify(serialize_sticker_pack_payload(pack, [])), 201
+    finally:
+        conn.close()
+
+
+@app.patch("/sticker-packs/<int:pack_id>")
+def update_sticker_pack(pack_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    updates = {}
+
+    if "title" in data:
+        title = str(data.get("title", "") or "").strip()
+        if not title:
+            return jsonify({"message": "Название пака обязательно"}), 400
+        if len(title) > 120:
+            return jsonify({"message": "Название пака слишком длинное"}), 400
+        updates["title"] = title
+
+    if "description" in data:
+        description = str(data.get("description", "") or "").strip()
+        if len(description) > 255:
+            return jsonify({"message": "Описание пака слишком длинное"}), 400
+        updates["description"] = description or None
+
+    if "visibility" in data:
+        updates["visibility"] = normalize_pack_visibility(data.get("visibility"))
+
+    if not updates:
+        return jsonify({"message": "Нет данных для обновления"}), 400
+
+    conn = get_db()
+    try:
+        pack = get_owned_sticker_pack(conn, user_id, pack_id)
+        if not pack or pack["is_default"]:
+            return jsonify({"message": "Пак не найден"}), 404
+
+        assignments = ", ".join(f"{field} = %s" for field in updates.keys())
+        conn.execute(f"""
+            UPDATE sticker_packs
+            SET {assignments}
+            WHERE id = %s
+        """, [*updates.values(), pack_id])
+        conn.commit()
+
+        refreshed_pack = get_owned_sticker_pack(conn, user_id, pack_id)
+        stickers = conn.execute("""
+            SELECT id, pack_id, title, file_path, mime_type, position
+            FROM stickers
+            WHERE pack_id = %s
+            ORDER BY position ASC, id ASC
+        """, (pack_id,)).fetchall()
+        return jsonify(serialize_sticker_pack_payload(
+            {**dict(refreshed_pack), "is_owned": True, "is_added": False},
+            [serialize_sticker_payload_row(row) for row in stickers]
+        ))
+    finally:
+        conn.close()
+
+
+@app.delete("/sticker-packs/<int:pack_id>")
+def delete_sticker_pack(pack_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        pack = get_owned_sticker_pack(conn, user_id, pack_id)
+        if not pack or pack["is_default"]:
+            return jsonify({"message": "Пак не найден"}), 404
+
+        conn.execute("DELETE FROM user_sticker_packs WHERE pack_id = %s", (pack_id,))
+        conn.execute("DELETE FROM stickers WHERE pack_id = %s", (pack_id,))
+        conn.execute("DELETE FROM sticker_packs WHERE id = %s", (pack_id,))
+        conn.commit()
+        return jsonify({"ok": True, "deleted_pack_id": pack_id})
+    finally:
+        conn.close()
+
+
+@app.post("/sticker-packs/<int:pack_id>/stickers")
+def upload_pack_sticker(pack_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+    try:
+        ensure_global_file_uploads_enabled()
+        require_permission_to_upload_files(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
+
+    conn = get_db()
+    try:
+        pack = get_owned_sticker_pack(conn, user_id, pack_id)
+        if not pack or pack["is_default"]:
+            return jsonify({"message": "Пак не найден"}), 404
+        if count_pack_stickers(conn, pack_id) >= 120:
+            return jsonify({"message": "В паке может быть максимум 120 стикеров"}), 400
+
+        try:
+            sticker_file = save_sticker_upload(request.files.get("sticker"))
+        except ValueError as error:
+            return jsonify({"message": str(error)}), 400
+
+        title = str(request.form.get("title", "") or "").strip()[:120] or None
+        next_position = count_pack_stickers(conn, pack_id)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO stickers (
+                pack_id,
+                title,
+                file_path,
+                mime_type,
+                position
+            )
+            VALUES (%s, %s, %s, %s, %s)
+        """, (pack_id, title, sticker_file["url"], sticker_file["mime_type"], next_position))
+
+        if not row_value(pack, "cover_path"):
+            conn.execute("""
+                UPDATE sticker_packs
+                SET cover_path = %s
+                WHERE id = %s
+            """, (sticker_file["url"], pack_id))
+
+        conn.commit()
+        row = conn.execute("""
+            SELECT id, pack_id, title, file_path, mime_type, position
+            FROM stickers
+            WHERE id = %s
+        """, (cur.lastrowid,)).fetchone()
+        return jsonify(serialize_sticker_payload_row(row)), 201
+    finally:
+        conn.close()
+
+
+@app.delete("/sticker-packs/<int:pack_id>/stickers/<int:sticker_id>")
+def delete_pack_sticker(pack_id, sticker_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        pack = get_owned_sticker_pack(conn, user_id, pack_id)
+        if not pack or pack["is_default"]:
+            return jsonify({"message": "Пак не найден"}), 404
+
+        sticker = conn.execute("""
+            SELECT id, file_path
+            FROM stickers
+            WHERE id = %s AND pack_id = %s
+            LIMIT 1
+        """, (sticker_id, pack_id)).fetchone()
+        if not sticker:
+            return jsonify({"message": "Стикер не найден"}), 404
+
+        conn.execute("DELETE FROM stickers WHERE id = %s", (sticker_id,))
+        remaining = conn.execute("""
+            SELECT id, file_path
+            FROM stickers
+            WHERE pack_id = %s
+            ORDER BY position ASC, id ASC
+            LIMIT 1
+        """, (pack_id,)).fetchone()
+        conn.execute("""
+            UPDATE sticker_packs
+            SET cover_path = %s
+            WHERE id = %s AND cover_path = %s
+        """, (row_value(remaining, "file_path"), pack_id, sticker["file_path"]))
+        conn.commit()
+        return jsonify({"ok": True, "deleted_sticker_id": sticker_id})
+    finally:
+        conn.close()
+
+
+@app.post("/sticker-packs/<int:pack_id>/subscribe")
+def subscribe_sticker_pack(pack_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        pack = conn.execute("""
+            SELECT id, owner_user_id, visibility, is_default
+            FROM sticker_packs
+            WHERE id = %s
+            LIMIT 1
+        """, (pack_id,)).fetchone()
+        if not pack:
+            return jsonify({"message": "Пак не найден"}), 404
+        if pack["owner_user_id"] == user_id or pack["is_default"]:
+            return jsonify({"ok": True, "pack_id": pack_id})
+        if normalize_pack_visibility(pack["visibility"]) != "public":
+            return jsonify({"message": "Пак недоступен"}), 403
+
+        conn.execute("""
+            INSERT OR IGNORE INTO user_sticker_packs (user_id, pack_id)
+            VALUES (%s, %s)
+        """, (user_id, pack_id))
+        conn.commit()
+        return jsonify({"ok": True, "pack_id": pack_id})
+    finally:
+        conn.close()
+
+
+@app.delete("/sticker-packs/<int:pack_id>/subscribe")
+def unsubscribe_sticker_pack(pack_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        conn.execute("""
+            DELETE FROM user_sticker_packs
+            WHERE user_id = %s AND pack_id = %s
+        """, (user_id, pack_id))
+        conn.commit()
+        return jsonify({"ok": True, "pack_id": pack_id})
+    finally:
+        conn.close()
 
 
 @app.post("/users/<int:target_user_id>/mute")
@@ -4022,6 +5294,10 @@ def create_chat_message(chat_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     data = request.json or {}
     text = data.get("text", "").strip()
@@ -4044,85 +5320,23 @@ def create_chat_message(chat_id):
         conn.close()
         return jsonify({"message": str(error)}), 403
 
-    member_ids = get_direct_chat_member_ids(conn, chat_id)
-    preview = extract_message_preview(text)
     reply_to_message = None
     if reply_to_id is not None:
         reply_to_message = get_direct_reply_target(conn, chat_id, reply_to_id)
         if not reply_to_message:
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
-    reply_preview = build_reply_preview_payload(reply_to_message)
-
-    cur = conn.cursor()
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
-    cur.execute("""
-        INSERT INTO messages (
-            chat_id,
-            sender_id,
-            text,
-            message_type,
-            reply_to_message_id,
-            reply_preview_text,
-            reply_preview_sender_name,
-            reply_preview_message_type,
-            preview_url,
-            preview_title,
-            preview_description,
-            preview_site_name,
-            audio_url,
-            audio_mime_type,
-            audio_duration_ms
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (
+    message = create_direct_message_record(
+        conn,
         chat_id,
         user_id,
         text,
         "text",
-        reply_preview["reply_to_message_id"] if reply_preview else None,
-        reply_preview["reply_preview_text"] if reply_preview else None,
-        reply_preview["reply_preview_sender_name"] if reply_preview else None,
-        reply_preview["reply_preview_message_type"] if reply_preview else None,
-        preview["url"] if preview else None,
-        preview["title"][:255] if preview else None,
-        preview["description"][:500] if preview else None,
-        preview["site_name"][:255] if preview else None,
-        None,
-        None,
-        None
-    ))
+        reply_to_message=reply_to_message
+    )
     conn.commit()
-
-    message = conn.execute("""
-        SELECT
-            m.id,
-            m.sender_id,
-            u.name AS sender_name,
-            m.text,
-            m.message_type,
-            m.reply_to_message_id,
-            m.reply_preview_text,
-            m.reply_preview_sender_name,
-            m.reply_preview_message_type,
-            m.forwarded_from_user_id,
-            m.forwarded_from_sender_name,
-            m.forwarded_dialog_payload,
-            m.preview_url,
-            m.preview_title,
-            m.preview_description,
-            m.preview_site_name,
-            m.audio_url,
-            m.audio_mime_type,
-            m.audio_duration_ms,
-            m.created_at,
-            m.read_at,
-            m.edited_at
-        FROM messages m
-        JOIN users u ON u.id = m.sender_id
-        WHERE m.id = %s
-    """, (cur.lastrowid,)).fetchone()
-
+    member_ids = get_direct_chat_member_ids(conn, chat_id)
     message_data = serialize_direct_message(message)
     emit_inbox_message_for_users(member_ids, {
         **message_data,
@@ -4143,6 +5357,13 @@ def create_chat_voice_message(chat_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        current_user = getattr(g, "current_user", None) or {}
+        ensure_global_file_uploads_enabled()
+        require_permission_to_send_messages(current_user)
+        require_permission_to_upload_files(current_user)
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     conn = get_db()
     chat = can_access_direct_chat(conn, user_id, chat_id)
@@ -4165,80 +5386,99 @@ def create_chat_voice_message(chat_id):
 
     duration_ms = parse_duration_ms(request.form.get("duration_ms"))
     reply_to_id = request.form.get("reply_to_id")
-    member_ids = get_direct_chat_member_ids(conn, chat_id)
     reply_to_message = None
     if reply_to_id is not None and str(reply_to_id).strip():
         reply_to_message = get_direct_reply_target(conn, chat_id, reply_to_id)
         if not reply_to_message:
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
-    reply_preview = build_reply_preview_payload(reply_to_message)
-
-    cur = conn.cursor()
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
-    cur.execute("""
-        INSERT INTO messages (
-            chat_id,
-            sender_id,
-            text,
-            message_type,
-            reply_to_message_id,
-            reply_preview_text,
-            reply_preview_sender_name,
-            reply_preview_message_type,
-            preview_url,
-            preview_title,
-            preview_description,
-            preview_site_name,
-            audio_url,
-            audio_mime_type,
-            audio_duration_ms
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, NULL, %s, %s, %s)
-    """, (
+    message = create_direct_message_record(
+        conn,
         chat_id,
         user_id,
         "",
         "voice",
-        reply_preview["reply_to_message_id"] if reply_preview else None,
-        reply_preview["reply_preview_text"] if reply_preview else None,
-        reply_preview["reply_preview_sender_name"] if reply_preview else None,
-        reply_preview["reply_preview_message_type"] if reply_preview else None,
-        audio["url"],
-        audio["mime_type"],
-        duration_ms
-    ))
+        audio={
+            "url": audio["url"],
+            "mime_type": audio["mime_type"],
+            "duration_ms": duration_ms
+        },
+        reply_to_message=reply_to_message
+    )
     conn.commit()
+    member_ids = get_direct_chat_member_ids(conn, chat_id)
+    message_data = serialize_direct_message(message)
+    emit_inbox_message_for_users(member_ids, {
+        **message_data,
+        "chat_type": "direct",
+        "chat_id": int(chat_id),
+        "thread_title": message["sender_name"] or "Чат"
+    }, exclude_user_id=user_id)
+    conn.close()
+    socketio.emit("new_message", message_data, room=f"direct_{chat_id}")
+    emit_chat_list_updated_for_users(member_ids, "direct", chat_id)
+    return jsonify(message_data), 201
 
-    message = conn.execute("""
-        SELECT
-            m.id,
-            m.sender_id,
-            u.name AS sender_name,
-            m.text,
-            m.message_type,
-            m.reply_to_message_id,
-            m.reply_preview_text,
-            m.reply_preview_sender_name,
-            m.reply_preview_message_type,
-            m.forwarded_from_user_id,
-            m.forwarded_from_sender_name,
-            m.forwarded_dialog_payload,
-            m.preview_url,
-            m.preview_title,
-            m.preview_description,
-            m.preview_site_name,
-            m.audio_url,
-            m.audio_mime_type,
-            m.audio_duration_ms,
-            m.created_at,
-            m.read_at,
-            m.edited_at
-        FROM messages m
-        JOIN users u ON u.id = m.sender_id
-        WHERE m.id = %s
-    """, (cur.lastrowid,)).fetchone()
 
+@app.post("/chats/<int:chat_id>/sticker")
+def create_chat_sticker_message(chat_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+    try:
+        ensure_global_stickers_enabled()
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
+
+    data = request.json or {}
+    try:
+        sticker_id = int(data.get("sticker_id"))
+    except (TypeError, ValueError):
+        return jsonify({"message": "Некорректный sticker_id"}), 400
+
+    conn = get_db()
+    chat = can_access_direct_chat(conn, user_id, chat_id)
+    if not chat:
+        conn.close()
+        return jsonify({"message": "Чат не найден"}), 404
+
+    recipient_user_id = get_direct_chat_recipient_id(conn, chat_id, user_id)
+    try:
+        ensure_direct_target_is_writable(conn, user_id, recipient_user_id)
+    except PermissionError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 403
+
+    sticker = fetch_sticker_for_user(conn, user_id, sticker_id)
+    if not sticker:
+        conn.close()
+        return jsonify({"message": "Стикер недоступен"}), 404
+
+    reply_to_id = data.get("reply_to_id")
+    reply_to_message = None
+    if reply_to_id is not None:
+        reply_to_message = get_direct_reply_target(conn, chat_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+
+    conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
+    message = create_direct_message_record(
+        conn,
+        chat_id,
+        user_id,
+        "",
+        "sticker",
+        sticker={
+            "id": int(sticker["id"]),
+            "url": sticker["file_path"]
+        },
+        reply_to_message=reply_to_message
+    )
+    conn.commit()
+    member_ids = get_direct_chat_member_ids(conn, chat_id)
     message_data = serialize_direct_message(message)
     emit_inbox_message_for_users(member_ids, {
         **message_data,
@@ -4257,6 +5497,13 @@ def create_chat_photo_message(chat_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        current_user = getattr(g, "current_user", None) or {}
+        ensure_global_file_uploads_enabled()
+        require_permission_to_send_messages(current_user)
+        require_permission_to_upload_files(current_user)
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     conn = get_db()
     chat = can_access_direct_chat(conn, user_id, chat_id)
@@ -4314,6 +5561,10 @@ def forward_chat_message(chat_id, message_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     data = request.json or {}
     target_chat_type = "group" if str(data.get("target_chat_type", "direct")).strip().lower() == "group" else "direct"
@@ -4353,6 +5604,10 @@ def forward_chat_messages_as_dialog(chat_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     message_ids, error = parse_message_ids_payload()
     if error:
@@ -4480,6 +5735,10 @@ def update_chat_message(chat_id, message_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     data = request.json or {}
     text = data.get("text", "").strip()
@@ -4661,6 +5920,10 @@ def create_group():
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_create_groups(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     data = request.json or {}
     title = data.get("title", "").strip()
@@ -5545,6 +6808,10 @@ def create_group_message(group_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     conn = get_db()
     member = can_access_group(conn, user_id, group_id)
@@ -5586,6 +6853,13 @@ def create_group_voice_message(group_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        current_user = getattr(g, "current_user", None) or {}
+        ensure_global_file_uploads_enabled()
+        require_permission_to_send_messages(current_user)
+        require_permission_to_upload_files(current_user)
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     conn = get_db()
     member = can_access_group(conn, user_id, group_id)
@@ -5633,6 +6907,13 @@ def create_group_photo_message(group_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        current_user = getattr(g, "current_user", None) or {}
+        ensure_global_file_uploads_enabled()
+        require_permission_to_send_messages(current_user)
+        require_permission_to_upload_files(current_user)
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     conn = get_db()
     member = can_access_group(conn, user_id, group_id)
@@ -5674,11 +6955,70 @@ def create_group_photo_message(group_id):
     return jsonify(serialize_group_message(message)), 201
 
 
+@app.post("/groups/<int:group_id>/sticker")
+def create_group_sticker_message(group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+    try:
+        ensure_global_stickers_enabled()
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
+
+    data = request.json or {}
+    try:
+        sticker_id = int(data.get("sticker_id"))
+    except (TypeError, ValueError):
+        return jsonify({"message": "Некорректный sticker_id"}), 400
+
+    conn = get_db()
+    member = can_access_group(conn, user_id, group_id)
+    if not member:
+        conn.close()
+        return jsonify({"message": "Группа не найдена"}), 404
+
+    sticker = fetch_sticker_for_user(conn, user_id, sticker_id)
+    if not sticker:
+        conn.close()
+        return jsonify({"message": "Стикер недоступен"}), 404
+
+    reply_to_id = data.get("reply_to_id")
+    reply_to_message = None
+    if reply_to_id is not None:
+        reply_to_message = get_group_reply_target(conn, group_id, reply_to_id)
+        if not reply_to_message:
+            conn.close()
+            return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+
+    message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        "",
+        "sticker",
+        sticker={
+            "id": int(sticker["id"]),
+            "url": sticker["file_path"]
+        },
+        reply_to_message=reply_to_message
+    )
+    conn.commit()
+    conn.close()
+
+    emit_group_new_message(message, group_id)
+    return jsonify(serialize_group_message(message)), 201
+
+
 @app.post("/groups/<int:group_id>/messages/<int:message_id>/forward")
 def forward_group_message(group_id, message_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     data = request.json or {}
     target_chat_type = "group" if str(data.get("target_chat_type", "direct")).strip().lower() == "group" else "direct"
@@ -5718,6 +7058,10 @@ def forward_group_messages_as_dialog(group_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     message_ids, error = parse_message_ids_payload()
     if error:
@@ -5769,6 +7113,10 @@ def update_group_message(group_id, message_id):
     user_id = current_user_id()
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
+    try:
+        require_permission_to_send_messages(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
 
     data = request.json or {}
     text = data.get("text", "").strip()

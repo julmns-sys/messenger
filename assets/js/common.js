@@ -205,6 +205,9 @@ function getChatListPreviewText(lastMessage) {
   if (messageType === "photo") {
     return "Фотография";
   }
+  if (messageType === "sticker") {
+    return "Стикер";
+  }
   if (messageType === "system") {
     return lastMessage.text || "Системное сообщение";
   }
@@ -874,7 +877,7 @@ function getIncomingNotificationBody(payload = {}, settings = getLiveNotificatio
   const messageType = String(payload.message_type || "text");
   const fallbackLabel = messageType === "voice"
     ? "Голосовое сообщение"
-    : (messageType === "photo" ? "Фотография" : "Новое сообщение");
+    : (messageType === "photo" ? "Фотография" : (messageType === "sticker" ? "Стикер" : "Новое сообщение"));
   if (!settings.notificationTextPreview) {
     return fallbackLabel;
   }
@@ -884,6 +887,9 @@ function getIncomingNotificationBody(payload = {}, settings = getLiveNotificatio
   }
   if (messageType === "photo") {
     return "Фотография";
+  }
+  if (messageType === "sticker") {
+    return "Стикер";
   }
 
   const text = String(payload.text || "").trim();
@@ -1319,6 +1325,10 @@ function openUserRelationConfirmModal(options = {}) {
 function fillUserBadge(targetId = "currentUserBadge") {
   const target = document.getElementById(targetId);
   const user = getCurrentUser();
+  const adminLink = document.getElementById("sidebarAdminLink");
+  if (adminLink) {
+    adminLink.hidden = user?.role !== "system_owner";
+  }
   if (!target || !user) return;
   target.textContent = user.username ? `@${user.username}` : user.name || "User";
 }

@@ -165,6 +165,28 @@ function renderPhotoMessageBody(message = {}, pending = false) {
   `;
 }
 
+function getMessageStickerData(message = {}) {
+  const sticker = message?.sticker;
+  if (!sticker?.url) {
+    return null;
+  }
+  return {
+    id: sticker.id || null,
+    url: sticker.url
+  };
+}
+
+function renderStickerMessageBody(message = {}, pending = false) {
+  const sticker = getMessageStickerData(message);
+  const stickerUrl = escapeHtml(sticker?.url || "");
+  return `
+    <div class="sticker-message${pending ? " pending" : ""}">
+      <img class="sticker-message-image" src="${stickerUrl}" alt="Стикер" loading="lazy">
+      ${pending ? '<span class="sticker-message-status">Отправляем стикер...</span>' : ""}
+    </div>
+  `;
+}
+
 const COMPOSER_ACTION_ICONS = {
   idle: "/assets/icons/ui/Mic.svg",
   save: "/assets/icons/ui/Check_fill.svg",
@@ -447,6 +469,9 @@ function getReplyPreviewText(reply = {}) {
   if (messageType === "photo") {
     return "Фотография";
   }
+  if (messageType === "sticker") {
+    return "Стикер";
+  }
   if (messageType === "system") {
     return String(reply?.text || "").trim() || "Системное сообщение";
   }
@@ -507,6 +532,9 @@ function getForwardedDialogItemText(item = {}) {
   }
   if (messageType === "photo") {
     return "Фотография";
+  }
+  if (messageType === "sticker") {
+    return "Стикер";
   }
   return String(item?.text || "").trim() || "Сообщение";
 }
@@ -589,6 +617,7 @@ function renderMessageItem(message, currentUserId, chatType) {
   const isSystem = (message.message_type || "text") === "system";
   const isVoice = (message.message_type || "text") === "voice";
   const isPhoto = (message.message_type || "text") === "photo";
+  const isSticker = (message.message_type || "text") === "sticker";
   const isForwardedDialog = (message.message_type || "text") === "forwarded_dialog";
   const own = !isSystem && String(message.sender_id) === String(currentUserId);
   const messageClasses = ["message"];
@@ -624,7 +653,7 @@ function renderMessageItem(message, currentUserId, chatType) {
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
       ${renderMessageForwardedMeta(message.forwarded_from)}
       ${renderMessageReplyPreview(message.reply)}
-      ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : isPhoto ? renderPhotoMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
+      ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : isPhoto ? renderPhotoMessageBody(message) : isSticker ? renderStickerMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
       <p class="message-text">${renderMessageText(message.text || "")}</p>`}
       <div class="message-meta">
         ${renderEditedIndicator(message)}
@@ -659,6 +688,23 @@ function renderPendingMessageItem(text, chatType, options = {}) {
       <article class="message own pending${directClass}" data-pending-message="true" data-message-type="photo" data-own="true">
         ${renderPhotoMessageBody({
           image: { url: options.previewUrl || "" }
+        }, true)}
+        <div class="message-meta">
+          <span class="message-status-indicator" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+        </div>
+      </article>
+    `;
+  }
+
+  if (options.type === "sticker") {
+    return `
+      <article class="message own pending${directClass}" data-pending-message="true" data-message-type="sticker" data-own="true">
+        ${renderStickerMessageBody({
+          sticker: { url: options.previewUrl || "" }
         }, true)}
         <div class="message-meta">
           <span class="message-status-indicator" aria-hidden="true">
@@ -1403,6 +1449,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const sendButton = composer?.querySelector('button[type="submit"]');
   const photoMessageButton = document.getElementById("photoMessageButton");
   const photoMessageInput = document.getElementById("photoMessageInput");
+  const stickerPickerButton = document.getElementById("stickerPickerButton");
+  const stickerPickerPopup = document.getElementById("stickerPickerPopup");
+  const stickerPackTabs = document.getElementById("stickerPackTabs");
+  const stickerGrid = document.getElementById("stickerGrid");
+  const stickerPickerStatus = document.getElementById("stickerPickerStatus");
   const COMPOSER_MAX_HEIGHT = 144;
   const messageActionMenu = buildMessageActionMenu();
   const editBanner = buildEditBanner();
@@ -1443,6 +1494,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   let swipeReplyTracking = false;
   let threadMemberTouchTimer = null;
   let activeThreadMemberItem = null;
+  let stickerLibraryState = null;
+  let activeStickerPackId = "";
+  let isLoadingStickerLibrary = false;
   let threadMemberContacts = [];
   let filteredThreadMemberCandidates = [];
   let isSubmittingThreadMembers = false;
@@ -1495,7 +1549,116 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (photoMessageButton) {
       photoMessageButton.disabled = isBusy;
     }
+    if (stickerPickerButton) {
+      stickerPickerButton.disabled = isBusy;
+    }
     updateComposerActionButton();
+  }
+
+  function hideStickerPicker() {
+    if (!stickerPickerPopup || stickerPickerPopup.hidden) {
+      return;
+    }
+    stickerPickerPopup.hidden = true;
+    stickerPickerButton?.setAttribute("aria-expanded", "false");
+  }
+
+  function setStickerPickerStatus(message = "", type = "") {
+    if (!stickerPickerStatus) {
+      return;
+    }
+    stickerPickerStatus.textContent = message;
+    stickerPickerStatus.className = `sticker-picker-status ${type}`.trim();
+  }
+
+  function flattenStickerPacks(library = {}) {
+    return [
+      ...(Array.isArray(library.default_packs) ? library.default_packs : []),
+      ...(Array.isArray(library.my_packs) ? library.my_packs : []),
+      ...(Array.isArray(library.added_packs) ? library.added_packs : [])
+    ];
+  }
+
+  function renderStickerPicker() {
+    if (!stickerPackTabs || !stickerGrid) {
+      return;
+    }
+
+    const packs = flattenStickerPacks(stickerLibraryState);
+    if (!packs.length) {
+      stickerPackTabs.innerHTML = "";
+      stickerGrid.innerHTML = '<div class="sticker-picker-empty">Стикеров пока нет</div>';
+      return;
+    }
+
+    const activePack = packs.find((pack) => String(pack.id) === String(activeStickerPackId)) || packs[0];
+    activeStickerPackId = String(activePack.id);
+
+    stickerPackTabs.innerHTML = packs.map((pack) => `
+      <button
+        class="sticker-pack-tab${String(pack.id) === activeStickerPackId ? " is-active" : ""}"
+        type="button"
+        data-sticker-pack-id="${escapeHtml(String(pack.id))}"
+      >
+        ${escapeHtml(pack.title || "Pack")}
+      </button>
+    `).join("");
+
+    const stickers = Array.isArray(activePack.stickers) ? activePack.stickers : [];
+    stickerGrid.innerHTML = stickers.length
+      ? stickers.map((sticker) => `
+          <button
+            class="sticker-grid-item"
+            type="button"
+            data-sticker-id="${escapeHtml(String(sticker.id || ""))}"
+            data-sticker-url="${escapeHtml(String(sticker.url || ""))}"
+            aria-label="Отправить стикер"
+          >
+            <img class="sticker-grid-image" src="${escapeHtml(String(sticker.url || ""))}" alt="${escapeHtml(sticker.title || "Стикер")}" loading="lazy">
+          </button>
+        `).join("")
+      : '<div class="sticker-picker-empty">В этом паке пока нет стикеров</div>';
+  }
+
+  async function loadStickerLibrary(force = false) {
+    if (isLoadingStickerLibrary || (stickerLibraryState && !force)) {
+      return stickerLibraryState;
+    }
+
+    isLoadingStickerLibrary = true;
+    setStickerPickerStatus("Загрузка стикеров...", "loading");
+    try {
+      stickerLibraryState = await apiFetch("/sticker-library");
+      const packs = flattenStickerPacks(stickerLibraryState);
+      activeStickerPackId = packs.length ? String(packs[0].id || "") : "";
+      renderStickerPicker();
+      setStickerPickerStatus("", "");
+      return stickerLibraryState;
+    } catch (error) {
+      setStickerPickerStatus(error.message, "error");
+      throw error;
+    } finally {
+      isLoadingStickerLibrary = false;
+    }
+  }
+
+  async function showStickerPicker() {
+    if (!stickerPickerPopup) {
+      return;
+    }
+
+    if (stickerPickerPopup.hidden) {
+      stickerPickerPopup.hidden = false;
+      stickerPickerButton?.setAttribute("aria-expanded", "true");
+      try {
+        await loadStickerLibrary();
+      } catch {
+        // keep popup open with error state
+      }
+      return;
+    }
+
+    hideStickerPicker();
   }
 
   function resizeComposerInput() {
@@ -1730,6 +1893,73 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (photoMessageInput) {
         photoMessageInput.value = "";
       }
+    }
+  }
+
+  async function sendStickerMessage(sticker) {
+    const stickerId = Number(sticker?.id || 0);
+    const previewUrl = String(sticker?.url || "").trim();
+    if (!stickerId || !previewUrl) {
+      return;
+    }
+
+    const shouldStickToBottom = isNearBottom(messagesNode);
+    const pendingMessageNode = appendPendingMessage(messagesNode, "", chatType, {
+      type: "sticker",
+      previewUrl
+    });
+    pendingMessageState = { text: "", node: pendingMessageNode, type: "sticker" };
+    setComposerBusyState(true);
+    hideStickerPicker();
+    if (shouldStickToBottom) {
+      scrollMessagesToBottom(messagesNode);
+    }
+    updateScrollDownButton(messagesNode, scrollDownButton);
+    status.textContent = "";
+    status.className = "status thread-status";
+
+    try {
+      const hadChatId = Boolean(chatId);
+      if (!hadChatId && chatType !== "group") {
+        await createDirectChatOnFirstMessage();
+      }
+
+      const path = chatType === "group" ? `/groups/${chatId}/sticker` : `/chats/${chatId}/sticker`;
+      const sentMessage = await apiFetch(path, {
+        method: "POST",
+        body: JSON.stringify({
+          sticker_id: stickerId,
+          reply_to_id: replyMessageState?.messageId || null
+        })
+      });
+
+      removePendingMessage(pendingMessageNode);
+      pendingMessageState = null;
+      appendMessage(messagesNode, sentMessage, currentUser.id, chatType);
+      syncMessageSelectionState(sentMessage.id);
+      if (shouldStickToBottom) {
+        scrollMessagesToBottom(messagesNode);
+      }
+
+      if (!hadChatId && chatType !== "group") {
+        await loadChats("chatList", { showLoading: false });
+        await loadThread();
+        await markCurrentChatAsRead();
+        connectRealtime();
+      }
+      setReplyMessageState(null);
+      status.textContent = "";
+      status.className = "status thread-status";
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = "status error";
+    } finally {
+      if (pendingMessageState?.node === pendingMessageNode) {
+        removePendingMessage(pendingMessageNode);
+        pendingMessageState = null;
+      }
+      setComposerBusyState(false);
+      updateScrollDownButton(messagesNode, scrollDownButton);
     }
   }
 
@@ -4330,6 +4560,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (isSendingMessage || isRecordingVoice) {
       return;
     }
+    hideStickerPicker();
     photoMessageInput?.click();
   });
 
@@ -4339,6 +4570,41 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
     void sendPhotoMessage(file);
+  });
+
+  stickerPickerButton?.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isSendingMessage || isRecordingVoice) {
+      return;
+    }
+    await showStickerPicker();
+  });
+
+  stickerPackTabs?.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-sticker-pack-id]");
+    if (!tab) {
+      return;
+    }
+    activeStickerPackId = String(tab.dataset.stickerPackId || "");
+    renderStickerPicker();
+  });
+
+  stickerGrid?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-sticker-id]");
+    if (!button) {
+      return;
+    }
+    const stickerId = Number(button.dataset.stickerId || "0");
+    const stickerUrl = String(button.dataset.stickerUrl || "");
+    if (!stickerId || !stickerUrl) {
+      return;
+    }
+    void sendStickerMessage({ id: stickerId, url: stickerUrl });
+  });
+
+  stickerPickerPopup?.addEventListener("click", (event) => {
+    event.stopPropagation();
   });
 
   sendButton?.addEventListener("click", async (event) => {
@@ -4362,6 +4628,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   messagesNode.addEventListener("scroll", () => {
     hideMessageMenu();
+    hideStickerPicker();
     if (messagesNode.scrollTop <= TOP_LOAD_THRESHOLD) {
       loadOlderMessages();
     }
@@ -4915,6 +5182,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   updateComposerActionButton();
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && stickerPickerPopup && !stickerPickerPopup.hidden) {
+      hideStickerPicker();
+      return;
+    }
     if (event.key === "Escape" && isMobileThreadSearchOpen) {
       closeMobileThreadSearchMode();
       return;
@@ -4933,6 +5204,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       closeThreadGroupEditModal();
       setThreadInfoOpen(false);
     }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!stickerPickerPopup || stickerPickerPopup.hidden) {
+      return;
+    }
+    if (event.target.closest("#stickerPickerPopup") || event.target.closest("#stickerPickerButton")) {
+      return;
+    }
+    hideStickerPicker();
   });
 
   document.addEventListener("click", (event) => {
