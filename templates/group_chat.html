@@ -5,7 +5,7 @@
     <header class="content-header">
       <div class="thread-header">
         <div class="thread-header-side">
-          <a class="icon-button thread-back" href="/" aria-label="Back">←</a>
+          <a class="icon-button thread-back" href="/" aria-label="Back"></a>
         </div>
         <div class="thread-header-main">
           <div class="thread-header-title-row">
@@ -25,18 +25,18 @@
         <div class="thread-mobile-search-bar">
           <button class="icon-button page-back thread-mobile-search-close" id="threadMobileSearchClose" type="button" aria-label="Закрыть поиск"></button>
           <input class="search-input thread-mobile-search-input" id="threadMobileSearchInput" type="search" placeholder="Поиск в сообщениях">
-          <button class="icon-button thread-mobile-search-clear" id="threadMobileSearchClear" type="button" aria-label="Очистить поиск">×</button>
+          <button class="icon-button thread-mobile-search-clear" id="threadMobileSearchClear" type="button" aria-label="Очистить поиск"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
         </div>
         <div class="status thread-info-search-status thread-mobile-search-status" id="threadMobileSearchStatus"></div>
         <div class="thread-info-search-results thread-mobile-search-results" id="threadMobileSearchResults"></div>
       </div>
       <div class="messages" id="messages"></div>
-      <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down">↓</button>
+      <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down"><img class="icon-asset" src="/assets/icons/ui/Arrow_down.svg" alt=""></button>
       <div class="composer-wrap">
         <form class="composer" id="messageForm">
-          <button class="composer-voice-button" id="voiceRecordButton" type="button" aria-label="Записать голосовое сообщение" title="Записать голосовое">🎙</button>
+          <button class="composer-voice-button" id="voiceRecordButton" type="button" aria-label="Записать голосовое сообщение" title="Записать голосовое"><img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt=""></button>
           <textarea class="textarea" id="messageInput" placeholder="Сообщение в группу..." required></textarea>
-          <button class="send-button" type="submit">➤</button>
+          <button class="send-button" type="submit" aria-label="Отправить">➤</button>
         </form>
         <div id="messageStatus" class="status thread-status"></div>
       </div>
@@ -49,10 +49,10 @@
         </div>
         <div class="thread-info-panel-actions">
           <button class="icon-button mobile-only thread-mobile-search-trigger" id="threadMobileSearchTrigger" type="button" aria-label="Поиск по сообщениям">
-            <span class="icon-symbol">⌕</span>
+            <img class="icon-asset" src="/assets/icons/ui/Search.svg" alt="">
           </button>
-          <button class="icon-button thread-info-menu-trigger" id="threadInfoMenuTrigger" type="button" aria-label="Действия группы" aria-haspopup="menu" aria-expanded="false" hidden>⋯</button>
-          <button class="icon-button" id="threadInfoClose" type="button" aria-label="Закрыть">×</button>
+          <button class="icon-button thread-info-menu-trigger" id="threadInfoMenuTrigger" type="button" aria-label="Действия группы" aria-haspopup="menu" aria-expanded="false" hidden><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
+          <button class="icon-button" id="threadInfoClose" type="button" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
         </div>
         <div class="thread-info-action-menu" id="threadInfoActionMenu" hidden>
           <button type="button" data-thread-info-action="edit-group">Редактировать группу</button>
@@ -112,10 +112,10 @@
                 <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer"></a>
                 <div class="thread-info-invite-actions">
                   <button class="button button-secondary thread-info-invite-button" id="threadInfoInviteCopy" type="button" aria-label="Скопировать ссылку" title="Скопировать ссылку">
-                    <span class="icon-symbol">⎘</span>
+                    <img class="icon-asset" src="/assets/icons/ui/Copy.svg" alt="">
                   </button>
                   <button class="button thread-info-invite-button" id="threadInfoInviteRegenerate" type="button" aria-label="Обновить ссылку" title="Обновить ссылку">
-                    <span class="icon-symbol">↻</span>
+                    <img class="icon-asset" src="/assets/icons/ui/Refresh.svg" alt="">
                   </button>
                 </div>
                 <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
@@ -125,7 +125,7 @@
           <div class="thread-info-members" id="threadInfoMembersWrap">
             <div class="thread-info-members-header">
               <h4>Участники</h4>
-              <button class="icon-button thread-member-add-trigger" id="threadMemberAddTrigger" type="button" aria-label="Добавить участников" hidden>+</button>
+              <button class="icon-button thread-member-add-trigger" id="threadMemberAddTrigger" type="button" aria-label="Добавить участников" hidden><img class="icon-asset" src="/assets/icons/ui/Add_round.svg" alt=""></button>
             </div>
             <div class="member-list thread-info-members-list" id="threadInfoMembersList"></div>
           </div>
@@ -136,7 +136,7 @@
       <div class="thread-member-modal-card" role="dialog" aria-modal="true" aria-labelledby="threadMemberAddTitle">
         <div class="thread-member-modal-header">
           <h3 class="thread-member-modal-title" id="threadMemberAddTitle">Добавить участников</h3>
-          <button class="icon-button thread-member-modal-close" id="threadMemberAddClose" type="button" aria-label="Закрыть">×</button>
+          <button class="icon-button thread-member-modal-close" id="threadMemberAddClose" type="button" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
         </div>
         <input class="search-input thread-member-add-input" id="threadMemberAddInput" type="text" placeholder="Поиск пользователей и контактов">
         <div class="status thread-member-add-status" id="threadMemberAddStatus"></div>
@@ -149,7 +149,7 @@
       <div class="thread-group-edit-card" role="dialog" aria-modal="true" aria-labelledby="threadGroupEditTitle">
         <div class="thread-group-edit-header">
           <h3 class="thread-group-edit-title" id="threadGroupEditTitle">Редактировать группу</h3>
-          <button class="icon-button thread-group-edit-close" type="button" data-group-edit-close="true" aria-label="Закрыть">×</button>
+          <button class="icon-button thread-group-edit-close" type="button" data-group-edit-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
         </div>
         <form class="thread-group-edit-form" id="threadGroupEditForm">
           <label class="label" for="threadGroupEditTitleInput">Название группы</label>

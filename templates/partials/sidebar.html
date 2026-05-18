@@ -10,9 +10,9 @@
           {% if sidebar_action_mode == "back" %}
             <a class="icon-button" href="{{ sidebar_back_href }}" aria-label="{{ sidebar_back_label }}">{{ sidebar_back_icon }}</a>
           {% else %}
-            <a class="icon-button" href="/search" aria-label="Search">@</a>
-            <a class="icon-button" href="/graph" aria-label="Граф общения">◎</a>
-            <button class="icon-button" type="button" data-quick-actions-trigger="true" aria-label="Быстрые действия" aria-haspopup="menu" aria-expanded="false">+</button>
+            <a class="icon-button" href="/search" aria-label="Search"><img class="icon-asset" src="/assets/icons/ui/Search.svg" alt=""></a>
+            <a class="icon-button" href="/graph" aria-label="Граф общения"><img class="icon-asset" src="/assets/icons/ui/Bubble.svg" alt=""></a>
+            <button class="icon-button" type="button" data-quick-actions-trigger="true" aria-label="Быстрые действия" aria-haspopup="menu" aria-expanded="false"><img class="icon-asset" src="/assets/icons/ui/Add_round.svg" alt=""></button>
           {% endif %}
         </div>
       </div>
@@ -35,7 +35,7 @@
       </div>
       <div class="sidebar-profile-body">
         <div class="sidebar-profile-card">
-          <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false">⋯</button>
+          <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false"><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
           <div class="sidebar-profile-menu" id="sidebarProfileMenu" hidden>
             <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button">Изменить профиль</button>
             <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button">Выйти из аккаунта</button>
@@ -48,39 +48,44 @@
               <span class="sidebar-profile-label">Имя</span>
               <div class="sidebar-profile-line">
                 <strong id="sidebarProfileNameField">Не указано</strong>
-                <button class="sidebar-profile-edit" type="button" data-profile-edit="name" aria-label="Изменить имя">✎</button>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="name" aria-label="Изменить имя"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
               </div>
             </div>
             <div class="sidebar-profile-fact">
               <span class="sidebar-profile-label">Email</span>
               <div class="sidebar-profile-line">
                 <button class="sidebar-profile-secret is-blurred" id="sidebarProfileEmail" type="button" aria-label="Показать email" aria-pressed="false">Не указана</button>
-                <button class="sidebar-profile-edit" type="button" data-profile-edit="email" aria-label="Изменить email">✎</button>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="email" aria-label="Изменить email"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
               </div>
             </div>
             <div class="sidebar-profile-fact">
               <span class="sidebar-profile-label">Username</span>
               <div class="sidebar-profile-line">
                 <strong id="sidebarProfileHandle">@username</strong>
-                <button class="sidebar-profile-edit" type="button" data-profile-edit="username" aria-label="Изменить username">✎</button>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="username" aria-label="Изменить username"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
               </div>
             </div>
             <div class="sidebar-profile-fact">
               <span class="sidebar-profile-label">Bio</span>
               <div class="sidebar-profile-line">
                 <strong id="sidebarProfileBio">Не указана</strong>
-                <button class="sidebar-profile-edit" type="button" data-profile-edit="bio" aria-label="Изменить bio">✎</button>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="bio" aria-label="Изменить bio"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
               </div>
             </div>
           </div>
         </div>
 
         <div class="sidebar-profile-actions">
-          <div class="sidebar-profile-actions-header">
-            <h3>Настройки</h3>
-            <p class="muted">Откройте отдельную панель в sidebar.</p>
-          </div>
-          <button class="button settings-launch-button" id="sidebarSettingsOpen" type="button">Открыть настройки</button>
+          <button class="settings-launch-tile" id="sidebarSettingsOpen" type="button" aria-label="Открыть настройки">
+            <span class="settings-launch-tile-icon" aria-hidden="true">
+              <img src="/assets/icons/app/settings.svg" alt="">
+            </span>
+            <span class="settings-launch-tile-copy">
+              <strong>Настройки</strong>
+              <span>Откройте отдельную панель в sidebar.</span>
+            </span>
+            <span class="settings-launch-tile-arrow" aria-hidden="true"></span>
+          </button>
         </div>
       </div>
     </div>

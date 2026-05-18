@@ -6,9 +6,9 @@ const searchState = {
   activeProfile: null
 };
 
-function renderActionButtonContent(icon, text) {
+function renderActionButtonContent(iconPath, text) {
   return `
-    <span class="result-action-icon" aria-hidden="true">${icon}</span>
+    <span class="result-action-icon" aria-hidden="true"><img class="icon-asset" src="${escapeHtml(iconPath)}" alt=""></span>
     <span class="result-action-text">${escapeHtml(text)}</span>
   `;
 }
@@ -129,10 +129,10 @@ function renderContacts(contacts) {
         </div>
         <div class="result-actions">
           <a class="button button-secondary result-action-button" href="${getDirectChatHref(user)}" aria-label="Открыть">
-            ${renderActionButtonContent("↗", "Открыть")}
+            ${renderActionButtonContent("/assets/icons/ui/Out.svg", "Открыть")}
           </a>
           <button class="button button-secondary result-action-button result-remove-button" type="button" data-contact-action="remove" data-contact-id="${escapeHtml(String(user.id))}" aria-label="Удалить">
-            ${renderActionButtonContent("⌫", "Удалить")}
+            ${renderActionButtonContent("/assets/icons/ui/Trash_line.svg", "Удалить")}
           </button>
         </div>
       </article>
@@ -171,7 +171,7 @@ function renderResults(results) {
           </div>
           <div class="result-actions">
             <a class="button button-secondary result-action-button" href="${getDirectChatHref(user)}" aria-label="Открыть">
-              ${renderActionButtonContent("↗", "Открыть")}
+              ${renderActionButtonContent("/assets/icons/ui/Out.svg", "Открыть")}
             </a>
             <button
               class="button button-secondary result-action-button ${isContact ? "result-remove-button" : ""}"
@@ -179,7 +179,7 @@ function renderResults(results) {
               data-contact-action="${isContact ? "remove" : "add"}"
               data-contact-id="${escapeHtml(String(user.id))}"
               aria-label="${isContact ? "Убрать из контактов" : "Добавить в контакты"}"
-            >${renderActionButtonContent(isContact ? "⌫" : "+", isContact ? "Убрать" : "В контакты")}</button>
+            >${renderActionButtonContent(isContact ? "/assets/icons/ui/Trash_line.svg" : "/assets/icons/ui/Add_round.svg", isContact ? "Убрать" : "В контакты")}</button>
           </div>
         </article>
       `;

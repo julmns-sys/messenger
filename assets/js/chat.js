@@ -888,7 +888,7 @@ function buildForwardModal() {
           <h3 class="forward-modal-title" id="forwardModalTitle">Переслать сообщение</h3>
           <p class="forward-modal-subtitle">Выберите чат, куда отправить сообщение</p>
         </div>
-        <button type="button" class="icon-button" data-forward-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="icon-button" data-forward-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <input type="search" class="search-input forward-modal-search" placeholder="Поиск по чатам" data-forward-search>
       <div class="status forward-modal-status" data-forward-status></div>
@@ -1171,7 +1171,7 @@ function fillThreadInfoPanel(info, chatType) {
               </div>
               <p class="result-username">@${escapeHtml(member.username || "")}</p>
             </div>
-            ${member.can_manage ? '<button type="button" class="thread-member-menu-hint" data-member-menu-trigger="true" aria-label="Действия с участником">⋯</button>' : ""}
+            ${member.can_manage ? '<button type="button" class="thread-member-menu-hint" data-member-menu-trigger="true" aria-label="Действия с участником"><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>' : ""}
           </article>
         `).join("")
         : '<div class="empty-state">Участников пока нет</div>';
@@ -1452,7 +1452,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     voiceRecordButton.style.setProperty("--voice-record-scale", isRecordingVoice ? "1" : "0");
     voiceRecordButton.setAttribute("aria-label", isRecordingVoice ? "Остановить запись голосового сообщения" : "Записать голосовое сообщение");
     voiceRecordButton.setAttribute("title", isRecordingVoice ? "Остановить запись" : "Записать голосовое");
-    voiceRecordButton.textContent = isRecordingVoice ? "■" : "🎙";
+    voiceRecordButton.innerHTML = isRecordingVoice
+      ? '<img class="icon-asset" src="/assets/icons/ui/Stop_fill.svg" alt="">'
+      : '<img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt="">';
     if (sendButton) {
       sendButton.disabled = isSendingMessage || isRecordingVoice;
     }

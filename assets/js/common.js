@@ -1055,7 +1055,7 @@ function renderUserProfilePanel(user = {}, options = {}) {
         aria-label="Действия профиля"
         aria-haspopup="menu"
         aria-expanded="false"
-      >⋯</button>
+      ><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
       <div class="sidebar-profile-menu user-profile-action-menu" data-user-profile-menu hidden>
         <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="copy-username" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
           Скопировать username
@@ -1160,7 +1160,7 @@ function buildProfileLogoutModal() {
     <div class="profile-logout-card" role="dialog" aria-modal="true" aria-labelledby="profileLogoutTitle">
       <div class="profile-logout-header">
         <h3 id="profileLogoutTitle">Выйти из аккаунта?</h3>
-        <button type="button" class="profile-logout-close" data-profile-logout-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="profile-logout-close" data-profile-logout-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <div class="profile-logout-body">
         <div class="profile-logout-actions">
@@ -1227,7 +1227,7 @@ function buildUserRelationConfirmModal() {
     <div class="profile-logout-card" role="dialog" aria-modal="true" aria-labelledby="userRelationConfirmTitle">
       <div class="profile-logout-header">
         <h3 id="userRelationConfirmTitle">Подтвердите действие</h3>
-        <button type="button" class="profile-logout-close" data-user-relation-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="profile-logout-close" data-user-relation-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <div class="profile-logout-body">
         <p class="profile-logout-copy" id="userRelationConfirmBody"></p>
@@ -2295,7 +2295,7 @@ function buildChatTagEditorModal() {
     <div class="chat-tag-editor-card" role="dialog" aria-modal="true" aria-label="Редактирование тега">
       <div class="chat-tag-editor-header">
         <h3>Тег чата</h3>
-        <button type="button" class="chat-tag-editor-close" data-chat-tag-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="chat-tag-editor-close" data-chat-tag-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <form class="chat-tag-editor-form">
         <label class="label" for="chatTagLabelInput">Название</label>
@@ -2358,7 +2358,7 @@ function buildGroupOwnerLeaveModal() {
     <div class="group-owner-leave-card" role="dialog" aria-modal="true" aria-labelledby="groupOwnerLeaveTitle">
       <div class="group-owner-leave-header">
         <h3 id="groupOwnerLeaveTitle">Выход создателя</h3>
-        <button type="button" class="group-owner-leave-close" data-group-owner-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="group-owner-leave-close" data-group-owner-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <div class="group-owner-leave-body">
         <p class="group-owner-leave-copy" id="groupOwnerLeaveCopy">Выберите действие перед выходом из группы.</p>
@@ -2396,7 +2396,7 @@ function buildGroupDeleteConfirmModal() {
     <div class="group-delete-confirm-card" role="dialog" aria-modal="true" aria-labelledby="groupDeleteConfirmTitle">
       <div class="group-delete-confirm-header">
         <h3 id="groupDeleteConfirmTitle">Удалить группу</h3>
-        <button type="button" class="group-delete-confirm-close" data-group-delete-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="group-delete-confirm-close" data-group-delete-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <div class="group-delete-confirm-body">
         <p class="group-delete-confirm-copy">Вы уверены, что хотите удалить группу для всех участников?</p>
