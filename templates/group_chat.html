@@ -33,7 +33,7 @@
       <div class="messages" id="messages"></div>
       <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down"><img class="icon-asset" src="/assets/icons/ui/Arrow_down.svg" alt=""></button>
       <div class="composer-wrap">
-        <form class="composer" id="messageForm">
+        <form class="composer" id="messageForm" novalidate>
           {% if photo_messages_enabled and global_file_uploads_enabled %}
             <input id="photoMessageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
             <button class="composer-attach-button" id="photoMessageButton" type="button" aria-label="Прикрепить фотографию" title="Прикрепить фото"><img class="icon-asset" src="/assets/icons/ui/Upload.svg" alt=""></button>

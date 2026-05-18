@@ -1497,6 +1497,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let stickerLibraryState = null;
   let activeStickerPackId = "";
   let isLoadingStickerLibrary = false;
+  let stickerPickerHideTimer = null;
   let threadMemberContacts = [];
   let filteredThreadMemberCandidates = [];
   let isSubmittingThreadMembers = false;
@@ -1559,8 +1560,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!stickerPickerPopup || stickerPickerPopup.hidden) {
       return;
     }
-    stickerPickerPopup.hidden = true;
+    if (stickerPickerHideTimer) {
+      window.clearTimeout(stickerPickerHideTimer);
+      stickerPickerHideTimer = null;
+    }
+    stickerPickerPopup.classList.remove("is-open");
     stickerPickerButton?.setAttribute("aria-expanded", "false");
+    stickerPickerHideTimer = window.setTimeout(() => {
+      stickerPickerPopup.hidden = true;
+      stickerPickerHideTimer = null;
+    }, 220);
   }
 
   function setStickerPickerStatus(message = "", type = "") {
@@ -1648,8 +1657,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (stickerPickerPopup.hidden) {
+      if (stickerPickerHideTimer) {
+        window.clearTimeout(stickerPickerHideTimer);
+        stickerPickerHideTimer = null;
+      }
       stickerPickerPopup.hidden = false;
       stickerPickerButton?.setAttribute("aria-expanded", "true");
+      window.requestAnimationFrame(() => {
+        stickerPickerPopup.classList.add("is-open");
+      });
       try {
         await loadStickerLibrary();
       } catch {

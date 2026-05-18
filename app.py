@@ -2647,6 +2647,8 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
             m.audio_duration_ms,
             m.image_url,
             m.image_mime_type,
+            m.sticker_id,
+            m.sticker_asset_path,
             m.created_at,
             m.read_at,
             m.edited_at
