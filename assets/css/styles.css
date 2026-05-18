@@ -1313,6 +1313,10 @@ textarea {
   font: inherit;
 }
 
+.sidebar-settings-item[hidden] {
+  display: none !important;
+}
+
 .sidebar-settings-item span {
   flex: 0 0 auto;
   color: var(--text-soft);

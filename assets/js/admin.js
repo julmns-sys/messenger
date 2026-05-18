@@ -146,7 +146,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   startChatsAutoRefresh();
 
   const currentUser = getCurrentUser();
-  if (currentUser?.role !== "system_owner") {
+  if (!["admin", "system_owner"].includes(currentUser?.role || "")) {
     window.location.href = getChatsRoute();
     return;
   }
@@ -156,11 +156,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   const searchButton = document.getElementById("adminUserSearchButton");
   const globalFilesToggle = document.getElementById("adminGlobalFilesToggle");
   const globalStickersToggle = document.getElementById("adminGlobalStickersToggle");
+  const runtimeFilesSetting = document.getElementById("adminRuntimeFilesSetting");
+  const runtimeStickersSetting = document.getElementById("adminRuntimeStickersSetting");
+  const canManageRuntimeSettings = currentUser?.role === "system_owner";
 
-  await loadAdminSettings();
+  if (runtimeFilesSetting) {
+    runtimeFilesSetting.hidden = !canManageRuntimeSettings;
+  }
+  if (runtimeStickersSetting) {
+    runtimeStickersSetting.hidden = !canManageRuntimeSettings;
+  }
+
+  if (canManageRuntimeSettings) {
+    await loadAdminSettings();
+  }
   await loadAdminUsers();
 
   globalFilesToggle?.addEventListener("change", async () => {
+    if (!canManageRuntimeSettings) {
+      return;
+    }
     try {
       const payload = await apiFetch("/admin/settings", {
         method: "PATCH",
@@ -183,6 +198,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   globalStickersToggle?.addEventListener("change", async () => {
+    if (!canManageRuntimeSettings) {
+      return;
+    }
     try {
       const payload = await apiFetch("/admin/settings", {
         method: "PATCH",

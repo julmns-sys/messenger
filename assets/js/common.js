@@ -1327,10 +1327,22 @@ function fillUserBadge(targetId = "currentUserBadge") {
   const user = getCurrentUser();
   const adminLink = document.getElementById("sidebarAdminLink");
   if (adminLink) {
-    adminLink.hidden = user?.role !== "system_owner";
+    adminLink.hidden = true;
   }
   if (!target || !user) return;
   target.textContent = user.username ? `@${user.username}` : user.name || "User";
+}
+
+function updateAdminLinkVisibility(user) {
+  const adminLink = document.getElementById("sidebarAdminLink");
+  if (!adminLink) {
+    return;
+  }
+  if (!["admin", "system_owner"].includes(user?.role || "")) {
+    adminLink.remove();
+    return;
+  }
+  adminLink.hidden = false;
 }
 
 function getSidebarProfileFields() {
@@ -1430,6 +1442,7 @@ async function syncSidebarProfile() {
     const user = await apiFetch("/users/me");
     setCurrentUser(user);
     fillUserBadge();
+    updateAdminLinkVisibility(user);
     fillSidebarProfile();
   } catch {
     // Keep local session data if profile sync fails.
@@ -1915,6 +1928,7 @@ function initSidebarProfile() {
   buildProfileLogoutModal();
   initQuickActionsMenu();
   initSettingsControls();
+  void syncSidebarProfile();
   const route = getCurrentRouteInfo();
 
   if (!sidebar || !badge || !backButton || !menuTrigger || !menu || badge.dataset.profileBound === "true") {
