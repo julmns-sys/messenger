@@ -362,6 +362,11 @@ textarea {
   text-align: center;
 }
 
+.auth-footer-subtle {
+  margin-top: 6px;
+  font-size: 13px;
+}
+
 .status {
   min-height: 20px;
   margin-top: 12px;
@@ -1824,6 +1829,14 @@ body.settings-theme-dark .thread-member-action-menu button.danger:hover .menu-it
 body.settings-theme-dark .thread-info-action-menu button.danger:hover .menu-item-icon,
 body.settings-theme-dark .chat-list-action-menu button.danger:hover .menu-item-icon,
 body.settings-theme-dark .message-action-menu button.danger:hover .menu-item-icon {
+  filter: brightness(0) saturate(100%) invert(63%) sepia(61%) saturate(1708%) hue-rotate(319deg) brightness(106%) contrast(102%);
+}
+
+body.settings-theme-dark .result-remove-button .result-action-icon .icon-asset {
+  filter: brightness(0) saturate(100%) invert(54%) sepia(68%) saturate(1460%) hue-rotate(323deg) brightness(103%) contrast(97%);
+}
+
+body.settings-theme-dark .result-remove-button:hover .result-action-icon .icon-asset {
   filter: brightness(0) saturate(100%) invert(63%) sepia(61%) saturate(1708%) hue-rotate(319deg) brightness(106%) contrast(102%);
 }
 
@@ -3325,6 +3338,14 @@ body.settings-theme-dark .admin-permission-toggle {
 .result-action-icon .icon-asset {
   width: 16px;
   height: 16px;
+}
+
+.result-remove-button .result-action-icon .icon-asset {
+  filter: brightness(0) saturate(100%) invert(34%) sepia(86%) saturate(1154%) hue-rotate(329deg) brightness(92%) contrast(92%);
+}
+
+.result-remove-button:hover .result-action-icon .icon-asset {
+  filter: brightness(0) saturate(100%) invert(24%) sepia(82%) saturate(1712%) hue-rotate(337deg) brightness(95%) contrast(96%);
 }
 
 .result-action-text {

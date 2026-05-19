@@ -96,109 +96,109 @@ document.addEventListener("DOMContentLoaded", () => {
   if (passwordResetForm) {
     setupVerifyCodeInputs(passwordResetForm);
   }
-  if (!form) return;
+  if (form) {
+    const mode = form.dataset.auth;
+    const params = new URLSearchParams(window.location.search);
+    const nextPath = normalizeRedirectPath(params.get("next")) || getPostAuthRedirect();
+    const emailInput = form.querySelector('input[name="email"]');
+    const resendButton = document.querySelector("[data-resend-email-code]");
+    const endpointByMode = {
+      register: "/auth/register",
+      login: "/auth/login",
+      "verify-email": "/auth/verify-email"
+    };
+    const endpoint = endpointByMode[mode];
 
-  const mode = form.dataset.auth;
-  const params = new URLSearchParams(window.location.search);
-  const nextPath = normalizeRedirectPath(params.get("next")) || getPostAuthRedirect();
-  const emailInput = form.querySelector('input[name="email"]');
-  const resendButton = document.querySelector("[data-resend-email-code]");
-  const endpointByMode = {
-    register: "/auth/register",
-    login: "/auth/login",
-    "verify-email": "/auth/verify-email"
-  };
-  const endpoint = endpointByMode[mode];
-
-  if (!endpoint) return;
-
-  if (mode === "verify-email" && emailInput) {
-    emailInput.value = params.get("email") || emailInput.value || "";
-    setupVerifyCodeInputs(form);
-  }
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    setStatus("Отправка...");
-
-    const formData = new FormData(form);
-    const payload = Object.fromEntries(formData.entries());
-    payload.device_id = getOrCreateDeviceId();
-
-    try {
-      const data = await apiFetch(endpoint, {
-        method: "POST",
-        body: JSON.stringify(payload)
-      });
-
-      if (data.base_url) {
-        setApiBase(data.base_url);
+    if (endpoint) {
+      if (mode === "verify-email" && emailInput) {
+        emailInput.value = params.get("email") || emailInput.value || "";
+        setupVerifyCodeInputs(form);
       }
 
-      if (data.need_email_verification) {
-        setStatus(data.message || "Подтвердите email", "success");
-        window.setTimeout(() => {
-          window.location.href = getVerifyEmailRoute(data.email || payload.email || "");
-        }, 300);
-        return;
-      }
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        setStatus("Отправка...");
 
-      if (data.token) {
-        setSession(data.token, {
-          ...payload,
-          ...(data.user || {})
-        });
-      }
+        const formData = new FormData(form);
+        const payload = Object.fromEntries(formData.entries());
+        payload.device_id = getOrCreateDeviceId();
 
-      const successMessage = mode === "verify-email"
-        ? "Email подтверждён"
-        : mode === "register"
-          ? "Аккаунт создан"
-          : "Вход выполнен";
-      setStatus(successMessage, "success");
-      window.setTimeout(() => {
-        const redirectPath = nextPath || consumePostAuthRedirect() || getChatsRoute();
-        if (nextPath) {
-          consumePostAuthRedirect();
+        try {
+          const data = await apiFetch(endpoint, {
+            method: "POST",
+            body: JSON.stringify(payload)
+          });
+
+          if (data.base_url) {
+            setApiBase(data.base_url);
+          }
+
+          if (data.need_email_verification) {
+            setStatus(data.message || "Подтвердите email", "success");
+            window.setTimeout(() => {
+              window.location.href = getVerifyEmailRoute(data.email || payload.email || "");
+            }, 300);
+            return;
+          }
+
+          if (data.token) {
+            setSession(data.token, {
+              ...payload,
+              ...(data.user || {})
+            });
+          }
+
+          const successMessage = mode === "verify-email"
+            ? "Email подтверждён"
+            : mode === "register"
+              ? "Аккаунт создан"
+              : "Вход выполнен";
+          setStatus(successMessage, "success");
+          window.setTimeout(() => {
+            const redirectPath = nextPath || consumePostAuthRedirect() || getChatsRoute();
+            if (nextPath) {
+              consumePostAuthRedirect();
+            }
+            window.location.href = redirectPath;
+          }, 300);
+        } catch (error) {
+          if (error?.payload?.need_email_verification) {
+            window.location.href = getVerifyEmailRoute(error.payload.email || payload.email || "");
+            return;
+          }
+          setStatus(error.message, "error");
         }
-        window.location.href = redirectPath;
-      }, 300);
-    } catch (error) {
-      if (error?.payload?.need_email_verification) {
-        window.location.href = getVerifyEmailRoute(error.payload.email || payload.email || "");
-        return;
-      }
-      setStatus(error.message, "error");
-    }
-  });
-
-  resendButton?.addEventListener("click", async () => {
-    const email = emailInput?.value?.trim() || params.get("email") || "";
-    if (!email) {
-      setStatus("Введите email", "error");
-      return;
-    }
-
-    setStatus("Отправка кода...");
-    resendButton.disabled = true;
-
-    try {
-      const data = await apiFetch("/auth/resend-email-code", {
-        method: "POST",
-        body: JSON.stringify({ email })
       });
-      setStatus(data.message || "Код отправлен", "success");
-      if (emailInput && !emailInput.value.trim()) {
-        emailInput.value = email;
-      }
-    } catch (error) {
-      setStatus(error.message, "error");
-    } finally {
-      window.setTimeout(() => {
-        resendButton.disabled = false;
-      }, 1000);
+
+      resendButton?.addEventListener("click", async () => {
+        const email = emailInput?.value?.trim() || params.get("email") || "";
+        if (!email) {
+          setStatus("Введите email", "error");
+          return;
+        }
+
+        setStatus("Отправка кода...");
+        resendButton.disabled = true;
+
+        try {
+          const data = await apiFetch("/auth/resend-email-code", {
+            method: "POST",
+            body: JSON.stringify({ email })
+          });
+          setStatus(data.message || "Код отправлен", "success");
+          if (emailInput && !emailInput.value.trim()) {
+            emailInput.value = email;
+          }
+        } catch (error) {
+          setStatus(error.message, "error");
+        } finally {
+          window.setTimeout(() => {
+            resendButton.disabled = false;
+          }, 1000);
+        }
+      });
     }
-  });
+  }
 
   passwordResetRequestButton?.addEventListener("click", async () => {
     if (!passwordResetForm) return;
@@ -245,7 +245,10 @@ document.addEventListener("DOMContentLoaded", () => {
       passwordResetForm.querySelectorAll(".verify-code-cell").forEach((cell) => {
         cell.value = "";
       });
-      setNodeStatus(passwordResetStatus, data.message || "Пароль изменён", "success");
+      setNodeStatus(passwordResetStatus, `${data.message || "Пароль изменён"} Переадресация на вход...`, "success");
+      window.setTimeout(() => {
+        window.location.href = "/login";
+      }, 2200);
     } catch (error) {
       setNodeStatus(passwordResetStatus, error.message, "error");
     } finally {

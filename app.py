@@ -3953,6 +3953,11 @@ def login_page():
     return send_from_directory(".", "login.html")
 
 
+@app.get("/forgot-password")
+def forgot_password_page():
+    return send_from_directory(".", "forgot_password.html")
+
+
 @app.get("/register")
 def register_page():
     return send_from_directory(".", "register.html")
