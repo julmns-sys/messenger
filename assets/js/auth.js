@@ -5,6 +5,12 @@ function setStatus(message, type = "") {
   status.textContent = message;
 }
 
+function setNodeStatus(node, message, type = "") {
+  if (!node) return;
+  node.className = `status ${type}`.trim();
+  node.textContent = message;
+}
+
 function setupVerifyCodeInputs(form) {
   const hiddenCodeInput = form.querySelector('input[name="code"]');
   const codeCells = [...form.querySelectorAll(".verify-code-cell")];
@@ -84,6 +90,12 @@ function setupVerifyCodeInputs(form) {
 
 document.addEventListener("DOMContentLoaded", () => {
   const form = document.querySelector("form[data-auth]");
+  const passwordResetForm = document.querySelector("form[data-password-reset-form='true']");
+  const passwordResetRequestButton = document.querySelector("[data-password-reset-request='true']");
+  const passwordResetStatus = document.getElementById("passwordResetStatus");
+  if (passwordResetForm) {
+    setupVerifyCodeInputs(passwordResetForm);
+  }
   if (!form) return;
 
   const mode = form.dataset.auth;
@@ -185,6 +197,59 @@ document.addEventListener("DOMContentLoaded", () => {
       window.setTimeout(() => {
         resendButton.disabled = false;
       }, 1000);
+    }
+  });
+
+  passwordResetRequestButton?.addEventListener("click", async () => {
+    if (!passwordResetForm) return;
+    const email = passwordResetForm.querySelector('input[name="email"]')?.value?.trim() || "";
+    if (!email) {
+      setNodeStatus(passwordResetStatus, "Введите email", "error");
+      return;
+    }
+
+    passwordResetRequestButton.disabled = true;
+    setNodeStatus(passwordResetStatus, "Отправка кода...");
+
+    try {
+      const data = await apiFetch("/auth/forgot-password/request", {
+        method: "POST",
+        body: JSON.stringify({ email })
+      });
+      setNodeStatus(passwordResetStatus, data.message || "Код отправлен", "success");
+    } catch (error) {
+      setNodeStatus(passwordResetStatus, error.message, "error");
+    } finally {
+      window.setTimeout(() => {
+        passwordResetRequestButton.disabled = false;
+      }, 1000);
+    }
+  });
+
+  passwordResetForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitButton = passwordResetForm.querySelector('button[type="submit"]');
+    const formData = new FormData(passwordResetForm);
+    const payload = Object.fromEntries(formData.entries());
+
+    submitButton.disabled = true;
+    setNodeStatus(passwordResetStatus, "Сохраняем новый пароль...");
+
+    try {
+      const data = await apiFetch("/auth/forgot-password/confirm", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      passwordResetForm.reset();
+      passwordResetForm.querySelector('input[name="code"]').value = "";
+      passwordResetForm.querySelectorAll(".verify-code-cell").forEach((cell) => {
+        cell.value = "";
+      });
+      setNodeStatus(passwordResetStatus, data.message || "Пароль изменён", "success");
+    } catch (error) {
+      setNodeStatus(passwordResetStatus, error.message, "error");
+    } finally {
+      submitButton.disabled = false;
     }
   });
 });

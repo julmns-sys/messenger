@@ -152,6 +152,31 @@ textarea {
   line-height: 1.5;
 }
 
+.auth-secondary-card {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(137, 154, 174, 0.2);
+}
+
+.auth-secondary-head {
+  margin-bottom: 18px;
+}
+
+.auth-secondary-head h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.auth-secondary-head p {
+  margin: 0;
+}
+
+.auth-secondary-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
 .invite-shell {
   width: 100%;
   display: grid;
@@ -1777,7 +1802,7 @@ body.settings-theme-dark .thread-member-action-menu button.danger .menu-item-ico
 body.settings-theme-dark .thread-info-action-menu button.danger .menu-item-icon,
 body.settings-theme-dark .chat-list-action-menu button.danger .menu-item-icon,
 body.settings-theme-dark .message-action-menu button.danger .menu-item-icon {
-  filter: brightness(0) saturate(100%) invert(72%) sepia(23%) saturate(2093%) hue-rotate(317deg) brightness(100%) contrast(96%);
+  filter: brightness(0) saturate(100%) invert(54%) sepia(68%) saturate(1460%) hue-rotate(323deg) brightness(103%) contrast(97%);
 }
 
 body.settings-theme-dark .sidebar-profile-menu-item:hover .menu-item-icon,
@@ -1799,7 +1824,7 @@ body.settings-theme-dark .thread-member-action-menu button.danger:hover .menu-it
 body.settings-theme-dark .thread-info-action-menu button.danger:hover .menu-item-icon,
 body.settings-theme-dark .chat-list-action-menu button.danger:hover .menu-item-icon,
 body.settings-theme-dark .message-action-menu button.danger:hover .menu-item-icon {
-  filter: brightness(0) saturate(100%) invert(79%) sepia(19%) saturate(2320%) hue-rotate(314deg) brightness(103%) contrast(101%);
+  filter: brightness(0) saturate(100%) invert(63%) sepia(61%) saturate(1708%) hue-rotate(319deg) brightness(106%) contrast(102%);
 }
 
 body.settings-theme-dark .sidebar-profile-menu:not(.user-profile-action-menu),
@@ -2680,7 +2705,7 @@ body[data-chat-wallpaper="paper"] .messages {
 .thread-info-action-menu button.danger .menu-item-icon,
 .chat-list-action-menu button.danger .menu-item-icon,
 .message-action-menu button.danger .menu-item-icon {
-  filter: brightness(0) saturate(100%) invert(43%) sepia(39%) saturate(1131%) hue-rotate(321deg) brightness(91%) contrast(91%);
+  filter: brightness(0) saturate(100%) invert(34%) sepia(86%) saturate(1154%) hue-rotate(329deg) brightness(92%) contrast(92%);
 }
 
 .sidebar-profile-menu-item:hover .menu-item-icon,
@@ -2702,7 +2727,7 @@ body[data-chat-wallpaper="paper"] .messages {
 .thread-info-action-menu button.danger:hover .menu-item-icon,
 .chat-list-action-menu button.danger:hover .menu-item-icon,
 .message-action-menu button.danger:hover .menu-item-icon {
-  filter: brightness(0) saturate(100%) invert(31%) sepia(62%) saturate(1190%) hue-rotate(329deg) brightness(95%) contrast(94%);
+  filter: brightness(0) saturate(100%) invert(24%) sepia(82%) saturate(1712%) hue-rotate(337deg) brightness(95%) contrast(96%);
 }
 
 .icon-button:hover {

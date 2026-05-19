@@ -4171,6 +4171,122 @@ def login():
     return jsonify(auth_payload)
 
 
+@app.post("/auth/forgot-password/request")
+def request_forgot_password():
+    data = request.json or {}
+    try:
+        email = validate_email_address(data.get("email", ""))
+    except ValueError:
+        return jsonify({"message": "Если аккаунт существует, код скоро придет на email."})
+
+    conn = get_db()
+    try:
+        user = conn.execute("""
+            SELECT *
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+        """, (email,)).fetchone()
+
+        if not user or not bool(row_value(user, "email_verified", False)):
+            return jsonify({"message": "Если аккаунт существует, код скоро придет на email."})
+
+        retry_after = get_change_request_retry_after_seconds(row_value(user, "password_change_expires_at"))
+        if retry_after > 0:
+            return jsonify({
+                "message": f"Повторная отправка доступна через {retry_after} сек.",
+                "retry_after": retry_after
+            }), 429
+
+        code, code_hash, expires_at = build_email_verification_payload()
+        conn.execute("""
+            UPDATE users
+            SET password_change_code_hash = %s,
+                password_change_expires_at = %s
+            WHERE id = %s
+        """, (code_hash, to_db_datetime(expires_at), user["id"]))
+        conn.commit()
+        target_user_id = user["id"]
+    finally:
+        conn.close()
+
+    try:
+        send_email_action_code(
+            email,
+            code,
+            subject="Код восстановления пароля для /Chatik",
+            intro="Ваш код для восстановления пароля",
+            fallback_note="Если вы не запрашивали восстановление пароля в /Chatik, просто проигнорируйте это письмо."
+        )
+    except Exception:
+        conn = get_db()
+        try:
+            conn.execute("""
+                UPDATE users
+                SET password_change_code_hash = NULL,
+                    password_change_expires_at = NULL
+                WHERE id = %s
+            """, (target_user_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"message": "Не удалось отправить код подтверждения. Попробуйте позже."}), 500
+
+    return jsonify({"message": "Если аккаунт существует, код скоро придет на email."})
+
+
+@app.post("/auth/forgot-password/confirm")
+def confirm_forgot_password():
+    data = request.json or {}
+    try:
+        email = validate_email_address(data.get("email", ""))
+        password = validate_password_value(data.get("password", ""))
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+
+    code = str(data.get("code", "")).strip()
+    if not re.fullmatch(r"\d{6}", code):
+        return jsonify({"message": "Неверный код подтверждения"}), 400
+
+    conn = get_db()
+    try:
+        user = conn.execute("""
+            SELECT *
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+        """, (email,)).fetchone()
+        if not user or not bool(row_value(user, "email_verified", False)):
+            return jsonify({"message": "Неверный код подтверждения"}), 400
+
+        code_hash = row_value(user, "password_change_code_hash", "")
+        expires_at = parse_datetime_value(row_value(user, "password_change_expires_at"))
+        if not code_hash or not expires_at or expires_at <= utcnow():
+            conn.execute("""
+                UPDATE users
+                SET password_change_code_hash = NULL,
+                    password_change_expires_at = NULL
+                WHERE id = %s
+            """, (user["id"],))
+            conn.commit()
+            return jsonify({"message": "Код недействителен или истек"}), 400
+
+        if not check_password_hash(code_hash, code):
+            return jsonify({"message": "Неверный код подтверждения"}), 400
+
+        conn.execute("""
+            UPDATE users
+            SET password_hash = %s,
+                password_change_code_hash = NULL,
+                password_change_expires_at = NULL
+            WHERE id = %s
+        """, (generate_password_hash(password), user["id"]))
+        conn.commit()
+        return jsonify({"message": "Пароль восстановлен. Теперь вы можете войти."})
+    finally:
+        conn.close()
+
+
 @app.post("/auth/verify-email")
 def verify_email():
     data = request.json or {}
