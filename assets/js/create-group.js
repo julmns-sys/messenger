@@ -80,8 +80,8 @@ function renderSelectableUsers(listId, users, emptyMessage) {
       <article class="thread-member-option${isSelected ? " selected" : ""}" data-select-user="${escapeHtml(userId)}" data-list-id="${escapeHtml(listId)}">
         <div class="avatar small">${escapeHtml(initials(user.name || user.username || "U"))}</div>
         <div class="result-meta">
-          <h3 class="result-name">${escapeHtml(user.name || user.username || "User")}</h3>
-          <p class="result-username">@${escapeHtml(user.username || "")}</p>
+          <h3 class="result-name">${renderSystemAccountLabel(user.name || user.username || "User", user)}</h3>
+          <p class="result-username">${user.username ? renderSystemAccountLabel(`@${user.username}`, user) : ""}</p>
         </div>
         <input class="thread-member-option-check" type="checkbox" ${isSelected ? "checked" : ""} aria-label="Выбрать пользователя">
       </article>

@@ -174,6 +174,34 @@ function renderActionMenuItemContent(iconPath, label) {
   `;
 }
 
+const SYSTEM_ACCOUNT_USERNAME = "chatik";
+const SYSTEM_ACCOUNT_ICON_PATH = "/assets/icons/ui/CPU.svg";
+
+function normalizeUsername(value = "") {
+  return String(value || "").trim().replace(/^@+/, "").toLowerCase();
+}
+
+function isSystemAccountUsername(value = "") {
+  return normalizeUsername(value) === SYSTEM_ACCOUNT_USERNAME;
+}
+
+function renderSystemAccountLabel(label, identity = {}, options = {}) {
+  const safeLabel = escapeHtml(String(label || ""));
+  const username = typeof identity === "string" ? identity : identity?.username;
+  const accountKey = normalizeUsername(username || (options.allowLabelFallback ? label : ""));
+  if (accountKey !== SYSTEM_ACCOUNT_USERNAME) {
+    return safeLabel;
+  }
+
+  const className = options.className ? ` ${escapeHtml(String(options.className))}` : "";
+  return `
+    <span class="system-account-label${className}">
+      <span class="system-account-label-text">${safeLabel}</span>
+      <img class="system-account-icon icon-asset" src="${SYSTEM_ACCOUNT_ICON_PATH}" alt="" aria-hidden="true">
+    </span>
+  `;
+}
+
 function clampSetting(value, min, max, fallback) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -1252,12 +1280,12 @@ function renderUserProfilePanel(user = {}, options = {}) {
       ${menuMarkup}
       <div class="thread-info-hero user-profile-panel-hero">
         <div class="avatar thread-info-avatar${options.groupAvatar ? " group-avatar" : ""}">${escapeHtml(initials(displayName))}</div>
-        <h3 class="thread-info-name">${escapeHtml(displayName)}</h3>
+        <h3 class="thread-info-name">${renderSystemAccountLabel(displayName, user)}</h3>
         ${originalName ? `<p class="user-profile-original-name">${escapeHtml(originalName)}</p>` : ""}
         <div class="user-profile-identity-row">
           ${username ? `
             <button class="user-profile-username" type="button" data-profile-copy-username="${escapeHtml(String(user.username || ""))}" aria-label="Скопировать username">
-              ${escapeHtml(username)}
+              ${renderSystemAccountLabel(username, user)}
             </button>
           ` : `<span class="user-profile-username is-placeholder">username не указан</span>`}
           ${presence}
@@ -1473,7 +1501,8 @@ function fillUserBadge(targetId = "currentUserBadge") {
     adminLink.hidden = true;
   }
   if (!target || !user) return;
-  target.textContent = user.username ? `@${user.username}` : user.name || "User";
+  const badgeLabel = user.username ? `@${user.username}` : user.name || "User";
+  target.innerHTML = renderSystemAccountLabel(badgeLabel, user);
 }
 
 function updateAdminLinkVisibility(user) {
@@ -1557,10 +1586,10 @@ function fillSidebarProfile() {
   const usernameValue = user.username ? `@${user.username}` : "Не указан";
 
   avatar.textContent = initials(fullName);
-  name.textContent = fullName;
-  username.textContent = usernameValue;
-  fields.name.textContent = getSidebarProfileFieldValue("name", user);
-  fields.username.textContent = getSidebarProfileFieldValue("username", user);
+  name.innerHTML = renderSystemAccountLabel(fullName, user);
+  username.innerHTML = renderSystemAccountLabel(usernameValue, user);
+  fields.name.innerHTML = renderSystemAccountLabel(getSidebarProfileFieldValue("name", user), user);
+  fields.username.innerHTML = renderSystemAccountLabel(getSidebarProfileFieldValue("username", user), user);
   fields.username.setAttribute("aria-label", user.username ? "Скопировать username" : "Username не указан");
   fields.bio.textContent = getSidebarProfileFieldValue("bio", user);
   fields.bio.classList.toggle("multiline", Boolean(user.bio));
@@ -3098,8 +3127,8 @@ function renderGroupOwnerTransferMembers(members, selectedMemberId = "") {
       <article class="group-owner-leave-member${isSelected ? " selected" : ""}" data-owner-member-id="${escapeHtml(String(member.id))}">
         <div class="avatar small">${escapeHtml(initials(member.name || member.username || "U"))}</div>
         <div class="result-meta">
-          <h3 class="result-name">${escapeHtml(member.name || member.username || "User")}</h3>
-          <p class="result-username">@${escapeHtml(member.username || "")}</p>
+          <h3 class="result-name">${renderSystemAccountLabel(member.name || member.username || "User", member)}</h3>
+          <p class="result-username">${member.username ? renderSystemAccountLabel(`@${member.username}`, member) : ""}</p>
         </div>
         <input class="group-owner-leave-member-check" type="radio" name="groupOwnerLeaveMember" ${isSelected ? "checked" : ""} aria-label="Выбрать участника">
       </article>
@@ -3614,7 +3643,7 @@ function renderChats(list, chats) {
           <div class="chat-meta">
             <div class="chat-main">
               <div class="chat-title-row">
-                <h3 class="chat-name">${escapeHtml(name)}</h3>
+                <h3 class="chat-name">${renderSystemAccountLabel(name, chat)}</h3>
                 ${customTagMarkup}
               </div>
               <p class="chat-preview">${escapeHtml(preview)}</p>

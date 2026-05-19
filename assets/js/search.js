@@ -45,10 +45,10 @@ function renderListName(user) {
   const originalName = getUserProfileOriginalName(user);
   return `
     <div class="result-topline">
-      <h3 class="result-name">${escapeHtml(displayName)}</h3>
+      <h3 class="result-name">${renderSystemAccountLabel(displayName, user)}</h3>
     </div>
     ${originalName ? `<p class="result-username">${escapeHtml(originalName)}</p>` : ""}
-    <p class="result-username">@${escapeHtml(user.username || "")}</p>
+    <p class="result-username">${user.username ? renderSystemAccountLabel(`@${user.username}`, user) : ""}</p>
   `;
 }
 

@@ -3438,6 +3438,30 @@ body.settings-theme-dark .admin-permission-toggle {
   font-weight: 600;
 }
 
+.system-account-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.system-account-label-text {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: inherit;
+}
+
+.system-account-icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  filter: brightness(0) saturate(100%) invert(52%) sepia(87%) saturate(1484%) hue-rotate(186deg) brightness(95%) contrast(95%);
+}
+
 .chat-name {
   min-width: 0;
   overflow: hidden;

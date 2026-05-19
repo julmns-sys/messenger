@@ -650,7 +650,7 @@ function renderMessageItem(message, currentUserId, chatType) {
 
   return `
     <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="${escapeHtml(String(message.message_type || "text"))}" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
-      ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${escapeHtml(message.sender_name)}</button>` : ""}
+      ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${renderSystemAccountLabel(message.sender_name, message.sender_username || "", { allowLabelFallback: true })}</button>` : ""}
       ${renderMessageForwardedMeta(message.forwarded_from)}
       ${renderMessageReplyPreview(message.reply)}
       ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : isPhoto ? renderPhotoMessageBody(message) : isSticker ? renderStickerMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
@@ -1018,13 +1018,15 @@ function buildDeleteUndoToast() {
   return toast;
 }
 
-function setChatTitle(title, subtitle = "", desktopSubtitle = "", desktopPresence = "") {
+function setChatTitle(titleOrInfo, subtitle = "", desktopSubtitle = "", desktopPresence = "") {
   const titleNode = document.getElementById("chatTitle");
   const subtitleNode = document.getElementById("chatSubtitle");
   const desktopSubtitleNode = document.getElementById("chatSubtitleDesktop");
   const desktopPresenceNode = document.getElementById("chatPresenceDesktop");
   const avatarNode = document.getElementById("chatAvatar");
-  if (titleNode) titleNode.textContent = title;
+  const info = titleOrInfo && typeof titleOrInfo === "object" ? titleOrInfo : null;
+  const title = info ? (info.title || info.name || info.username || "Чат") : String(titleOrInfo || "Чат");
+  if (titleNode) titleNode.innerHTML = renderSystemAccountLabel(title, info || {});
   if (subtitleNode) subtitleNode.innerHTML = subtitle;
   if (desktopSubtitleNode) desktopSubtitleNode.textContent = desktopSubtitle;
   if (desktopPresenceNode) desktopPresenceNode.innerHTML = desktopPresence;
@@ -1279,10 +1281,10 @@ function fillThreadInfoPanel(info, chatType) {
             </div>
             <div class="result-meta">
               <div class="result-topline">
-                <h3 class="result-name">${escapeHtml(member.name || member.username || "User")}</h3>
+                <h3 class="result-name">${renderSystemAccountLabel(member.name || member.username || "User", member)}</h3>
                 ${member.is_owner ? '<span class="thread-member-role owner">Создатель</span>' : member.is_admin ? '<span class="thread-member-role">Админ</span>' : ""}
               </div>
-              <p class="result-username">@${escapeHtml(member.username || "")}</p>
+              <p class="result-username">${member.username ? renderSystemAccountLabel(`@${member.username}`, member) : ""}</p>
             </div>
             ${member.can_manage ? '<button type="button" class="thread-member-menu-hint" data-member-menu-trigger="true" aria-label="Действия с участником"><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>' : ""}
           </article>
@@ -1319,8 +1321,8 @@ function renderThreadMemberCandidateResults(results, selectedIds = new Set()) {
       <article class="thread-member-option${isSelected ? " selected" : ""}" data-candidate-user-id="${escapeHtml(userId)}">
         <div class="avatar small">${escapeHtml(initials(user.name || user.username || "U"))}</div>
         <div class="result-meta">
-          <h3 class="result-name">${escapeHtml(user.name || user.username || "User")}</h3>
-          <p class="result-username">@${escapeHtml(user.username || "")}</p>
+          <h3 class="result-name">${renderSystemAccountLabel(user.name || user.username || "User", user)}</h3>
+          <p class="result-username">${user.username ? renderSystemAccountLabel(`@${user.username}`, user) : ""}</p>
         </div>
         <input class="thread-member-option-check" type="checkbox" ${isSelected ? "checked" : ""} aria-label="Выбрать пользователя">
       </article>
@@ -2629,7 +2631,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (chatType === "direct" && currentThreadInfo && String(currentThreadInfo.user_id || currentThreadInfo.id || "") === targetUserId) {
-      setChatTitle(currentThreadInfo.title || getUserProfileDisplayName(currentThreadInfo));
+      setChatTitle(currentThreadInfo);
       renderHeaderStatus();
     }
 
@@ -3124,7 +3126,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const title = user?.name || user?.username || "Чат";
     currentThreadInfo = user ? { ...user, title } : null;
     setActiveThreadInfoView(currentThreadInfo, chatType);
-    setChatTitle(title);
+    setChatTitle(currentThreadInfo || title);
     renderHeaderStatus();
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
@@ -3956,7 +3958,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       title
     };
     setActiveThreadInfoView(currentThreadInfo, chatType);
-    setChatTitle(title);
+    setChatTitle(currentThreadInfo);
     renderHeaderStatus();
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
@@ -4137,8 +4139,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         if (shouldRerender && currentThreadInfo) {
-          const title = currentThreadInfo.title || currentThreadInfo.name || currentThreadInfo.username || "Чат";
-          setChatTitle(title);
+          setChatTitle(currentThreadInfo);
           renderHeaderStatus();
         }
 
