@@ -316,6 +316,18 @@ textarea {
 .button-danger {
   background: var(--danger);
   color: #fff;
+  border-color: rgba(217, 83, 79, 0.28);
+  box-shadow: 0 8px 18px rgba(217, 83, 79, 0.18);
+}
+
+.button-danger:hover {
+  background: linear-gradient(180deg, #df5e5a 0%, #bf4541 100%);
+  border-color: rgba(191, 69, 65, 0.34);
+  box-shadow: 0 10px 20px rgba(217, 83, 79, 0.22);
+}
+
+.button-danger:active {
+  background: linear-gradient(180deg, #d45450 0%, #b13d3a 100%);
 }
 
 .auth-footer,
@@ -1239,6 +1251,13 @@ textarea {
   width: 18px;
   height: 18px;
   display: block;
+  filter: brightness(0) saturate(100%) invert(52%) sepia(87%) saturate(1484%) hue-rotate(186deg) brightness(95%) contrast(95%);
+  transition: filter 0.18s ease, transform 0.18s ease;
+}
+
+.settings-launch-tile:hover .settings-launch-tile-icon img {
+  filter: brightness(0) saturate(100%) invert(44%) sepia(91%) saturate(1700%) hue-rotate(188deg) brightness(97%) contrast(97%);
+  transform: scale(1.04);
 }
 
 .settings-launch-tile-copy {
@@ -1640,6 +1659,34 @@ body.settings-theme-dark .app-toast {
   color: #f3f7fb;
 }
 
+body.settings-theme-dark .profile-logout-backdrop {
+  background: rgba(6, 12, 20, 0.52);
+}
+
+body.settings-theme-dark .profile-logout-card {
+  border-color: rgba(120, 149, 184, 0.22);
+  background:
+    linear-gradient(180deg, rgba(40, 54, 70, 0.96), rgba(24, 36, 49, 0.94));
+  box-shadow:
+    0 24px 46px rgba(3, 8, 14, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: #f3f7fb;
+}
+
+body.settings-theme-dark .profile-logout-copy,
+body.settings-theme-dark .profile-logout-status {
+  color: rgba(203, 219, 236, 0.76);
+}
+
+body.settings-theme-dark .profile-logout-close {
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+body.settings-theme-dark .profile-logout-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
 body.settings-theme-dark .button-secondary:hover,
 body.settings-theme-dark .sidebar-profile-menu-trigger:hover,
 body.settings-theme-dark .icon-button:hover {
@@ -1671,6 +1718,14 @@ body.settings-theme-dark .thread-info-invite-chevron {
   filter: brightness(0) saturate(100%) invert(78%) sepia(9%) saturate(485%) hue-rotate(178deg) brightness(92%) contrast(86%);
 }
 
+body.settings-theme-dark .sidebar-profile-menu-item.danger .menu-item-icon,
+body.settings-theme-dark .thread-member-action-menu button.danger .menu-item-icon,
+body.settings-theme-dark .thread-info-action-menu button.danger .menu-item-icon,
+body.settings-theme-dark .chat-list-action-menu button.danger .menu-item-icon,
+body.settings-theme-dark .message-action-menu button.danger .menu-item-icon {
+  filter: brightness(0) saturate(100%) invert(72%) sepia(23%) saturate(2093%) hue-rotate(317deg) brightness(100%) contrast(96%);
+}
+
 body.settings-theme-dark .sidebar-profile-menu-item:hover .menu-item-icon,
 body.settings-theme-dark .quick-actions-menu-item:hover .menu-item-icon,
 body.settings-theme-dark .thread-member-action-menu button:hover .menu-item-icon,
@@ -1683,6 +1738,14 @@ body.settings-theme-dark .thread-info-invite-action-button:hover .menu-item-icon
 body.settings-theme-dark .thread-info-shortcut:hover .thread-info-shortcut-chevron,
 body.settings-theme-dark .thread-info-invite-toggle:hover .thread-info-invite-chevron {
   filter: brightness(0) saturate(100%) invert(93%) sepia(15%) saturate(294%) hue-rotate(176deg) brightness(102%) contrast(95%);
+}
+
+body.settings-theme-dark .sidebar-profile-menu-item.danger:hover .menu-item-icon,
+body.settings-theme-dark .thread-member-action-menu button.danger:hover .menu-item-icon,
+body.settings-theme-dark .thread-info-action-menu button.danger:hover .menu-item-icon,
+body.settings-theme-dark .chat-list-action-menu button.danger:hover .menu-item-icon,
+body.settings-theme-dark .message-action-menu button.danger:hover .menu-item-icon {
+  filter: brightness(0) saturate(100%) invert(79%) sepia(19%) saturate(2320%) hue-rotate(314deg) brightness(103%) contrast(101%);
 }
 
 body.settings-theme-dark .sidebar-profile-menu:not(.user-profile-action-menu),
@@ -1710,6 +1773,14 @@ body.settings-theme-dark .settings-launch-tile:hover {
 
 body.settings-theme-dark .settings-launch-tile-icon {
   background: rgba(96, 177, 255, 0.14);
+}
+
+body.settings-theme-dark .settings-launch-tile-icon img {
+  filter: brightness(0) saturate(100%) invert(78%) sepia(9%) saturate(485%) hue-rotate(178deg) brightness(92%) contrast(86%);
+}
+
+body.settings-theme-dark .settings-launch-tile:hover .settings-launch-tile-icon img {
+  filter: brightness(0) saturate(100%) invert(93%) sepia(15%) saturate(294%) hue-rotate(176deg) brightness(102%) contrast(95%);
 }
 
 body.settings-theme-dark .user-profile-action-menu {
@@ -2255,6 +2326,7 @@ body[data-chat-wallpaper="paper"] .messages {
   inset: 0;
   background: rgba(24, 40, 60, 0.22);
   backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .profile-logout-card {
@@ -2283,6 +2355,9 @@ body[data-chat-wallpaper="paper"] .messages {
 }
 
 .profile-logout-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   background: rgba(255, 255, 255, 0.62);
   color: var(--accent);
@@ -2301,7 +2376,7 @@ body[data-chat-wallpaper="paper"] .messages {
 
 .profile-logout-body {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .profile-logout-copy {
@@ -2320,8 +2395,12 @@ body[data-chat-wallpaper="paper"] .messages {
 }
 
 .profile-logout-status {
-  min-height: 18px;
+  min-height: 0;
   margin: 0;
+}
+
+.profile-logout-status:empty {
+  display: none;
 }
 
 .sidebar-header,
@@ -2482,6 +2561,14 @@ body[data-chat-wallpaper="paper"] .messages {
   filter: brightness(0) saturate(100%) invert(42%) sepia(11%) saturate(825%) hue-rotate(177deg) brightness(94%) contrast(88%);
 }
 
+.sidebar-profile-menu-item.danger .menu-item-icon,
+.thread-member-action-menu button.danger .menu-item-icon,
+.thread-info-action-menu button.danger .menu-item-icon,
+.chat-list-action-menu button.danger .menu-item-icon,
+.message-action-menu button.danger .menu-item-icon {
+  filter: brightness(0) saturate(100%) invert(43%) sepia(39%) saturate(1131%) hue-rotate(321deg) brightness(91%) contrast(91%);
+}
+
 .sidebar-profile-menu-item:hover .menu-item-icon,
 .quick-actions-menu-item:hover .menu-item-icon,
 .thread-member-action-menu button:hover .menu-item-icon,
@@ -2494,6 +2581,14 @@ body[data-chat-wallpaper="paper"] .messages {
 .thread-info-shortcut:hover .thread-info-shortcut-chevron,
 .thread-info-invite-toggle:hover .thread-info-invite-chevron {
   filter: brightness(0) saturate(100%) invert(52%) sepia(87%) saturate(1484%) hue-rotate(186deg) brightness(95%) contrast(95%);
+}
+
+.sidebar-profile-menu-item.danger:hover .menu-item-icon,
+.thread-member-action-menu button.danger:hover .menu-item-icon,
+.thread-info-action-menu button.danger:hover .menu-item-icon,
+.chat-list-action-menu button.danger:hover .menu-item-icon,
+.message-action-menu button.danger:hover .menu-item-icon {
+  filter: brightness(0) saturate(100%) invert(31%) sepia(62%) saturate(1190%) hue-rotate(329deg) brightness(95%) contrast(94%);
 }
 
 .icon-button:hover {
