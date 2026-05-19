@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import socket
 import smtplib
 from threading import Lock
 import uuid
@@ -19,10 +18,6 @@ from flask import Flask, request, jsonify, send_from_directory, redirect, render
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
 from dotenv import load_dotenv
-try:
-    import resend
-except ImportError:
-    resend = None
 from werkzeug.security import generate_password_hash, check_password_hash
 from db import get_db, init_db
 import secrets
@@ -95,8 +90,6 @@ SMTP_PASSWORD = str(os.getenv("SMTP_PASSWORD", "") or "").strip()
 SMTP_FROM = str(os.getenv("SMTP_FROM", "") or "").strip()
 EMAIL_DEV_MODE = str(os.getenv("EMAIL_DEV_MODE", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
 SMTP_TIMEOUT_SECONDS = max(5, int(str(os.getenv("SMTP_TIMEOUT_SECONDS", "15") or "15").strip() or 15))
-RESEND_API_KEY = str(os.getenv("RESEND_API_KEY", "") or "").strip()
-RESEND_FROM = str(os.getenv("RESEND_FROM", "") or "").strip()
 EMAIL_ADDRESS_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD_LENGTH = 6
 
@@ -289,89 +282,28 @@ def ensure_smtp_configured():
         raise RuntimeError("SMTP не настроен")
 
 
-def is_resend_configured():
-    return bool(resend is not None and RESEND_API_KEY and RESEND_FROM)
-
-
-def is_resend_requested():
-    return bool(RESEND_API_KEY and RESEND_FROM)
-
-
-def send_resend_email(to_email, subject, html):
-    if resend is None:
-        raise RuntimeError("Модуль resend не установлен")
-    if not is_resend_requested():
-        raise RuntimeError("Resend не настроен")
-
-    resend.api_key = RESEND_API_KEY
-    resend.Emails.send({
-        "from": RESEND_FROM,
-        "to": [to_email],
-        "subject": subject,
-        "html": html,
-    })
-
-
-def build_smtp_delivery_targets():
-    targets = [(SMTP_PORT, SMTP_PORT == 465)]
-    if SMTP_HOST.lower() == "smtp-relay.brevo.com":
-        for port, use_ssl in ((2525, False), (465, True)):
-            if all(existing_port != port for existing_port, _ in targets):
-                targets.append((port, use_ssl))
-    return targets
-
-
 def send_email_message(message):
     ensure_smtp_configured()
-
-    class IPv4SMTP(smtplib.SMTP):
-        def _get_socket(self, host, port, timeout):
-            self.source_address = None
-            last_error = None
-            for family, socktype, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
-                try:
-                    sock = socket.socket(family, socktype, proto)
-                    if timeout is not None:
-                        sock.settimeout(timeout)
-                    sock.connect(sockaddr)
-                    return sock
-                except OSError as exc:
-                    last_error = exc
-                    try:
-                        sock.close()
-                    except OSError:
-                        pass
-            if last_error:
-                raise last_error
-            return super()._get_socket(host, port, timeout)
-
-    last_error = None
-    for port, use_ssl in build_smtp_delivery_targets():
-        try:
-            if use_ssl:
-                with smtplib.SMTP_SSL(SMTP_HOST, port, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
-                    smtp.login(SMTP_USER, SMTP_PASSWORD)
-                    smtp.send_message(message)
-                return
-
-            with IPv4SMTP(SMTP_HOST, port, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
-                smtp.ehlo()
-                if port in {587, 2525} or smtp.has_extn("starttls"):
-                    smtp.starttls()
-                    smtp.ehlo()
+    try:
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
                 smtp.login(SMTP_USER, SMTP_PASSWORD)
                 smtp.send_message(message)
             return
-        except (OSError, smtplib.SMTPException) as exc:
-            last_error = exc
-            print(
-                f"[EMAIL SMTP] failed via {SMTP_HOST}:{port} ssl={use_ssl}: {exc}",
-                flush=True,
-            )
 
-    if last_error:
-        raise last_error
-    raise RuntimeError("Не удалось отправить email через SMTP")
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
+            smtp.ehlo()
+            if SMTP_PORT == 587 or smtp.has_extn("starttls"):
+                smtp.starttls()
+                smtp.ehlo()
+            smtp.login(SMTP_USER, SMTP_PASSWORD)
+            smtp.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        print(
+            f"[EMAIL SMTP] failed via {SMTP_HOST}:{SMTP_PORT}: {exc}",
+            flush=True,
+        )
+        raise RuntimeError("Не удалось отправить email через SMTP") from exc
 
 
 def send_email_verification_code(email, code):
@@ -388,21 +320,6 @@ def send_email_action_code(email, code, *, subject, intro, fallback_note):
     if EMAIL_DEV_MODE:
         print(f"[EMAIL DEV MODE] {subject} for {email}: {code}", flush=True)
         return
-
-    if is_resend_requested():
-        try:
-            send_resend_email(
-                email,
-                subject,
-                (
-                    f"<p>{intro}: <strong>{code}</strong></p>"
-                    f"<p>Код действует {EMAIL_VERIFICATION_CODE_TTL_MINUTES} минут.</p>"
-                    f"<p>{fallback_note}</p>"
-                ),
-            )
-            return
-        except Exception as error:
-            print(f"[EMAIL RESEND] failed for {email}: {error}", flush=True)
 
     message = EmailMessage()
     message["Subject"] = subject

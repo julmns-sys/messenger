@@ -4,4 +4,3 @@ Flask-SocketIO
 Werkzeug
 mysql-connector-python
 python-dotenv
-resend
