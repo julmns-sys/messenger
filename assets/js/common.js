@@ -501,7 +501,142 @@ function initSettingsControls() {
     });
   }
 
+  initAccountSettingsControls();
   initSecurityControls();
+}
+
+function initAccountSettingsControls() {
+  const emailForm = document.querySelector("[data-account-email-form='true']");
+  const passwordForm = document.querySelector("[data-account-password-form='true']");
+  const emailStatus = document.querySelector("[data-account-email-status='true']");
+  const passwordStatus = document.querySelector("[data-account-password-status='true']");
+  const emailRequestButton = document.querySelector("[data-account-email-request]");
+  const passwordRequestButton = document.querySelector("[data-account-password-request]");
+
+  syncAccountSettingsSummary();
+
+  const setStatus = (node, message = "", type = "") => {
+    if (!node) {
+      return;
+    }
+    node.textContent = message;
+    node.className = `status settings-account-status ${type}`.trim();
+  };
+
+  if (emailForm && emailForm.dataset.bound !== "true") {
+    emailForm.dataset.bound = "true";
+    const emailInput = emailForm.querySelector('input[name="email"]');
+    const codeInput = emailForm.querySelector('input[name="code"]');
+
+    emailRequestButton?.addEventListener("click", async () => {
+      const email = emailInput?.value?.trim() || "";
+      if (!email) {
+        setStatus(emailStatus, "Введите новый email", "error");
+        emailInput?.focus();
+        return;
+      }
+
+      emailRequestButton.disabled = true;
+      setStatus(emailStatus, "Отправка кода...");
+      try {
+        const response = await apiFetch("/users/me/email-change/request", {
+          method: "POST",
+          body: JSON.stringify({ email })
+        });
+        setStatus(emailStatus, response?.message || "Код отправлен", "success");
+        codeInput?.focus();
+      } catch (error) {
+        setStatus(emailStatus, error.message, "error");
+      } finally {
+        emailRequestButton.disabled = false;
+      }
+    });
+
+    emailForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitButton = emailForm.querySelector('button[type="submit"]');
+      const email = emailInput?.value?.trim() || "";
+      const code = (codeInput?.value || "").replace(/\D/g, "").slice(0, 6);
+      if (!email) {
+        setStatus(emailStatus, "Введите новый email", "error");
+        emailInput?.focus();
+        return;
+      }
+
+      submitButton.disabled = true;
+      setStatus(emailStatus, "Подтверждение...");
+      try {
+        const updatedUser = await apiFetch("/users/me/email-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ email, code })
+        });
+        applySidebarProfileUserUpdate(updatedUser);
+        emailForm.reset();
+        setStatus(emailStatus, "Email обновлён", "success");
+      } catch (error) {
+        setStatus(emailStatus, error.message, "error");
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+  }
+
+  if (passwordForm && passwordForm.dataset.bound !== "true") {
+    passwordForm.dataset.bound = "true";
+    const passwordInput = passwordForm.querySelector('input[name="password"]');
+    const codeInput = passwordForm.querySelector('input[name="code"]');
+
+    passwordRequestButton?.addEventListener("click", async () => {
+      const password = passwordInput?.value || "";
+      if (password.length < 6) {
+        setStatus(passwordStatus, "Пароль должен содержать минимум 6 символов", "error");
+        passwordInput?.focus();
+        return;
+      }
+
+      passwordRequestButton.disabled = true;
+      setStatus(passwordStatus, "Отправка кода...");
+      try {
+        const response = await apiFetch("/users/me/password-change/request", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        setStatus(passwordStatus, response?.message || "Код отправлен", "success");
+        codeInput?.focus();
+      } catch (error) {
+        setStatus(passwordStatus, error.message, "error");
+      } finally {
+        passwordRequestButton.disabled = false;
+      }
+    });
+
+    passwordForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitButton = passwordForm.querySelector('button[type="submit"]');
+      const password = passwordInput?.value || "";
+      const code = (codeInput?.value || "").replace(/\D/g, "").slice(0, 6);
+      if (password.length < 6) {
+        setStatus(passwordStatus, "Пароль должен содержать минимум 6 символов", "error");
+        passwordInput?.focus();
+        return;
+      }
+
+      submitButton.disabled = true;
+      setStatus(passwordStatus, "Подтверждение...");
+      try {
+        const response = await apiFetch("/users/me/password-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ password, code })
+        });
+        passwordForm.reset();
+        setStatus(passwordStatus, response?.message || "Пароль изменён", "success");
+      } catch (error) {
+        setStatus(passwordStatus, error.message, "error");
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+  }
 }
 
 function formatSecurityDateTime(value) {
@@ -1435,6 +1570,7 @@ function fillSidebarProfile() {
   fields.email.classList.toggle("is-blurred", Boolean(user.email));
   fields.email.setAttribute("aria-label", user.email ? "Показать email" : "Email не указан");
   fields.email.setAttribute("aria-pressed", "false");
+  syncAccountSettingsSummary();
 }
 
 function setSidebarProfileEditMode(sidebar, isActive) {
@@ -1468,8 +1604,17 @@ function getSidebarProfileEditConfig(field) {
     email: {
       label: "Email",
       editor: "input",
+      workflow: "email-change",
       maxLength: 255,
-      value: (user) => user?.email || ""
+      value: () => ""
+    },
+    password: {
+      label: "Пароль",
+      editor: "input",
+      workflow: "password-change",
+      inputType: "password",
+      maxLength: 255,
+      value: () => ""
     },
     username: {
       label: "Username",
@@ -1619,6 +1764,180 @@ async function saveSidebarProfileField(field, value) {
   return updatedUser;
 }
 
+function applySidebarProfileUserUpdate(updatedUser) {
+  setCurrentUser(updatedUser);
+  fillUserBadge();
+  fillSidebarProfile();
+}
+
+function syncAccountSettingsSummary() {
+  const currentEmailNode = document.querySelector("[data-account-current-email='true']");
+  if (!currentEmailNode) {
+    return;
+  }
+
+  const user = getCurrentUser();
+  const email = String(user?.email || "").trim();
+  currentEmailNode.textContent = email ? `Текущий email: ${email}` : "Текущий email: не указан";
+}
+
+function createSidebarProfileEditorInput(field, { placeholder = "", type = "text", maxLength = 255 } = {}) {
+  const input = document.createElement("input");
+  input.className = "sidebar-profile-editor-input";
+  input.dataset.editorField = field;
+  input.type = type;
+  input.placeholder = placeholder;
+  input.autocomplete = "off";
+  if (maxLength) {
+    input.maxLength = maxLength;
+  }
+  input.addEventListener("input", () => {
+    updateSidebarProfileEditorVisualState(input);
+  });
+  updateSidebarProfileEditorVisualState(input);
+  return input;
+}
+
+function createSidebarProfileSensitiveEditor(field, factNode) {
+  const config = getSidebarProfileEditConfig(field);
+  if (!config) {
+    return null;
+  }
+
+  const editor = document.createElement("form");
+  editor.className = "sidebar-profile-editor sidebar-profile-editor-stack";
+
+  const isEmailFlow = config.workflow === "email-change";
+  const valueInput = createSidebarProfileEditorInput(field, {
+    type: isEmailFlow ? "email" : "password",
+    placeholder: isEmailFlow ? "Введите новый email" : "Введите новый пароль",
+    maxLength: config.maxLength || 255
+  });
+  const codeInput = createSidebarProfileEditorInput(`${field}-code`, {
+    type: "text",
+    placeholder: "Введите код из письма",
+    maxLength: 6
+  });
+  codeInput.inputMode = "numeric";
+  codeInput.pattern = "[0-9]*";
+
+  const requestButton = document.createElement("button");
+  requestButton.className = "sidebar-profile-editor-button request";
+  requestButton.type = "button";
+  requestButton.textContent = "Получить код";
+
+  const actions = document.createElement("div");
+  actions.className = "sidebar-profile-editor-actions";
+  actions.innerHTML = `
+    <button class="sidebar-profile-editor-button cancel" type="button">Отмена</button>
+    <button class="sidebar-profile-editor-button save" type="submit">Подтвердить</button>
+  `;
+
+  editor.appendChild(valueInput);
+  editor.appendChild(codeInput);
+  editor.appendChild(requestButton);
+  editor.appendChild(actions);
+
+  actions.querySelector(".cancel")?.addEventListener("click", () => {
+    hideSidebarProfileEditor(factNode);
+  });
+
+  requestButton.addEventListener("click", async () => {
+    const nextValue = readSidebarProfileEditorValue(valueInput);
+    if (isEmailFlow) {
+      if (!nextValue) {
+        setSidebarProfileStatus(factNode, "Введите новый email", "error");
+        focusSidebarProfileEditorControl(valueInput);
+        return;
+      }
+    } else if (nextValue.length < 6) {
+      setSidebarProfileStatus(factNode, "Пароль должен содержать минимум 6 символов", "error");
+      focusSidebarProfileEditorControl(valueInput);
+      return;
+    }
+
+    requestButton.disabled = true;
+    setSidebarProfileStatus(factNode, "Отправка кода...", "loading");
+
+    try {
+      const response = isEmailFlow
+        ? await apiFetch("/users/me/email-change/request", {
+          method: "POST",
+          body: JSON.stringify({ email: nextValue })
+        })
+        : await apiFetch("/users/me/password-change/request", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+
+      if (isEmailFlow && response?.email && !readSidebarProfileEditorValue(valueInput)) {
+        valueInput.value = response.email;
+      }
+      setSidebarProfileStatus(factNode, response?.message || "Код отправлен", "success");
+      focusSidebarProfileEditorControl(codeInput);
+    } catch (error) {
+      setSidebarProfileStatus(factNode, error.message, "error");
+    } finally {
+      requestButton.disabled = false;
+    }
+  });
+
+  editor.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const nextValue = readSidebarProfileEditorValue(valueInput);
+    const code = readSidebarProfileEditorValue(codeInput).replace(/\D/g, "").slice(0, 6);
+    const confirmButton = actions.querySelector(".save");
+    if (confirmButton) {
+      confirmButton.disabled = true;
+    }
+
+    setSidebarProfileStatus(factNode, "Проверка кода...", "loading");
+
+    try {
+      if (isEmailFlow) {
+        const updatedUser = await apiFetch("/users/me/email-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ email: nextValue, code })
+        });
+        applySidebarProfileUserUpdate(updatedUser);
+        hideSidebarProfileEditor(factNode);
+        setSidebarProfileStatus(factNode, "Email обновлён", "success");
+      } else {
+        const response = await apiFetch("/users/me/password-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ password: nextValue, code })
+        });
+        hideSidebarProfileEditor(factNode);
+        setSidebarProfileStatus(factNode, response?.message || "Пароль изменён", "success");
+      }
+
+      window.setTimeout(() => {
+        setSidebarProfileStatus(factNode, "");
+      }, 1600);
+    } catch (error) {
+      setSidebarProfileStatus(factNode, error.message, "error");
+      if (confirmButton) {
+        confirmButton.disabled = false;
+      }
+    }
+  });
+
+  [valueInput, codeInput].forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        hideSidebarProfileEditor(factNode);
+      }
+    });
+  });
+
+  return {
+    editor,
+    focusTarget: valueInput
+  };
+}
+
 function openSidebarProfileEditor(field) {
   const sidebar = document.querySelector(".sidebar");
   const button = document.querySelector(`[data-profile-edit="${field}"]`);
@@ -1651,6 +1970,16 @@ function openSidebarProfileEditor(field) {
   if (button) {
     button.dataset.profileLineItem = "true";
     button.hidden = true;
+  }
+
+  if (config.workflow === "email-change" || config.workflow === "password-change") {
+    const sensitiveEditor = createSidebarProfileSensitiveEditor(field, factNode);
+    if (!sensitiveEditor) {
+      return;
+    }
+    line.appendChild(sensitiveEditor.editor);
+    focusSidebarProfileEditorControl(sensitiveEditor.focusTarget);
+    return;
   }
 
   const editor = document.createElement("form");

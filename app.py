@@ -94,6 +94,8 @@ EMAIL_DEV_MODE = str(os.getenv("EMAIL_DEV_MODE", "false") or "false").strip().lo
 SMTP_TIMEOUT_SECONDS = max(5, int(str(os.getenv("SMTP_TIMEOUT_SECONDS", "15") or "15").strip() or 15))
 RESEND_API_KEY = str(os.getenv("RESEND_API_KEY", "") or "").strip()
 RESEND_FROM = str(os.getenv("RESEND_FROM", "") or "").strip()
+EMAIL_ADDRESS_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MIN_PASSWORD_LENGTH = 6
 
 
 @app.context_processor
@@ -229,11 +231,37 @@ def build_email_verification_payload():
     return code, build_email_verification_hash(code), expires_at
 
 
-def get_email_verification_sent_at(user):
-    expires_at = parse_datetime_value(row_value(user, "email_verification_expires_at"))
-    if not expires_at:
+def validate_email_address(value):
+    email = str(value or "").strip()
+    if not email or len(email) > 255 or not EMAIL_ADDRESS_PATTERN.fullmatch(email):
+        raise ValueError("Укажите корректный email")
+    return email
+
+
+def validate_password_value(value):
+    password = str(value or "")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Пароль должен содержать минимум {MIN_PASSWORD_LENGTH} символов")
+    return password
+
+
+def get_verification_sent_at_from_expiry(expires_at):
+    parsed_expires_at = parse_datetime_value(expires_at)
+    if not parsed_expires_at:
         return None
-    return expires_at - timedelta(minutes=EMAIL_VERIFICATION_CODE_TTL_MINUTES)
+    return parsed_expires_at - timedelta(minutes=EMAIL_VERIFICATION_CODE_TTL_MINUTES)
+
+
+def get_email_verification_sent_at(user):
+    return get_verification_sent_at_from_expiry(row_value(user, "email_verification_expires_at"))
+
+
+def get_change_request_retry_after_seconds(expires_at):
+    sent_at = get_verification_sent_at_from_expiry(expires_at)
+    if not sent_at:
+        return 0
+    remaining = EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS - int((utcnow() - sent_at).total_seconds())
+    return max(0, remaining)
 
 
 def get_email_verification_retry_after_seconds(user):
@@ -338,30 +366,40 @@ def send_email_message(message):
 
 
 def send_email_verification_code(email, code):
+    send_email_action_code(
+        email,
+        code,
+        subject="Код подтверждения email для /Chatik",
+        intro="Ваш код подтверждения",
+        fallback_note="Если вы не регистрировались в /Chatik, просто проигнорируйте это письмо."
+    )
+
+
+def send_email_action_code(email, code, *, subject, intro, fallback_note):
     if EMAIL_DEV_MODE:
-        print(f"[EMAIL DEV MODE] verification code for {email}: {code}", flush=True)
+        print(f"[EMAIL DEV MODE] {subject} for {email}: {code}", flush=True)
         return
 
     if is_resend_configured():
         send_resend_email(
             email,
-            "Код подтверждения email для /Chatik",
+            subject,
             (
-                f"<p>Ваш код подтверждения: <strong>{code}</strong></p>"
+                f"<p>{intro}: <strong>{code}</strong></p>"
                 f"<p>Код действует {EMAIL_VERIFICATION_CODE_TTL_MINUTES} минут.</p>"
-                "<p>Если вы не регистрировались в /Chatik, просто проигнорируйте это письмо.</p>"
+                f"<p>{fallback_note}</p>"
             ),
         )
         return
 
     message = EmailMessage()
-    message["Subject"] = "Код подтверждения email для /Chatik"
+    message["Subject"] = subject
     message["From"] = formataddr(("Chatik", SMTP_FROM))
     message["To"] = email
     message.set_content(
-        f"Ваш код подтверждения: {code}\n\n"
+        f"{intro}: {code}\n\n"
         f"Код действует {EMAIL_VERIFICATION_CODE_TTL_MINUTES} минут.\n"
-        "Если вы не регистрировались в /Chatik, просто проигнорируйте это письмо.\n"
+        f"{fallback_note}\n"
     )
     send_email_message(message)
 
@@ -4029,10 +4067,13 @@ def register():
 
     name = data.get("name", "").strip()
     username = data.get("username", "").strip().replace("@", "")
-    email = data.get("email", "").strip()
-    password = data.get("password", "")
+    try:
+        email = validate_email_address(data.get("email", ""))
+        password = validate_password_value(data.get("password", ""))
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
 
-    if not name or not username or not email or not password:
+    if not name or not username or not email:
         return jsonify({"message": "Заполните имя, username, email и пароль"}), 400
     if username.lower() in {SYSTEM_USERNAME.lower(), SYSTEM_OWNER_USERNAME.lower()}:
         return jsonify({"message": "Этот username зарезервирован"}), 400
@@ -4266,6 +4307,287 @@ def get_me():
     return jsonify(serialize_user_profile(user))
 
 
+@app.post("/users/me/email-change/request")
+def request_email_change():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    try:
+        next_email = validate_email_address(data.get("email", ""))
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+
+    conn = get_db()
+    try:
+        user = conn.execute("""
+            SELECT *
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+        """, (user_id,)).fetchone()
+        if not user:
+            return jsonify({"message": "Пользователь не найден"}), 404
+
+        current_email = str(row_value(user, "email", "") or "").strip()
+        if current_email.lower() == next_email.lower():
+            return jsonify({"message": "Укажите другой email"}), 400
+
+        existing_user = conn.execute("""
+            SELECT id
+            FROM users
+            WHERE LOWER(email) = LOWER(%s) AND id != %s
+            LIMIT 1
+        """, (next_email, user_id)).fetchone()
+        if existing_user:
+            return jsonify({"message": "Этот email уже используется"}), 400
+
+        retry_after = get_change_request_retry_after_seconds(row_value(user, "email_change_expires_at"))
+        if retry_after > 0:
+            return jsonify({
+                "message": f"Повторная отправка доступна через {retry_after} сек.",
+                "retry_after": retry_after
+            }), 429
+
+        code, code_hash, expires_at = build_email_verification_payload()
+        conn.execute("""
+            UPDATE users
+            SET pending_email = %s,
+                email_change_code_hash = %s,
+                email_change_expires_at = %s
+            WHERE id = %s
+        """, (next_email, code_hash, to_db_datetime(expires_at), user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        send_email_action_code(
+            next_email,
+            code,
+            subject="Код смены email для /Chatik",
+            intro="Ваш код для подтверждения нового email",
+            fallback_note="Если вы не запрашивали смену email в /Chatik, просто проигнорируйте это письмо."
+        )
+    except Exception:
+        conn = get_db()
+        try:
+            conn.execute("""
+                UPDATE users
+                SET pending_email = NULL,
+                    email_change_code_hash = NULL,
+                    email_change_expires_at = NULL
+                WHERE id = %s
+            """, (user_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"message": "Не удалось отправить код подтверждения. Попробуйте позже."}), 500
+
+    return jsonify({
+        "message": "Мы отправили код подтверждения на новый email.",
+        "email": next_email
+    })
+
+
+@app.post("/users/me/email-change/confirm")
+def confirm_email_change():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    try:
+        next_email = validate_email_address(data.get("email", ""))
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+
+    code = str(data.get("code", "")).strip()
+    if not re.fullmatch(r"\d{6}", code):
+        return jsonify({"message": "Неверный код подтверждения"}), 400
+
+    conn = get_db()
+    try:
+        user = conn.execute("""
+            SELECT *
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+        """, (user_id,)).fetchone()
+        if not user:
+            return jsonify({"message": "Пользователь не найден"}), 404
+
+        pending_email = str(row_value(user, "pending_email", "") or "").strip()
+        code_hash = row_value(user, "email_change_code_hash", "")
+        expires_at = parse_datetime_value(row_value(user, "email_change_expires_at"))
+        if pending_email.lower() != next_email.lower() or not code_hash or not expires_at or expires_at <= utcnow():
+            conn.execute("""
+                UPDATE users
+                SET pending_email = NULL,
+                    email_change_code_hash = NULL,
+                    email_change_expires_at = NULL
+                WHERE id = %s
+            """, (user_id,))
+            conn.commit()
+            return jsonify({"message": "Код недействителен или истек"}), 400
+
+        if not check_password_hash(code_hash, code):
+            return jsonify({"message": "Неверный код подтверждения"}), 400
+
+        existing_user = conn.execute("""
+            SELECT id
+            FROM users
+            WHERE LOWER(email) = LOWER(%s) AND id != %s
+            LIMIT 1
+        """, (next_email, user_id)).fetchone()
+        if existing_user:
+            return jsonify({"message": "Этот email уже используется"}), 400
+
+        conn.execute("""
+            UPDATE users
+            SET email = %s,
+                email_verified = 1,
+                pending_email = NULL,
+                email_change_code_hash = NULL,
+                email_change_expires_at = NULL
+            WHERE id = %s
+        """, (next_email, user_id))
+        conn.commit()
+
+        updated_user = conn.execute("""
+            SELECT id, name, username, email, email_verified, role, bio, date_of_birth, login_alerts_enabled,
+                   is_banned, banned_reason, banned_until,
+                   can_send_messages, can_upload_files, can_create_groups
+            FROM users
+            WHERE id = %s
+        """, (user_id,)).fetchone()
+        return jsonify(serialize_user_profile(updated_user))
+    finally:
+        conn.close()
+
+
+@app.post("/users/me/password-change/request")
+def request_password_change():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        user = conn.execute("""
+            SELECT *
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+        """, (user_id,)).fetchone()
+        if not user:
+            return jsonify({"message": "Пользователь не найден"}), 404
+
+        email = str(row_value(user, "email", "") or "").strip()
+        if not email:
+            return jsonify({"message": "Сначала добавьте email в профиль"}), 400
+        if not bool(row_value(user, "email_verified", False)):
+            return jsonify({"message": "Сначала подтвердите текущий email"}), 400
+
+        retry_after = get_change_request_retry_after_seconds(row_value(user, "password_change_expires_at"))
+        if retry_after > 0:
+            return jsonify({
+                "message": f"Повторная отправка доступна через {retry_after} сек.",
+                "retry_after": retry_after
+            }), 429
+
+        code, code_hash, expires_at = build_email_verification_payload()
+        conn.execute("""
+            UPDATE users
+            SET password_change_code_hash = %s,
+                password_change_expires_at = %s
+            WHERE id = %s
+        """, (code_hash, to_db_datetime(expires_at), user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        send_email_action_code(
+            email,
+            code,
+            subject="Код смены пароля для /Chatik",
+            intro="Ваш код для смены пароля",
+            fallback_note="Если вы не запрашивали смену пароля в /Chatik, срочно проверьте безопасность аккаунта."
+        )
+    except Exception:
+        conn = get_db()
+        try:
+            conn.execute("""
+                UPDATE users
+                SET password_change_code_hash = NULL,
+                    password_change_expires_at = NULL
+                WHERE id = %s
+            """, (user_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"message": "Не удалось отправить код подтверждения. Попробуйте позже."}), 500
+
+    return jsonify({"message": "Мы отправили код подтверждения на ваш email."})
+
+
+@app.post("/users/me/password-change/confirm")
+def confirm_password_change():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    code = str(data.get("code", "")).strip()
+    if not re.fullmatch(r"\d{6}", code):
+        return jsonify({"message": "Неверный код подтверждения"}), 400
+
+    try:
+        password = validate_password_value(data.get("password", ""))
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+
+    conn = get_db()
+    try:
+        user = conn.execute("""
+            SELECT *
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+        """, (user_id,)).fetchone()
+        if not user:
+            return jsonify({"message": "Пользователь не найден"}), 404
+
+        code_hash = row_value(user, "password_change_code_hash", "")
+        expires_at = parse_datetime_value(row_value(user, "password_change_expires_at"))
+        if not code_hash or not expires_at or expires_at <= utcnow():
+            conn.execute("""
+                UPDATE users
+                SET password_change_code_hash = NULL,
+                    password_change_expires_at = NULL
+                WHERE id = %s
+            """, (user_id,))
+            conn.commit()
+            return jsonify({"message": "Код недействителен или истек"}), 400
+
+        if not check_password_hash(code_hash, code):
+            return jsonify({"message": "Неверный код подтверждения"}), 400
+
+        conn.execute("""
+            UPDATE users
+            SET password_hash = %s,
+                password_change_code_hash = NULL,
+                password_change_expires_at = NULL
+            WHERE id = %s
+        """, (generate_password_hash(password), user_id))
+        conn.commit()
+        return jsonify({"message": "Пароль успешно изменен"})
+    finally:
+        conn.close()
+
+
 @app.get("/security/overview")
 def get_security_overview_endpoint():
     user_id = current_user_id()
@@ -4337,10 +4659,12 @@ def update_me():
         return jsonify({"message": "Не авторизован"}), 401
 
     data = request.json or {}
+    if "email" in data:
+        return jsonify({"message": "Для смены email используйте подтверждение кодом"}), 400
+
     allowed_fields = {
         "name": (data.get("name", ""), 80),
         "username": (data.get("username", ""), 32),
-        "email": (data.get("email", ""), 255),
         "bio": (data.get("bio", ""), 50)
     }
 

@@ -422,6 +422,31 @@ def _ensure_users_security_columns(conn):
                 ALTER TABLE users
                 ADD COLUMN email_verification_expires_at DATETIME NULL AFTER email_verification_code_hash
             """)
+        if "pending_email" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN pending_email VARCHAR(255) NULL AFTER email_verification_expires_at
+            """)
+        if "email_change_code_hash" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN email_change_code_hash VARCHAR(255) NULL AFTER pending_email
+            """)
+        if "email_change_expires_at" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN email_change_expires_at DATETIME NULL AFTER email_change_code_hash
+            """)
+        if "password_change_code_hash" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN password_change_code_hash VARCHAR(255) NULL AFTER email_change_expires_at
+            """)
+        if "password_change_expires_at" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN password_change_expires_at DATETIME NULL AFTER password_change_code_hash
+            """)
         if "role" not in existing:
             cursor.execute("""
                 ALTER TABLE users

@@ -18,8 +18,36 @@
         <p class="muted">Основные данные аккаунта</p>
       </div>
       <div class="sidebar-settings-list">
-        <button class="sidebar-settings-item" type="button">Смена пароля <span>Скоро</span></button>
-        <button class="sidebar-settings-item" type="button">Смена почты <span>Скоро</span></button>
+        <div class="settings-item settings-account-item">
+          <div class="settings-copy">
+            <strong>Смена email</strong>
+            <span data-account-current-email="true">Текущий email: не указан</span>
+          </div>
+          <form class="settings-account-form" data-account-email-form="true">
+            <input class="input settings-account-input" name="email" type="email" placeholder="Новый email" maxlength="255" autocomplete="off">
+            <input class="input settings-account-input" name="code" type="text" placeholder="Код из письма" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code">
+            <div class="settings-account-actions">
+              <button class="button button-secondary settings-account-button" data-account-email-request type="button">Получить код</button>
+              <button class="button settings-account-button" type="submit">Подтвердить</button>
+            </div>
+            <div class="status settings-account-status" data-account-email-status="true"></div>
+          </form>
+        </div>
+        <div class="settings-item settings-account-item">
+          <div class="settings-copy">
+            <strong>Смена пароля</strong>
+            <span>Код подтверждения придёт на текущий подтверждённый email.</span>
+          </div>
+          <form class="settings-account-form" data-account-password-form="true">
+            <input class="input settings-account-input" name="password" type="password" placeholder="Новый пароль" maxlength="255" autocomplete="new-password">
+            <input class="input settings-account-input" name="code" type="text" placeholder="Код из письма" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code">
+            <div class="settings-account-actions">
+              <button class="button button-secondary settings-account-button" data-account-password-request type="button">Получить код</button>
+              <button class="button settings-account-button" type="submit">Подтвердить</button>
+            </div>
+            <div class="status settings-account-status" data-account-password-status="true"></div>
+          </form>
+        </div>
       </div>
     </section>
     <section class="sidebar-settings-section">
