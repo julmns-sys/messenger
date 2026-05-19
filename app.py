@@ -19,7 +19,10 @@ from flask import Flask, request, jsonify, send_from_directory, redirect, render
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
 from dotenv import load_dotenv
-import resend
+try:
+    import resend
+except ImportError:
+    resend = None
 from werkzeug.security import generate_password_hash, check_password_hash
 from db import get_db, init_db
 import secrets
@@ -287,11 +290,17 @@ def ensure_smtp_configured():
 
 
 def is_resend_configured():
+    return bool(resend is not None and RESEND_API_KEY and RESEND_FROM)
+
+
+def is_resend_requested():
     return bool(RESEND_API_KEY and RESEND_FROM)
 
 
 def send_resend_email(to_email, subject, html):
-    if not is_resend_configured():
+    if resend is None:
+        raise RuntimeError("Модуль resend не установлен")
+    if not is_resend_requested():
         raise RuntimeError("Resend не настроен")
 
     resend.api_key = RESEND_API_KEY
@@ -380,17 +389,20 @@ def send_email_action_code(email, code, *, subject, intro, fallback_note):
         print(f"[EMAIL DEV MODE] {subject} for {email}: {code}", flush=True)
         return
 
-    if is_resend_configured():
-        send_resend_email(
-            email,
-            subject,
-            (
-                f"<p>{intro}: <strong>{code}</strong></p>"
-                f"<p>Код действует {EMAIL_VERIFICATION_CODE_TTL_MINUTES} минут.</p>"
-                f"<p>{fallback_note}</p>"
-            ),
-        )
-        return
+    if is_resend_requested():
+        try:
+            send_resend_email(
+                email,
+                subject,
+                (
+                    f"<p>{intro}: <strong>{code}</strong></p>"
+                    f"<p>Код действует {EMAIL_VERIFICATION_CODE_TTL_MINUTES} минут.</p>"
+                    f"<p>{fallback_note}</p>"
+                ),
+            )
+            return
+        except Exception as error:
+            print(f"[EMAIL RESEND] failed for {email}: {error}", flush=True)
 
     message = EmailMessage()
     message["Subject"] = subject
@@ -910,7 +922,13 @@ def save_voice_upload(uploaded_file):
 
     extension = VOICE_EXTENSIONS_BY_MIME.get(mime_type) or Path(uploaded_file.filename).suffix.lower() or ".webm"
     filename = f"{uuid.uuid4().hex}{extension}"
-    uploaded_file.save(VOICE_UPLOAD_DIR / filename)
+    VOICE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = VOICE_UPLOAD_DIR / filename
+    try:
+        uploaded_file.save(target_path)
+    except OSError as error:
+        print(f"[VOICE UPLOAD] failed to save {target_path}: {error}", flush=True)
+        raise RuntimeError("Не удалось сохранить голосовое сообщение") from error
     return {
         "url": f"/assets/uploads/voice/{filename}",
         "mime_type": mime_type
@@ -6307,6 +6325,9 @@ def create_chat_voice_message(chat_id):
     except ValueError as error:
         conn.close()
         return jsonify({"message": str(error)}), 400
+    except RuntimeError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 500
 
     duration_ms = parse_duration_ms(request.form.get("duration_ms"))
     reply_to_id = request.form.get("reply_to_id")
@@ -7796,6 +7817,9 @@ def create_group_voice_message(group_id):
     except ValueError as error:
         conn.close()
         return jsonify({"message": str(error)}), 400
+    except RuntimeError as error:
+        conn.close()
+        return jsonify({"message": str(error)}), 500
 
     duration_ms = parse_duration_ms(request.form.get("duration_ms"))
     reply_to_id = request.form.get("reply_to_id")
