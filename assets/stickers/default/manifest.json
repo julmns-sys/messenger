@@ -1,0 +1,27 @@
+{
+  "title": "Базовый набор",
+  "description": "Небольшой дефолтный sticker pack для /Chatik.",
+  "cover_path": "/assets/stickers/default/blue-smile.png",
+  "stickers": [
+    {
+      "title": "Blue smile",
+      "file": "blue-smile.png",
+      "mime_type": "image/png"
+    },
+    {
+      "title": "Mint wave",
+      "file": "mint-wave.png",
+      "mime_type": "image/png"
+    },
+    {
+      "title": "Orange wow",
+      "file": "orange-wow.png",
+      "mime_type": "image/png"
+    },
+    {
+      "title": "Pink heart",
+      "file": "pink-heart.png",
+      "mime_type": "image/png"
+    }
+  ]
+}

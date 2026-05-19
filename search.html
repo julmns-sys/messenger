@@ -3,13 +3,78 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+      html.theme-preload-dark {
+        background: #101821;
+      }
+
+      html.theme-preload-dark body {
+        visibility: hidden;
+      }
+
+      html.theme-preload-dark.theme-preload-ready body {
+        visibility: visible;
+      }
+    </style>
     <title>Search | /Chatik</title>
     <link rel="icon" type="image/svg+xml" href="/assets/icons/app/favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/app/favicon32x32.png">
     <link rel="apple-touch-icon" href="/assets/icons/app/favicon32x32.png">
+    <script>
+      (() => {
+        let isDarkTheme = false;
+        try {
+          const rawSettings = localStorage.getItem("messenger:settings");
+          const settings = rawSettings ? JSON.parse(rawSettings) : null;
+          isDarkTheme = Boolean(settings && settings.theme === "dark");
+        } catch {}
+
+        window.__chatikInitialTheme = isDarkTheme ? "dark" : "light";
+        if (!isDarkTheme) return;
+
+        document.documentElement.classList.add("theme-preload-dark");
+        document.documentElement.classList.add("settings-theme-dark");
+        document.documentElement.style.background = "#101821";
+        document.write(`
+          <style>
+            html.settings-theme-dark,
+            html.settings-theme-dark body {
+              background:
+                radial-gradient(circle at top left, rgba(51, 144, 236, 0.12), transparent 22%),
+                radial-gradient(circle at 85% 12%, rgba(92, 160, 255, 0.08), transparent 18%),
+                #101821 !important;
+              color: #e8eef5 !important;
+            }
+
+            html.settings-theme-dark .app,
+            html.settings-theme-dark .sidebar,
+            html.settings-theme-dark .content,
+            html.settings-theme-dark .content-header,
+            html.settings-theme-dark .composer-wrap,
+            html.settings-theme-dark .composer,
+            html.settings-theme-dark .search-input,
+            html.settings-theme-dark .input,
+            html.settings-theme-dark .textarea {
+              background-color: rgba(15, 24, 34, 0.92) !important;
+              color: #e8eef5 !important;
+            }
+
+            html.settings-theme-dark .sidebar {
+              background: linear-gradient(180deg, rgba(12, 22, 32, 0.94), rgba(11, 21, 31, 0.88)) !important;
+            }
+          </style>
+        `);
+      })();
+    </script>
     <link rel="stylesheet" href="/assets/css/styles.css">
   </head>
   <body class="page-shell">
+    <script>
+      if (window.__chatikInitialTheme === "dark") {
+        document.body.classList.add("settings-theme-dark");
+        document.documentElement.classList.add("theme-preload-ready");
+      }
+    </script>
     <main class="app">
       <aside class="sidebar">
         <div class="sidebar-slider">
@@ -43,8 +108,8 @@
               <div class="sidebar-profile-card">
                 <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false">⋯</button>
                 <div class="sidebar-profile-menu" id="sidebarProfileMenu" hidden>
-                  <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button">Изменить профиль</button>
-                  <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button">Выйти из аккаунта</button>
+                  <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button"><img class="menu-item-icon icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""><span class="menu-item-label">Изменить профиль</span></button>
+                  <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button"><img class="menu-item-icon icon-asset" src="/assets/icons/ui/signout.svg" alt=""><span class="menu-item-label">Выйти из аккаунта</span></button>
                 </div>
                 <div class="avatar sidebar-profile-avatar" id="sidebarProfileAvatar">?</div>
                 <h2 class="sidebar-profile-name" id="sidebarProfileName">Пользователь</h2>
@@ -84,9 +149,100 @@
               <div class="sidebar-profile-actions">
                 <div class="sidebar-profile-actions-header">
                   <h3>Настройки</h3>
-                  <p class="muted">Кнопки добавим следующим шагом.</p>
+                  <p class="muted">Откройте отдельную панель в sidebar.</p>
                 </div>
+                <button class="button settings-launch-button" id="sidebarSettingsOpen" type="button">Открыть настройки</button>
               </div>
+            </div>
+          </div>
+          <div class="sidebar-panel sidebar-panel-settings" aria-hidden="true">
+            <div class="sidebar-header"><div class="sidebar-profile-title"><button class="icon-button page-back" id="sidebarSettingsBack" type="button" aria-label="Назад"></button><div><div class="brand">Настройки</div><div class="muted">Разделы и заглушки</div></div></div></div>
+            <div class="sidebar-profile-body sidebar-settings-body">
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>1. Профиль</h3><p class="muted">Основные данные аккаунта</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">Фото профиля <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Имя <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Username <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Bio / статус <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Ссылка на профиль <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Дата рождения <span>Опционально</span></button><button class="sidebar-settings-item" type="button">Смена пароля <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Смена почты <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section">
+                <div class="sidebar-settings-section-head">
+                  <h3>2. Внешний вид</h3>
+                  <p class="muted">Тема и визуальный стиль</p>
+                </div>
+                <div class="settings-list" id="settingsList">
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Светлая / тёмная тема</strong>
+                      <span>Переключает общую тему интерфейса.</span>
+                    </div>
+                    <select class="settings-select" data-setting-control="theme">
+                      <option value="light">Светлая</option>
+                      <option value="dark">Тёмная</option>
+                    </select>
+                  </div>
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Accent color</strong>
+                      <span>Основной цвет кнопок, ссылок и акцентов.</span>
+                    </div>
+                    <input class="settings-color" data-setting-control="accentColor" type="color" aria-label="Accent color">
+                  </div>
+                  <div class="settings-item settings-item-range">
+                    <div class="settings-copy">
+                      <strong>Размер текста</strong>
+                      <span>Базовый размер шрифта для интерфейса.</span>
+                    </div>
+                    <div class="settings-range-wrap">
+                      <span class="settings-range-value" data-setting-value="textSize">16px</span>
+                      <input class="settings-range" data-setting-control="textSize" type="range" min="14" max="20" step="1">
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Анимации интерфейса</strong>
+                      <span>Отключает лишнее движение и переходы.</span>
+                    </div>
+                    <label class="settings-switch" aria-label="Анимации интерфейса">
+                      <input data-setting-control="animations" type="checkbox">
+                      <span class="settings-switch-ui"></span>
+                    </label>
+                  </div>
+                  <div class="settings-item">
+                    <div class="settings-copy">
+                      <strong>Обои чата</strong>
+                      <span>Фоновый паттерн для области сообщений.</span>
+                    </div>
+                    <select class="settings-select" data-setting-control="chatWallpaper">
+                      <option value="none">Нет</option>
+                      <option value="grid">Grid</option>
+                      <option value="aurora">Aurora</option>
+                      <option value="paper">Paper</option>
+                    </select>
+                  </div>
+                  <div class="settings-item settings-item-range">
+                    <div class="settings-copy">
+                      <strong>Прозрачность интерфейса</strong>
+                      <span>Уровень прозрачности стеклянных поверхностей.</span>
+                    </div>
+                    <div class="settings-range-wrap">
+                      <span class="settings-range-value" data-setting-value="transparency">62%</span>
+                      <input class="settings-range" data-setting-control="transparency" type="range" min="35" max="92" step="1">
+                    </div>
+                  </div>
+                  <div class="settings-item settings-item-range">
+                    <div class="settings-copy">
+                      <strong>Скругления UI</strong>
+                      <span>Радиус карточек, полей и кнопок.</span>
+                    </div>
+                    <div class="settings-range-wrap">
+                      <span class="settings-range-value" data-setting-value="uiRadius">24px</span>
+                      <input class="settings-range" data-setting-control="uiRadius" type="range" min="12" max="34" step="1">
+                    </div>
+                  </div>
+                  <button class="button button-secondary settings-reset-button" data-settings-reset="appearance" type="button">
+                    Вернуть внешний вид по умолчанию
+                  </button>
+                </div>
+              </section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>3. Чаты</h3><p class="muted">Поведение сообщений и списка чатов</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">Enter для отправки <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Shift+Enter новая строка <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Автозагрузка медиа <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Показывать превью ссылок <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Формат времени 12/24 <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Плотность сообщений <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Показывать аватарки <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Скрывать системные сообщения <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Закреплённые чаты <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Архив чатов <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>4. Уведомления</h3><p class="muted">Звуки, mute и превью</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">Звук сообщений <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Вибрация <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Notifications <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Preview текста уведомлений <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Mute отдельных чатов <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Не беспокоить <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Звук звонков <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>5. Приватность</h3><p class="muted">Кто и что может видеть</p></div><div class="settings-list"><div class="settings-item"><div class="settings-copy"><strong>Кто видит онлайн</strong><span>Определяет, кто может видеть ваш текущий статус активности.</span></div><select class="settings-select" data-setting-control="onlineVisibility"><option value="everyone">Все</option><option value="contacts">Только контакты</option><option value="nobody">Никто</option></select></div><div class="settings-item"><div class="settings-copy"><strong>Кто видит last seen</strong><span>Управляет отображением времени вашего последнего посещения.</span></div><select class="settings-select" data-setting-control="lastSeenVisibility"><option value="everyone">Все</option><option value="contacts">Только контакты</option><option value="nobody">Никто</option></select></div><div class="settings-item"><div class="settings-copy"><strong>Кто может писать</strong><span>Ограничивает, кто может начать с вами личный чат.</span></div><select class="settings-select" data-setting-control="directMessagesPrivacy"><option value="everyone">Все</option><option value="contacts">Только контакты</option><option value="nobody">Никто</option></select></div><div class="settings-item"><div class="settings-copy"><strong>Кто может добавлять в группы</strong><span>Определяет, кто может приглашать вас в групповые чаты.</span></div><select class="settings-select" data-setting-control="groupInvitesPrivacy"><option value="everyone">Все</option><option value="contacts">Только контакты</option><option value="nobody">Никто</option></select></div><div class="settings-item"><div class="settings-copy"><strong>Read receipts</strong><span>Показывает собеседникам, что вы прочитали сообщение.</span></div><label class="settings-switch" aria-label="Read receipts"><input data-setting-control="readReceipts" type="checkbox"><span class="settings-switch-ui"></span></label></div><div class="settings-item"><div class="settings-copy"><strong>Typing status</strong><span>Показывает другим, когда вы набираете сообщение.</span></div><label class="settings-switch" aria-label="Typing status"><input data-setting-control="typingStatus" type="checkbox"><span class="settings-switch-ui"></span></label></div><div class="settings-item"><div class="settings-copy"><strong>Скриншот protection</strong><span>Локальный флаг для будущей защиты чувствительного контента.</span></div><label class="settings-switch" aria-label="Скриншот protection"><input data-setting-control="screenshotProtection" type="checkbox"><span class="settings-switch-ui"></span></label></div><button class="sidebar-settings-item" type="button">Заблокированные пользователи <span>Скоро</span></button></div></section>
+              <section class="sidebar-settings-section"><div class="sidebar-settings-section-head"><h3>6. Безопасность</h3><p class="muted">Сессии, входы и защита</p></div><div class="sidebar-settings-list"><button class="sidebar-settings-item" type="button">2FA <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Активные сессии <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Завершить все сессии <span>Скоро</span></button><button class="sidebar-settings-item" type="button">История входов <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Login alerts <span>Скоро</span></button><button class="sidebar-settings-item" type="button">Device management <span>Скоро</span></button><button class="sidebar-settings-item" type="button">PIN-код приложения <span>Скоро</span></button></div></section>
             </div>
           </div>
         </div>

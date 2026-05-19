@@ -5,6 +5,7 @@ const chatState = {
 };
 const CHAT_LIST_SCROLL_KEY = "messenger:chat-list-scroll-top";
 const CHAT_TAGS_KEY = "messenger:chat-tags";
+const APP_SETTINGS_KEY = "messenger:settings";
 let chatListActionMenu = null;
 let activeChatListItem = null;
 let chatListMenuHideTimer = null;
@@ -13,16 +14,774 @@ let chatListTouchTarget = null;
 let chatListRealtimeSocket = null;
 let chatListRealtimeBoundListId = null;
 let chatListRefreshTimer = null;
+let incomingNotificationAudioContext = null;
+let lastIncomingNotificationSoundAt = 0;
 let chatDeleteUndoToast = null;
 let chatTagEditorModal = null;
 let groupOwnerLeaveModal = null;
 let groupDeleteConfirmModal = null;
 let pendingChatDeleteState = null;
 let chatDeleteUndoCountdownTimer = null;
+let activeChatTagFilter = "all";
 const pendingDeletedChatKeys = new Set();
+let userRelationConfirmModal = null;
+const defaultAppSettings = {
+  theme: "light",
+  accentColor: "#3390ec",
+  textSize: 16,
+  surfaceMode: "glass",
+  animations: true,
+  chatWallpaper: "none",
+  transparency: 62,
+  uiRadius: 24,
+  enterToSend: true,
+  messageDensity: "comfortable",
+  linkPreviews: true,
+  timeFormat: "24",
+  notificationSound: true,
+  desktopNotifications: false,
+  notificationTextPreview: true,
+  doNotDisturb: false,
+  onlineVisibility: "everyone",
+  lastSeenVisibility: "contacts",
+  directMessagesPrivacy: "everyone",
+  groupInvitesPrivacy: "contacts",
+  readReceipts: true,
+  typingStatus: true,
+  screenshotProtection: false
+};
+
+function getUserRelationStorageKey() {
+  const currentUser = getCurrentUser() || {};
+  return `messenger:user-relations:${currentUser.id || "guest"}`;
+}
+
+function readUserRelationState() {
+  const rawValue = window.localStorage.getItem(getUserRelationStorageKey());
+  if (!rawValue) {
+    return { mutedUserIds: [], blockedUserIds: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return {
+      mutedUserIds: Array.isArray(parsed?.mutedUserIds) ? parsed.mutedUserIds.map((value) => String(value)) : [],
+      blockedUserIds: Array.isArray(parsed?.blockedUserIds) ? parsed.blockedUserIds.map((value) => String(value)) : []
+    };
+  } catch {
+    return { mutedUserIds: [], blockedUserIds: [] };
+  }
+}
+
+function writeUserRelationState(state) {
+  window.localStorage.setItem(getUserRelationStorageKey(), JSON.stringify({
+    mutedUserIds: [...new Set((state?.mutedUserIds || []).map((value) => String(value)))],
+    blockedUserIds: [...new Set((state?.blockedUserIds || []).map((value) => String(value)))]
+  }));
+}
+
+function setMutedUserState(userId, isMuted) {
+  if (!userId) return;
+  const state = readUserRelationState();
+  const mutedUserIds = new Set(state.mutedUserIds);
+  if (isMuted) {
+    mutedUserIds.add(String(userId));
+  } else {
+    mutedUserIds.delete(String(userId));
+  }
+  writeUserRelationState({
+    ...state,
+    mutedUserIds: [...mutedUserIds]
+  });
+}
+
+function setBlockedUserState(userId, isBlocked) {
+  if (!userId) return;
+  const state = readUserRelationState();
+  const blockedUserIds = new Set(state.blockedUserIds);
+  if (isBlocked) {
+    blockedUserIds.add(String(userId));
+  } else {
+    blockedUserIds.delete(String(userId));
+  }
+  writeUserRelationState({
+    ...state,
+    blockedUserIds: [...blockedUserIds]
+  });
+}
+
+function syncUserRelationStateFromProfile(user = {}) {
+  if (!user?.id) {
+    return;
+  }
+  if (typeof user.is_muted === "boolean") {
+    setMutedUserState(user.id, user.is_muted);
+  }
+  if (typeof user.is_blocked === "boolean") {
+    setBlockedUserState(user.id, user.is_blocked);
+  }
+}
+
+function syncUserRelationStateFromChats(chats = []) {
+  chats
+    .filter((chat) => (chat?.type || "direct") === "direct" && chat?.user_id)
+    .forEach((chat) => {
+      syncUserRelationStateFromProfile({
+        id: chat.user_id,
+        is_muted: Boolean(chat.is_muted),
+        is_blocked: Boolean(chat.is_blocked)
+      });
+    });
+}
+
+function isUserMutedLocally(userId) {
+  if (!userId) {
+    return false;
+  }
+  return readUserRelationState().mutedUserIds.includes(String(userId));
+}
 
 function getChatStateKey(chatId, chatType = "direct") {
   return `${chatType}:${chatId}`;
+}
+
+function readAppSettings() {
+  const rawValue = window.localStorage.getItem(APP_SETTINGS_KEY);
+  if (!rawValue) return { ...defaultAppSettings };
+  try {
+    const parsed = JSON.parse(rawValue);
+    return {
+      ...defaultAppSettings,
+      ...(parsed && typeof parsed === "object" ? parsed : {})
+    };
+  } catch {
+    return { ...defaultAppSettings };
+  }
+}
+
+function saveAppSettings(settings) {
+  window.localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function getAppSetting(key) {
+  return Boolean(readAppSettings()[key]);
+}
+
+function renderActionMenuItemContent(iconPath, label) {
+  return `
+    <img class="menu-item-icon icon-asset" src="${iconPath}" alt="">
+    <span class="menu-item-label">${escapeHtml(String(label || ""))}</span>
+  `;
+}
+
+function clampSetting(value, min, max, fallback) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, numericValue));
+}
+
+function normalizeAccentColor(color) {
+  const value = typeof color === "string" ? color.trim() : "";
+  return /^#([0-9a-f]{6})$/i.test(value) ? value : defaultAppSettings.accentColor;
+}
+
+function darkenHexColor(color, amount = 0.14) {
+  const normalized = normalizeAccentColor(color).replace("#", "");
+  const adjust = (start) => {
+    const value = Number.parseInt(normalized.slice(start, start + 2), 16);
+    const nextValue = Math.max(0, Math.min(255, Math.round(value * (1 - amount))));
+    return nextValue.toString(16).padStart(2, "0");
+  };
+  return `#${adjust(0)}${adjust(2)}${adjust(4)}`;
+}
+
+function getChatListPreviewText(lastMessage) {
+  if (!lastMessage) {
+    return "Нет сообщений";
+  }
+
+  const messageType = String(lastMessage.message_type || "text");
+  if (messageType === "forwarded_dialog") {
+    return "Пересланный диалог";
+  }
+  if (messageType === "voice") {
+    return "Голосовое сообщение";
+  }
+  if (messageType === "photo") {
+    return "Фотография";
+  }
+  if (messageType === "sticker") {
+    return "Стикер";
+  }
+  if (messageType === "system") {
+    return lastMessage.text || "Системное сообщение";
+  }
+
+  return lastMessage.text || "Нет сообщений";
+}
+
+function normalizeAppSettings(rawSettings = {}) {
+  const privacyAudienceValues = ["everyone", "contacts", "nobody"];
+  return {
+    ...defaultAppSettings,
+    ...rawSettings,
+    theme: rawSettings.theme === "dark" ? "dark" : "light",
+    accentColor: normalizeAccentColor(rawSettings.accentColor || defaultAppSettings.accentColor),
+    textSize: clampSetting(rawSettings.textSize, 14, 20, defaultAppSettings.textSize),
+    surfaceMode: rawSettings.surfaceMode === "compact" ? "compact" : "glass",
+    animations: rawSettings.animations !== false,
+    chatWallpaper: ["none", "grid", "aurora", "paper"].includes(rawSettings.chatWallpaper) ? rawSettings.chatWallpaper : "none",
+    transparency: clampSetting(rawSettings.transparency, 35, 92, defaultAppSettings.transparency),
+    uiRadius: clampSetting(rawSettings.uiRadius, 12, 34, defaultAppSettings.uiRadius),
+    enterToSend: rawSettings.enterToSend !== false,
+    linkPreviews: rawSettings.linkPreviews !== false,
+    timeFormat: rawSettings.timeFormat === "12" ? "12" : "24",
+    notificationSound: rawSettings.notificationSound !== false,
+    desktopNotifications: rawSettings.desktopNotifications === true,
+    notificationTextPreview: rawSettings.notificationTextPreview !== false,
+    doNotDisturb: rawSettings.doNotDisturb === true,
+    onlineVisibility: privacyAudienceValues.includes(rawSettings.onlineVisibility)
+      ? rawSettings.onlineVisibility
+      : defaultAppSettings.onlineVisibility,
+    lastSeenVisibility: privacyAudienceValues.includes(rawSettings.lastSeenVisibility)
+      ? rawSettings.lastSeenVisibility
+      : defaultAppSettings.lastSeenVisibility,
+    directMessagesPrivacy: privacyAudienceValues.includes(rawSettings.directMessagesPrivacy)
+      ? rawSettings.directMessagesPrivacy
+      : defaultAppSettings.directMessagesPrivacy,
+    groupInvitesPrivacy: privacyAudienceValues.includes(rawSettings.groupInvitesPrivacy)
+      ? rawSettings.groupInvitesPrivacy
+      : defaultAppSettings.groupInvitesPrivacy,
+    readReceipts: rawSettings.readReceipts !== false,
+    typingStatus: rawSettings.typingStatus !== false,
+    screenshotProtection: rawSettings.screenshotProtection === true,
+    messageDensity: ["compact", "comfortable", "spacious"].includes(rawSettings.messageDensity)
+      ? rawSettings.messageDensity
+      : defaultAppSettings.messageDensity
+  };
+}
+
+function applyAppSettings(settings = readAppSettings()) {
+  const normalizedSettings = normalizeAppSettings(settings);
+  const root = document.documentElement;
+  const accentDark = darkenHexColor(normalizedSettings.accentColor, 0.14);
+  const densityPresets = {
+    compact: {
+      stackGap: "9px",
+      bubblePadding: "7px 12px 5px",
+      bubbleRadius: "18px",
+      directPadding: "6px 11px 4px",
+      directRadius: "17px",
+      authorMarginBottom: "3px",
+      authorSize: "12px",
+      textLineHeight: "1.32",
+      previewMarginBottom: "7px",
+      previewPadding: "8px 11px",
+      metaMarginTop: "3px",
+      directMetaMarginTop: "2px"
+    },
+    comfortable: {
+      stackGap: "14px",
+      bubblePadding: "10px 16px 7px",
+      bubbleRadius: "22px",
+      directPadding: "9px 14px 6px",
+      directRadius: "20px",
+      authorMarginBottom: "6px",
+      authorSize: "13px",
+      textLineHeight: "1.4",
+      previewMarginBottom: "9px",
+      previewPadding: "10px 13px",
+      metaMarginTop: "4px",
+      directMetaMarginTop: "3px"
+    },
+    spacious: {
+      stackGap: "18px",
+      bubblePadding: "13px 18px 9px",
+      bubbleRadius: "24px",
+      directPadding: "11px 16px 8px",
+      directRadius: "22px",
+      authorMarginBottom: "6px",
+      authorSize: "13px",
+      textLineHeight: "1.47",
+      previewMarginBottom: "10px",
+      previewPadding: "11px 14px",
+      metaMarginTop: "5px",
+      directMetaMarginTop: "4px"
+    }
+  };
+  const densityPreset = densityPresets[normalizedSettings.messageDensity] || densityPresets.comfortable;
+
+  root.classList.toggle("settings-theme-dark", normalizedSettings.theme === "dark");
+  document.body.classList.toggle("settings-theme-dark", normalizedSettings.theme === "dark");
+  document.body.classList.toggle("settings-surface-compact", normalizedSettings.surfaceMode === "compact");
+  document.body.classList.toggle("settings-surface-glass", normalizedSettings.surfaceMode !== "compact");
+  document.body.classList.toggle("settings-strong-surface-blur", normalizedSettings.transparency < 65);
+  document.body.classList.toggle("settings-reduced-motion", !normalizedSettings.animations);
+  document.body.classList.toggle("settings-link-previews-off", !normalizedSettings.linkPreviews);
+  document.body.dataset.chatWallpaper = normalizedSettings.chatWallpaper;
+  document.body.dataset.timeFormat = normalizedSettings.timeFormat;
+
+  root.style.setProperty("--accent", normalizedSettings.accentColor);
+  root.style.setProperty("--accent-dark", accentDark);
+  root.style.setProperty("--settings-text-size", `${normalizedSettings.textSize}px`);
+  root.style.setProperty("--settings-surface-alpha", String(normalizedSettings.transparency / 100));
+  root.style.setProperty("--radius-lg", `${normalizedSettings.uiRadius}px`);
+  root.style.setProperty("--radius-md", `${Math.max(12, normalizedSettings.uiRadius - 6)}px`);
+  root.style.setProperty("--radius-sm", `${Math.max(10, normalizedSettings.uiRadius - 10)}px`);
+  root.style.setProperty("--message-stack-gap", densityPreset.stackGap);
+  root.style.setProperty("--message-bubble-padding", densityPreset.bubblePadding);
+  root.style.setProperty("--message-bubble-radius", densityPreset.bubbleRadius);
+  root.style.setProperty("--message-direct-padding", densityPreset.directPadding);
+  root.style.setProperty("--message-direct-radius", densityPreset.directRadius);
+  root.style.setProperty("--message-author-margin-bottom", densityPreset.authorMarginBottom);
+  root.style.setProperty("--message-author-font-size", densityPreset.authorSize);
+  root.style.setProperty("--message-text-line-height", densityPreset.textLineHeight);
+  root.style.setProperty("--message-preview-margin-bottom", densityPreset.previewMarginBottom);
+  root.style.setProperty("--message-preview-padding", densityPreset.previewPadding);
+  root.style.setProperty("--message-meta-margin-top", densityPreset.metaMarginTop);
+  root.style.setProperty("--message-direct-meta-margin-top", densityPreset.directMetaMarginTop);
+
+  document.dispatchEvent(new CustomEvent("appsettingschange", {
+    detail: normalizedSettings
+  }));
+
+  const chatList = document.getElementById("chatList");
+  if (chatList && Array.isArray(chatState.allChats)) {
+    renderChats(chatList, filterChats(getChatSearchQuery()));
+  }
+}
+
+function initSettingsControls() {
+  const settingsRoot = document.querySelector(".sidebar-settings-body");
+  const resetButton = document.querySelector("[data-settings-reset='appearance']");
+  const settingsSections = document.querySelectorAll(".sidebar-settings-body .sidebar-settings-section");
+  const settings = normalizeAppSettings(readAppSettings());
+  applyAppSettings(settings);
+
+  if (settingsSections.length) {
+    settingsSections.forEach((section) => {
+      const head = section.querySelector(":scope > .sidebar-settings-section-head");
+      if (!head || head.dataset.collapseBound === "true") {
+        return;
+      }
+
+      head.dataset.collapseBound = "true";
+      section.classList.add("is-collapsible");
+      section.classList.add("is-collapsed");
+      head.setAttribute("role", "button");
+      head.setAttribute("tabindex", "0");
+      head.setAttribute("aria-expanded", "false");
+
+      const toggleSection = () => {
+        const nextCollapsed = !section.classList.contains("is-collapsed");
+        section.classList.toggle("is-collapsed", nextCollapsed);
+        head.setAttribute("aria-expanded", nextCollapsed ? "false" : "true");
+      };
+
+      head.addEventListener("click", toggleSection);
+      head.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        toggleSection();
+      });
+    });
+  }
+
+  if (!settingsRoot || settingsRoot.dataset.settingsBound === "true") {
+    return;
+  }
+
+  settingsRoot.dataset.settingsBound = "true";
+  const controlMap = new Map();
+
+  const updateValuePreview = (settingKey, value) => {
+    const valueNode = settingsRoot.querySelector(`[data-setting-value="${settingKey}"]`);
+    if (!valueNode) {
+      return;
+    }
+
+    if (settingKey === "textSize" || settingKey === "uiRadius") {
+      valueNode.textContent = `${value}px`;
+      return;
+    }
+
+    if (settingKey === "transparency") {
+      valueNode.textContent = `${value}%`;
+    }
+  };
+
+  settingsRoot.querySelectorAll("[data-setting-control]").forEach((input) => {
+    const settingKey = input.dataset.settingControl;
+    if (!settingKey) return;
+    controlMap.set(settingKey, input);
+
+    if (input.type === "checkbox") {
+      input.checked = Boolean(settings[settingKey]);
+    } else {
+      input.value = String(settings[settingKey]);
+    }
+    updateValuePreview(settingKey, settings[settingKey]);
+
+    input.addEventListener("input", () => {
+      if (settingKey === "desktopNotifications" && input.type === "checkbox" && input.checked) {
+        if (typeof window.Notification !== "function") {
+          input.checked = false;
+          showAppToast("Браузер не поддерживает desktop notifications", { type: "error" });
+          return;
+        }
+
+        if (window.Notification.permission === "denied") {
+          input.checked = false;
+          showAppToast("Уведомления браузера заблокированы в настройках", { type: "error" });
+          return;
+        }
+
+        if (window.Notification.permission === "default") {
+          window.Notification.requestPermission().then((permission) => {
+            if (permission !== "granted") {
+              input.checked = false;
+              const revertedSettings = normalizeAppSettings({
+                ...readAppSettings(),
+                desktopNotifications: false
+              });
+              saveAppSettings(revertedSettings);
+              applyAppSettings(revertedSettings);
+              showAppToast("Доступ к уведомлениям не выдан", { type: "error" });
+            }
+          }).catch(() => {
+            input.checked = false;
+            showAppToast("Не удалось запросить доступ к уведомлениям", { type: "error" });
+          });
+        }
+      }
+
+      const nextSettings = normalizeAppSettings({
+        ...readAppSettings(),
+        [settingKey]: input.type === "checkbox" ? input.checked : input.value
+      });
+      saveAppSettings(nextSettings);
+      applyAppSettings(nextSettings);
+      updateValuePreview(settingKey, nextSettings[settingKey]);
+    });
+  });
+
+  if (resetButton && resetButton.dataset.settingsResetBound !== "true") {
+    resetButton.dataset.settingsResetBound = "true";
+    resetButton.addEventListener("click", () => {
+      const nextSettings = normalizeAppSettings({
+        ...readAppSettings(),
+        theme: defaultAppSettings.theme,
+        accentColor: defaultAppSettings.accentColor,
+        textSize: defaultAppSettings.textSize,
+        surfaceMode: defaultAppSettings.surfaceMode,
+        animations: defaultAppSettings.animations,
+        chatWallpaper: defaultAppSettings.chatWallpaper,
+        transparency: defaultAppSettings.transparency,
+        uiRadius: defaultAppSettings.uiRadius,
+        linkPreviews: defaultAppSettings.linkPreviews,
+        timeFormat: defaultAppSettings.timeFormat,
+        messageDensity: defaultAppSettings.messageDensity
+      });
+
+      saveAppSettings(nextSettings);
+      applyAppSettings(nextSettings);
+
+      controlMap.forEach((input, settingKey) => {
+        if (input.type === "checkbox") {
+          input.checked = Boolean(nextSettings[settingKey]);
+        } else {
+          input.value = String(nextSettings[settingKey]);
+        }
+        updateValuePreview(settingKey, nextSettings[settingKey]);
+      });
+    });
+  }
+
+  initAccountSettingsControls();
+  initSecurityControls();
+}
+
+function initAccountSettingsControls() {
+  const emailForm = document.querySelector("[data-account-email-form='true']");
+  const passwordForm = document.querySelector("[data-account-password-form='true']");
+  const emailStatus = document.querySelector("[data-account-email-status='true']");
+  const passwordStatus = document.querySelector("[data-account-password-status='true']");
+  const emailRequestButton = document.querySelector("[data-account-email-request]");
+  const passwordRequestButton = document.querySelector("[data-account-password-request]");
+
+  syncAccountSettingsSummary();
+
+  const setStatus = (node, message = "", type = "") => {
+    if (!node) {
+      return;
+    }
+    node.textContent = message;
+    node.className = `status settings-account-status ${type}`.trim();
+  };
+
+  if (emailForm && emailForm.dataset.bound !== "true") {
+    emailForm.dataset.bound = "true";
+    const emailInput = emailForm.querySelector('input[name="email"]');
+    const codeInput = emailForm.querySelector('input[name="code"]');
+
+    emailRequestButton?.addEventListener("click", async () => {
+      const email = emailInput?.value?.trim() || "";
+      if (!email) {
+        setStatus(emailStatus, "Введите новый email", "error");
+        emailInput?.focus();
+        return;
+      }
+
+      emailRequestButton.disabled = true;
+      setStatus(emailStatus, "Отправка кода...");
+      try {
+        const response = await apiFetch("/users/me/email-change/request", {
+          method: "POST",
+          body: JSON.stringify({ email })
+        });
+        setStatus(emailStatus, response?.message || "Код отправлен", "success");
+        codeInput?.focus();
+      } catch (error) {
+        setStatus(emailStatus, error.message, "error");
+      } finally {
+        emailRequestButton.disabled = false;
+      }
+    });
+
+    emailForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitButton = emailForm.querySelector('button[type="submit"]');
+      const email = emailInput?.value?.trim() || "";
+      const code = (codeInput?.value || "").replace(/\D/g, "").slice(0, 6);
+      if (!email) {
+        setStatus(emailStatus, "Введите новый email", "error");
+        emailInput?.focus();
+        return;
+      }
+
+      submitButton.disabled = true;
+      setStatus(emailStatus, "Подтверждение...");
+      try {
+        const updatedUser = await apiFetch("/users/me/email-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ email, code })
+        });
+        applySidebarProfileUserUpdate(updatedUser);
+        emailForm.reset();
+        setStatus(emailStatus, "Email обновлён", "success");
+      } catch (error) {
+        setStatus(emailStatus, error.message, "error");
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+  }
+
+  if (passwordForm && passwordForm.dataset.bound !== "true") {
+    passwordForm.dataset.bound = "true";
+    const passwordInput = passwordForm.querySelector('input[name="password"]');
+    const codeInput = passwordForm.querySelector('input[name="code"]');
+
+    passwordRequestButton?.addEventListener("click", async () => {
+      const password = passwordInput?.value || "";
+      if (password.length < 6) {
+        setStatus(passwordStatus, "Пароль должен содержать минимум 6 символов", "error");
+        passwordInput?.focus();
+        return;
+      }
+
+      passwordRequestButton.disabled = true;
+      setStatus(passwordStatus, "Отправка кода...");
+      try {
+        const response = await apiFetch("/users/me/password-change/request", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        setStatus(passwordStatus, response?.message || "Код отправлен", "success");
+        codeInput?.focus();
+      } catch (error) {
+        setStatus(passwordStatus, error.message, "error");
+      } finally {
+        passwordRequestButton.disabled = false;
+      }
+    });
+
+    passwordForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitButton = passwordForm.querySelector('button[type="submit"]');
+      const password = passwordInput?.value || "";
+      const code = (codeInput?.value || "").replace(/\D/g, "").slice(0, 6);
+      if (password.length < 6) {
+        setStatus(passwordStatus, "Пароль должен содержать минимум 6 символов", "error");
+        passwordInput?.focus();
+        return;
+      }
+
+      submitButton.disabled = true;
+      setStatus(passwordStatus, "Подтверждение...");
+      try {
+        const response = await apiFetch("/users/me/password-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ password, code })
+        });
+        passwordForm.reset();
+        setStatus(passwordStatus, response?.message || "Пароль изменён", "success");
+      } catch (error) {
+        setStatus(passwordStatus, error.message, "error");
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+  }
+}
+
+function formatSecurityDateTime(value) {
+  const date = parseUtcDate(value);
+  if (!date) {
+    return "Нет данных";
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function renderSecurityDevices(devices = []) {
+  if (!Array.isArray(devices) || !devices.length) {
+    return '<div class="empty-state">Устройства пока не определены</div>';
+  }
+
+  return devices.map((device) => {
+    const label = String(device?.device_label || "Неизвестное устройство").trim() || "Неизвестное устройство";
+    const badges = [
+      device?.is_current ? '<span class="thread-member-role owner">Это устройство</span>' : "",
+      '<span class="thread-member-role">Входы</span>'
+    ].filter(Boolean).join("");
+
+    return `
+      <article class="member-item">
+        <div class="avatar small">${escapeHtml(initials(label))}</div>
+        <div class="result-meta">
+          <div class="result-topline">
+            <h3 class="result-name">${escapeHtml(label)}</h3>
+          </div>
+          <p class="result-username">Первый вход: ${escapeHtml(formatSecurityDateTime(device?.first_seen_at))}</p>
+          <p class="result-username">Последний вход: ${escapeHtml(formatSecurityDateTime(device?.last_seen_at))}</p>
+        </div>
+        <div class="thread-info-member-meta">
+          ${badges}
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function initSecurityControls() {
+  const root = document.querySelector("[data-security-settings-root='true']");
+  if (!root || root.dataset.securityBound === "true") {
+    return;
+  }
+
+  root.dataset.securityBound = "true";
+
+  const statusNode = root.querySelector("[data-security-status='true']");
+  const summaryNode = root.querySelector("[data-security-summary]");
+  const devicesNode = root.querySelector("[data-security-devices-list='true']");
+  const loginAlertsInput = root.querySelector("[data-security-control='loginAlertsEnabled']");
+  const refreshButton = root.querySelector("[data-security-refresh]");
+  const terminateButton = root.querySelector("[data-security-terminate-sessions]");
+
+  const setStatus = (message = "", type = "") => {
+    if (!statusNode) {
+      return;
+    }
+    statusNode.textContent = message;
+    statusNode.className = `status ${type}`.trim();
+  };
+
+  const applyOverview = (overview = {}) => {
+    if (loginAlertsInput) {
+      loginAlertsInput.checked = Boolean(overview.login_alerts_enabled);
+    }
+    if (summaryNode) {
+      const sessionsCount = Number(overview.active_sessions_count || 0);
+      const devicesCount = Number(overview.known_devices_count || 0);
+      summaryNode.textContent = `${sessionsCount} сессий, ${devicesCount} устройств`;
+    }
+    if (devicesNode) {
+      devicesNode.innerHTML = renderSecurityDevices(overview.devices || []);
+    }
+  };
+
+  const loadOverview = async (options = {}) => {
+    if (!options.silent) {
+      setStatus("Загружаем безопасность...");
+    }
+    try {
+      const overview = await apiFetch("/security/overview");
+      applyOverview(overview);
+      setStatus(options.successMessage || "");
+      const currentUser = getCurrentUser();
+      if (currentUser && typeof overview.login_alerts_enabled === "boolean") {
+        setCurrentUser({
+          ...currentUser,
+          login_alerts_enabled: overview.login_alerts_enabled
+        });
+      }
+      return overview;
+    } catch (error) {
+      setStatus(error.message, "error");
+      throw error;
+    }
+  };
+
+  loginAlertsInput?.addEventListener("input", async () => {
+    const nextValue = Boolean(loginAlertsInput.checked);
+    setStatus("Сохраняем настройки...");
+    try {
+      const overview = await apiFetch("/security/preferences", {
+        method: "PATCH",
+        body: JSON.stringify({
+          login_alerts_enabled: nextValue
+        })
+      });
+      applyOverview(overview);
+      setStatus("Настройки безопасности сохранены", "success");
+    } catch (error) {
+      loginAlertsInput.checked = !nextValue;
+      setStatus(error.message, "error");
+    }
+  });
+
+  refreshButton?.addEventListener("click", () => {
+    void loadOverview({ successMessage: "Данные безопасности обновлены" });
+  });
+
+  terminateButton?.addEventListener("click", async () => {
+    setStatus("Завершаем другие сессии...");
+    terminateButton.disabled = true;
+    try {
+      const overview = await apiFetch("/security/terminate-other-sessions", {
+        method: "POST"
+      });
+      applyOverview(overview);
+      setStatus(`Завершено сессий: ${Math.max(0, Number(overview.revoked_sessions || 0))}`, "success");
+    } catch (error) {
+      setStatus(error.message, "error");
+    } finally {
+      terminateButton.disabled = false;
+    }
+  });
+
+  void loadOverview({ silent: true });
 }
 
 function readChatTags() {
@@ -122,6 +881,407 @@ function getChatTagMarkup(chatId, chatType) {
   `;
 }
 
+function formatPresenceDate(value) {
+  const date = parseUtcDate(value);
+  if (!date) {
+    return "";
+  }
+
+  return date.toLocaleDateString("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "long"
+  });
+}
+
+function formatPresenceHours(hours) {
+  const value = Math.max(1, Math.floor(hours));
+  return `был(а) в сети ${value} ч назад`;
+}
+
+function formatPresenceText(info = {}) {
+  if (info?.hide_presence) {
+    return "";
+  }
+
+  if (info?.is_online) {
+    return "в сети";
+  }
+
+  const lastSeenDate = parseUtcDate(info?.last_seen);
+  if (!lastSeenDate) {
+    return "не в сети";
+  }
+
+  const diffMs = Math.max(0, Date.now() - lastSeenDate.getTime());
+  const diffMinutes = Math.floor(diffMs / 60000);
+
+  if (diffMinutes < 1) {
+    return "был(а) в сети только что";
+  }
+
+  if (diffMinutes < 60) {
+    return `был(а) в сети ${diffMinutes} мин назад`;
+  }
+
+  if (diffMinutes < 24 * 60) {
+    return formatPresenceHours(diffMinutes / 60);
+  }
+
+  return `был(а) в сети ${formatPresenceDate(info.last_seen)}`;
+}
+
+function getPresenceState(info = {}) {
+  if (info?.hide_presence) {
+    return "";
+  }
+  return info?.is_online ? "online" : "offline";
+}
+
+function renderPresenceBadge(info = {}, options = {}) {
+  const {
+    showDot = true,
+    compact = false,
+    includeUsername = false
+  } = options;
+  const state = getPresenceState(info);
+  const text = formatPresenceText(info);
+  if (!text) {
+    return "";
+  }
+  const username = includeUsername && info?.username ? `<span class="presence-meta">@${escapeHtml(info.username)}</span>` : "";
+  const dot = showDot ? `<span class="presence-dot ${state}" aria-hidden="true"></span>` : "";
+  const compactClass = compact ? " compact" : "";
+
+  return `
+    <span class="presence-badge ${state}${compactClass}">
+      ${dot}${username}<span class="presence-label">${escapeHtml(text)}</span>
+    </span>
+  `;
+}
+
+function getUserProfileDisplayName(user = {}) {
+  return user?.contact_alias || user?.name || user?.username || "Пользователь";
+}
+
+function getUserProfileOriginalName(user = {}) {
+  const alias = typeof user?.contact_alias === "string" ? user.contact_alias.trim() : "";
+  const originalName = typeof user?.name === "string" ? user.name.trim() : "";
+  if (!alias || !originalName || alias === originalName) {
+    return "";
+  }
+  return originalName;
+}
+
+function getUserProfileBadges(user = {}) {
+  if (Array.isArray(user?.badges)) {
+    return user.badges
+      .map((badge) => String(badge || "").trim().toUpperCase())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function showAppToast(message, options = {}) {
+  const text = String(message || "").trim();
+  if (!text) {
+    return;
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `app-toast ${options.type || ""}`.trim();
+  toast.textContent = text;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => {
+    toast.classList.add("visible");
+  });
+  window.setTimeout(() => {
+    toast.classList.remove("visible");
+    window.setTimeout(() => {
+      toast.remove();
+    }, 180);
+  }, options.duration || 1600);
+}
+
+function getLiveNotificationSettings() {
+  return normalizeAppSettings(readAppSettings());
+}
+
+function getIncomingNotificationTitle(payload = {}) {
+  const threadTitle = String(payload.thread_title || "").trim();
+  if ((payload.chat_type || "") === "group") {
+    const senderName = String(payload.sender_name || "Новый участник").trim() || "Новый участник";
+    return threadTitle ? `${senderName} • ${threadTitle}` : senderName;
+  }
+  return threadTitle || String(payload.sender_name || "Чат").trim() || "Чат";
+}
+
+function getIncomingNotificationBody(payload = {}, settings = getLiveNotificationSettings()) {
+  const messageType = String(payload.message_type || "text");
+  const fallbackLabel = messageType === "voice"
+    ? "Голосовое сообщение"
+    : (messageType === "photo" ? "Фотография" : (messageType === "sticker" ? "Стикер" : "Новое сообщение"));
+  if (!settings.notificationTextPreview) {
+    return fallbackLabel;
+  }
+
+  if (messageType === "voice") {
+    return "Голосовое сообщение";
+  }
+  if (messageType === "photo") {
+    return "Фотография";
+  }
+  if (messageType === "sticker") {
+    return "Стикер";
+  }
+
+  const text = String(payload.text || "").trim();
+  return text || fallbackLabel;
+}
+
+function playIncomingNotificationSound() {
+  const settings = getLiveNotificationSettings();
+  if (settings.doNotDisturb || !settings.notificationSound) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastIncomingNotificationSoundAt < 220) {
+    return;
+  }
+  lastIncomingNotificationSoundAt = now;
+
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      return;
+    }
+
+    incomingNotificationAudioContext = incomingNotificationAudioContext || new AudioContextClass();
+    const audioContext = incomingNotificationAudioContext;
+    if (audioContext.state === "suspended") {
+      void audioContext.resume().catch(() => {});
+    }
+
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(660, audioContext.currentTime + 0.09);
+    gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.035, audioContext.currentTime + 0.015);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.14);
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.15);
+  } catch {
+    // Ignore browser autoplay or audio context failures.
+  }
+}
+
+function showIncomingDesktopNotification(payload = {}) {
+  const settings = getLiveNotificationSettings();
+  if (settings.doNotDisturb || !settings.desktopNotifications) {
+    return;
+  }
+
+  if (typeof window.Notification !== "function" || window.Notification.permission !== "granted") {
+    return;
+  }
+
+  if (document.visibilityState === "visible" && document.hasFocus()) {
+    return;
+  }
+
+  try {
+    const notification = new window.Notification(getIncomingNotificationTitle(payload), {
+      body: getIncomingNotificationBody(payload, settings),
+      tag: `${payload.chat_type || "chat"}:${payload.chat_id || "unknown"}`,
+      silent: true
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+
+    window.setTimeout(() => {
+      notification.close();
+    }, 5000);
+  } catch {
+    // Ignore notification API failures.
+  }
+}
+
+function handleGlobalIncomingNotification(payload = {}) {
+  const currentUser = getCurrentUser() || {};
+  if (!payload || String(payload.sender_id || "") === String(currentUser.id || "")) {
+    return;
+  }
+
+  if (String(payload.message_type || "text") === "system") {
+    return;
+  }
+
+  if (isUserMutedLocally(payload.sender_id)) {
+    return;
+  }
+
+  const route = getCurrentRouteInfo();
+  const payloadChatType = String(payload.chat_type || "direct");
+  const payloadChatId = String(payload.chat_id || "");
+  const currentRouteChatType = String(document.body.dataset.chatType || route.chatType || "direct");
+  const currentRouteChatId = String(route.chatId || "");
+
+  if (
+    route.chatType
+    && currentRouteChatId
+    && payloadChatId
+    && payloadChatId === currentRouteChatId
+    && payloadChatType === currentRouteChatType
+  ) {
+    return;
+  }
+
+  playIncomingNotificationSound();
+  showIncomingDesktopNotification(payload);
+}
+
+function closeUserProfileActionMenus() {
+  document.querySelectorAll("[data-user-profile-menu]").forEach((menu) => {
+    menu.classList.remove("visible");
+    const card = menu.closest("[data-user-profile-card]");
+    const trigger = card?.querySelector("[data-user-profile-menu-trigger]");
+    if (trigger) {
+      trigger.setAttribute("aria-expanded", "false");
+    }
+    window.setTimeout(() => {
+      if (!menu.classList.contains("visible")) {
+        menu.hidden = true;
+      }
+    }, 160);
+  });
+}
+
+function toggleUserProfileActionMenu(card) {
+  if (!card) {
+    return;
+  }
+
+  const menu = card.querySelector("[data-user-profile-menu]");
+  const trigger = card.querySelector("[data-user-profile-menu-trigger]");
+  if (!menu || !trigger) {
+    return;
+  }
+
+  const isOpen = !menu.hidden && menu.classList.contains("visible");
+  closeUserProfileActionMenus();
+  if (isOpen) {
+    return;
+  }
+
+  menu.hidden = false;
+  trigger.setAttribute("aria-expanded", "true");
+  requestAnimationFrame(() => {
+    menu.classList.add("visible");
+  });
+}
+
+function renderUserProfilePanel(user = {}, options = {}) {
+  syncUserRelationStateFromProfile(user);
+  const displayName = getUserProfileDisplayName(user);
+  const originalName = getUserProfileOriginalName(user);
+  const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "";
+  const birthDate = formatProfileBirthDate(user?.date_of_birth);
+  const username = user?.username ? `@${user.username}` : "";
+  const currentUser = getCurrentUser() || {};
+  const canManageRelations = String(currentUser.id || "") !== String(user?.id || "");
+  const presence = user?.hide_presence
+    ? ""
+    : renderPresenceBadge(user, { compact: true, includeUsername: false, showDot: false });
+  const badges = getUserProfileBadges(user);
+  const isContact = Boolean(user?.is_contact);
+  const hasAlias = Boolean(user?.contact_alias && String(user.contact_alias).trim());
+  const menuMarkup = options.showActions === false
+    ? ""
+    : `
+      <button
+        class="sidebar-profile-menu-trigger user-profile-menu-trigger"
+        type="button"
+        data-user-profile-menu-trigger
+        aria-label="Действия профиля"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      ><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
+      <div class="sidebar-profile-menu user-profile-action-menu" data-user-profile-menu hidden>
+        <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="copy-username" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+          ${renderActionMenuItemContent("/assets/icons/ui/Copy.svg", "Скопировать username")}
+        </button>
+        ${canManageRelations ? `
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="${user?.is_muted ? "unmute" : "mute"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            ${renderActionMenuItemContent(user?.is_muted ? "/assets/icons/ui/notifications_on.svg" : "/assets/icons/ui/sound_mute_fill.svg", user?.is_muted ? "Включить уведомления" : "Отключить уведомления")}
+          </button>
+          <button class="sidebar-profile-menu-item ${user?.is_blocked ? "" : "danger"}" type="button" data-profile-contact-action="${user?.is_blocked ? "unblock" : "block"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            ${renderActionMenuItemContent(user?.is_blocked ? "/assets/icons/ui/block_line.svg" : "/assets/icons/ui/block.svg", user?.is_blocked ? "Разблокировать пользователя" : "Заблокировать пользователя")}
+          </button>
+        ` : ""}
+        ${!isContact ? `
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="add" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            ${renderActionMenuItemContent("/assets/icons/ui/Add_round.svg", "Добавить в контакты")}
+          </button>
+        ` : `
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="rename" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            ${renderActionMenuItemContent("/assets/icons/ui/Edit_fill.svg", "Переименовать контакт")}
+          </button>
+          ${hasAlias ? `
+            <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="reset-alias" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+              ${renderActionMenuItemContent("/assets/icons/ui/Refresh_2.svg", "Вернуть имя по умолчанию")}
+            </button>
+          ` : ""}
+          <button class="sidebar-profile-menu-item danger" type="button" data-profile-contact-action="remove" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            ${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить из контактов")}
+          </button>
+        `}
+      </div>
+    `;
+
+  return `
+    <section class="thread-info-card thread-info-card-profile user-profile-panel-card" data-user-profile-card="true" data-user-profile-id="${escapeHtml(String(user.id || ""))}">
+      <div class="thread-info-card-eyebrow">${escapeHtml(options.eyebrow || "Profile")}</div>
+      ${menuMarkup}
+      <div class="thread-info-hero user-profile-panel-hero">
+        <div class="avatar thread-info-avatar${options.groupAvatar ? " group-avatar" : ""}">${escapeHtml(initials(displayName))}</div>
+        <h3 class="thread-info-name">${escapeHtml(displayName)}</h3>
+        ${originalName ? `<p class="user-profile-original-name">${escapeHtml(originalName)}</p>` : ""}
+        <div class="user-profile-identity-row">
+          ${username ? `
+            <button class="user-profile-username" type="button" data-profile-copy-username="${escapeHtml(String(user.username || ""))}" aria-label="Скопировать username">
+              ${escapeHtml(username)}
+            </button>
+          ` : `<span class="user-profile-username is-placeholder">username не указан</span>`}
+          ${presence}
+        </div>
+        ${badges.length ? `
+          <div class="user-profile-badges">
+            ${badges.map((badge) => `<span class="user-profile-badge-chip">${escapeHtml(badge)}</span>`).join("")}
+          </div>
+        ` : ""}
+        ${bio ? `<p class="thread-info-description user-profile-bio">${escapeHtml(bio)}</p>` : ""}
+        ${birthDate ? `
+          <div class="user-profile-details">
+            <div class="user-profile-detail">
+              <span class="user-profile-detail-label">Дата рождения</span>
+              <strong class="user-profile-detail-value">${escapeHtml(birthDate)}</strong>
+            </div>
+          </div>
+        ` : ""}
+        <div class="status user-profile-actions-status" data-user-profile-status></div>
+      </div>
+    </section>
+  `;
+}
+
 function readChatListScroll() {
   const rawValue = window.sessionStorage.getItem(CHAT_LIST_SCROLL_KEY);
   const scrollTop = Number.parseInt(rawValue || "", 10);
@@ -166,7 +1326,7 @@ function buildProfileLogoutModal() {
     <div class="profile-logout-card" role="dialog" aria-modal="true" aria-labelledby="profileLogoutTitle">
       <div class="profile-logout-header">
         <h3 id="profileLogoutTitle">Выйти из аккаунта?</h3>
-        <button type="button" class="profile-logout-close" data-profile-logout-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="profile-logout-close" data-profile-logout-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <div class="profile-logout-body">
         <div class="profile-logout-actions">
@@ -220,11 +1380,112 @@ function openProfileLogoutModal() {
   });
 }
 
+function buildUserRelationConfirmModal() {
+  if (userRelationConfirmModal) {
+    return userRelationConfirmModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "profile-logout-modal user-relation-confirm-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="profile-logout-backdrop" data-user-relation-close="true"></div>
+    <div class="profile-logout-card" role="dialog" aria-modal="true" aria-labelledby="userRelationConfirmTitle">
+      <div class="profile-logout-header">
+        <h3 id="userRelationConfirmTitle">Подтвердите действие</h3>
+        <button type="button" class="profile-logout-close" data-user-relation-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
+      </div>
+      <div class="profile-logout-body">
+        <p class="profile-logout-copy" id="userRelationConfirmBody"></p>
+        <div class="profile-logout-actions">
+          <button type="button" class="button button-secondary" data-user-relation-close="true">Отмена</button>
+          <button type="button" class="button button-danger" id="userRelationConfirmSubmit">Подтвердить</button>
+        </div>
+        <div class="status profile-logout-status" id="userRelationConfirmStatus"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  userRelationConfirmModal = modal;
+  return modal;
+}
+
+function closeUserRelationConfirmModal() {
+  if (!userRelationConfirmModal) {
+    return;
+  }
+  userRelationConfirmModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (userRelationConfirmModal && !userRelationConfirmModal.classList.contains("visible")) {
+      userRelationConfirmModal.hidden = true;
+    }
+  }, 180);
+}
+
+function openUserRelationConfirmModal(options = {}) {
+  const modal = buildUserRelationConfirmModal();
+  const titleNode = modal.querySelector("#userRelationConfirmTitle");
+  const bodyNode = modal.querySelector("#userRelationConfirmBody");
+  const confirmButton = modal.querySelector("#userRelationConfirmSubmit");
+  const statusNode = modal.querySelector("#userRelationConfirmStatus");
+
+  if (!titleNode || !bodyNode || !confirmButton || !statusNode) {
+    return Promise.resolve(false);
+  }
+
+  titleNode.textContent = options.title || "Подтвердите действие";
+  bodyNode.textContent = options.body || "";
+  statusNode.textContent = "";
+  statusNode.className = "status profile-logout-status";
+  confirmButton.textContent = options.confirmText || "Подтвердить";
+  confirmButton.className = `button ${options.danger === false ? "" : "button-danger"}`.trim() || "button";
+  confirmButton.disabled = false;
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      closeUserRelationConfirmModal();
+      resolve(result);
+    };
+
+    confirmButton.onclick = () => finish(true);
+    modal.onclick = (event) => {
+      if (event.target.closest("[data-user-relation-close='true']")) {
+        finish(false);
+      }
+    };
+
+    modal.hidden = false;
+    requestAnimationFrame(() => {
+      modal.classList.add("visible");
+    });
+  });
+}
+
 function fillUserBadge(targetId = "currentUserBadge") {
   const target = document.getElementById(targetId);
   const user = getCurrentUser();
+  const adminLink = document.getElementById("sidebarAdminLink");
+  if (adminLink) {
+    adminLink.hidden = true;
+  }
   if (!target || !user) return;
   target.textContent = user.username ? `@${user.username}` : user.name || "User";
+}
+
+function updateAdminLinkVisibility(user) {
+  const adminLink = document.getElementById("sidebarAdminLink");
+  if (!adminLink) {
+    return;
+  }
+  if (!["admin", "system_owner"].includes(user?.role || "")) {
+    adminLink.remove();
+    return;
+  }
+  adminLink.hidden = false;
 }
 
 function getSidebarProfileFields() {
@@ -232,8 +1493,34 @@ function getSidebarProfileFields() {
     name: document.getElementById("sidebarProfileNameField"),
     email: document.getElementById("sidebarProfileEmail"),
     username: document.getElementById("sidebarProfileHandle"),
-    bio: document.getElementById("sidebarProfileBio")
+    bio: document.getElementById("sidebarProfileBio"),
+    date_of_birth: document.getElementById("sidebarProfileDateOfBirth")
   };
+}
+
+function formatProfileBirthDate(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return normalized;
+  }
+
+  const [, year, month, day] = match;
+  const dateValue = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  if (Number.isNaN(dateValue.getTime())) {
+    return normalized;
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(dateValue);
 }
 
 function getSidebarProfileFieldValue(field, user) {
@@ -248,6 +1535,8 @@ function getSidebarProfileFieldValue(field, user) {
       return user.username ? `@${user.username}` : "Не указан";
     case "bio":
       return user.bio || "Не указана";
+    case "date_of_birth":
+      return formatProfileBirthDate(user.date_of_birth) || "Не указана";
     default:
       return "";
   }
@@ -260,7 +1549,7 @@ function fillSidebarProfile() {
   const username = document.getElementById("sidebarProfileUsername");
   const fields = getSidebarProfileFields();
 
-  if (!user || !avatar || !name || !username || !fields.name || !fields.email || !fields.username || !fields.bio) {
+  if (!user || !avatar || !name || !username || !fields.name || !fields.email || !fields.username || !fields.bio || !fields.date_of_birth) {
     return;
   }
 
@@ -272,13 +1561,16 @@ function fillSidebarProfile() {
   username.textContent = usernameValue;
   fields.name.textContent = getSidebarProfileFieldValue("name", user);
   fields.username.textContent = getSidebarProfileFieldValue("username", user);
+  fields.username.setAttribute("aria-label", user.username ? "Скопировать username" : "Username не указан");
   fields.bio.textContent = getSidebarProfileFieldValue("bio", user);
   fields.bio.classList.toggle("multiline", Boolean(user.bio));
+  fields.date_of_birth.textContent = getSidebarProfileFieldValue("date_of_birth", user);
 
   fields.email.textContent = getSidebarProfileFieldValue("email", user);
   fields.email.classList.toggle("is-blurred", Boolean(user.email));
   fields.email.setAttribute("aria-label", user.email ? "Показать email" : "Email не указан");
   fields.email.setAttribute("aria-pressed", "false");
+  syncAccountSettingsSummary();
 }
 
 function setSidebarProfileEditMode(sidebar, isActive) {
@@ -294,6 +1586,7 @@ async function syncSidebarProfile() {
     const user = await apiFetch("/users/me");
     setCurrentUser(user);
     fillUserBadge();
+    updateAdminLinkVisibility(user);
     fillSidebarProfile();
   } catch {
     // Keep local session data if profile sync fails.
@@ -304,29 +1597,114 @@ function getSidebarProfileEditConfig(field) {
   return {
     name: {
       label: "Имя",
-      multiline: false,
+      editor: "input",
       maxLength: 80,
       value: (user) => user?.name || ""
     },
     email: {
       label: "Email",
-      multiline: false,
+      editor: "input",
+      workflow: "email-change",
       maxLength: 255,
-      value: (user) => user?.email || ""
+      value: () => ""
+    },
+    password: {
+      label: "Пароль",
+      editor: "input",
+      workflow: "password-change",
+      inputType: "password",
+      maxLength: 255,
+      value: () => ""
     },
     username: {
       label: "Username",
-      multiline: false,
+      editor: "input",
       maxLength: 32,
       value: (user) => user?.username || ""
     },
     bio: {
       label: "Bio",
-      multiline: true,
+      editor: "contenteditable",
       maxLength: 50,
       value: (user) => user?.bio || ""
+    },
+    date_of_birth: {
+      label: "Дата рождения",
+      editor: "input",
+      inputType: "date",
+      maxLength: 10,
+      value: (user) => user?.date_of_birth || ""
     }
   }[field];
+}
+
+function createSidebarProfileEditorControl(field, config, value) {
+  if (config.editor === "contenteditable") {
+    const editor = document.createElement("div");
+    editor.className = "sidebar-profile-editor-input";
+    editor.dataset.editorField = field;
+    editor.dataset.placeholder = `Введите ${config.label.toLowerCase()}`;
+    editor.setAttribute("contenteditable", "true");
+    editor.setAttribute("role", "textbox");
+    editor.setAttribute("aria-multiline", "true");
+    editor.spellcheck = true;
+    editor.textContent = value;
+    editor.classList.toggle("is-empty", !value);
+    return editor;
+  }
+
+  const input = document.createElement("input");
+  input.className = "sidebar-profile-editor-input";
+  input.dataset.editorField = field;
+  input.type = config.inputType || (field === "email" ? "email" : "text");
+  if (config.maxLength) {
+    input.maxLength = config.maxLength;
+  }
+  input.value = value;
+  input.placeholder = `Введите ${config.label.toLowerCase()}`;
+  input.classList.toggle("is-empty", !value);
+  return input;
+}
+
+function readSidebarProfileEditorValue(control) {
+  if (!control) {
+    return "";
+  }
+
+  if (control.matches('[contenteditable="true"]')) {
+    return (control.textContent || "").trim();
+  }
+
+  return (control.value || "").trim();
+}
+
+function updateSidebarProfileEditorVisualState(control) {
+  if (!control) {
+    return;
+  }
+
+  control.classList.toggle("is-empty", !readSidebarProfileEditorValue(control));
+}
+
+function focusSidebarProfileEditorControl(control) {
+  if (!control) {
+    return;
+  }
+
+  control.focus();
+  if (control.matches('[contenteditable="true"]')) {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(control);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return;
+  }
+
+  if (typeof control.setSelectionRange === "function") {
+    control.setSelectionRange(control.value.length, control.value.length);
+  }
 }
 
 function hideSidebarProfileEditor(factNode) {
@@ -386,6 +1764,180 @@ async function saveSidebarProfileField(field, value) {
   return updatedUser;
 }
 
+function applySidebarProfileUserUpdate(updatedUser) {
+  setCurrentUser(updatedUser);
+  fillUserBadge();
+  fillSidebarProfile();
+}
+
+function syncAccountSettingsSummary() {
+  const currentEmailNode = document.querySelector("[data-account-current-email='true']");
+  if (!currentEmailNode) {
+    return;
+  }
+
+  const user = getCurrentUser();
+  const email = String(user?.email || "").trim();
+  currentEmailNode.textContent = email ? `Текущий email: ${email}` : "Текущий email: не указан";
+}
+
+function createSidebarProfileEditorInput(field, { placeholder = "", type = "text", maxLength = 255 } = {}) {
+  const input = document.createElement("input");
+  input.className = "sidebar-profile-editor-input";
+  input.dataset.editorField = field;
+  input.type = type;
+  input.placeholder = placeholder;
+  input.autocomplete = "off";
+  if (maxLength) {
+    input.maxLength = maxLength;
+  }
+  input.addEventListener("input", () => {
+    updateSidebarProfileEditorVisualState(input);
+  });
+  updateSidebarProfileEditorVisualState(input);
+  return input;
+}
+
+function createSidebarProfileSensitiveEditor(field, factNode) {
+  const config = getSidebarProfileEditConfig(field);
+  if (!config) {
+    return null;
+  }
+
+  const editor = document.createElement("form");
+  editor.className = "sidebar-profile-editor sidebar-profile-editor-stack";
+
+  const isEmailFlow = config.workflow === "email-change";
+  const valueInput = createSidebarProfileEditorInput(field, {
+    type: isEmailFlow ? "email" : "password",
+    placeholder: isEmailFlow ? "Введите новый email" : "Введите новый пароль",
+    maxLength: config.maxLength || 255
+  });
+  const codeInput = createSidebarProfileEditorInput(`${field}-code`, {
+    type: "text",
+    placeholder: "Введите код из письма",
+    maxLength: 6
+  });
+  codeInput.inputMode = "numeric";
+  codeInput.pattern = "[0-9]*";
+
+  const requestButton = document.createElement("button");
+  requestButton.className = "sidebar-profile-editor-button request";
+  requestButton.type = "button";
+  requestButton.textContent = "Получить код";
+
+  const actions = document.createElement("div");
+  actions.className = "sidebar-profile-editor-actions";
+  actions.innerHTML = `
+    <button class="sidebar-profile-editor-button cancel" type="button">Отмена</button>
+    <button class="sidebar-profile-editor-button save" type="submit">Подтвердить</button>
+  `;
+
+  editor.appendChild(valueInput);
+  editor.appendChild(codeInput);
+  editor.appendChild(requestButton);
+  editor.appendChild(actions);
+
+  actions.querySelector(".cancel")?.addEventListener("click", () => {
+    hideSidebarProfileEditor(factNode);
+  });
+
+  requestButton.addEventListener("click", async () => {
+    const nextValue = readSidebarProfileEditorValue(valueInput);
+    if (isEmailFlow) {
+      if (!nextValue) {
+        setSidebarProfileStatus(factNode, "Введите новый email", "error");
+        focusSidebarProfileEditorControl(valueInput);
+        return;
+      }
+    } else if (nextValue.length < 6) {
+      setSidebarProfileStatus(factNode, "Пароль должен содержать минимум 6 символов", "error");
+      focusSidebarProfileEditorControl(valueInput);
+      return;
+    }
+
+    requestButton.disabled = true;
+    setSidebarProfileStatus(factNode, "Отправка кода...", "loading");
+
+    try {
+      const response = isEmailFlow
+        ? await apiFetch("/users/me/email-change/request", {
+          method: "POST",
+          body: JSON.stringify({ email: nextValue })
+        })
+        : await apiFetch("/users/me/password-change/request", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+
+      if (isEmailFlow && response?.email && !readSidebarProfileEditorValue(valueInput)) {
+        valueInput.value = response.email;
+      }
+      setSidebarProfileStatus(factNode, response?.message || "Код отправлен", "success");
+      focusSidebarProfileEditorControl(codeInput);
+    } catch (error) {
+      setSidebarProfileStatus(factNode, error.message, "error");
+    } finally {
+      requestButton.disabled = false;
+    }
+  });
+
+  editor.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const nextValue = readSidebarProfileEditorValue(valueInput);
+    const code = readSidebarProfileEditorValue(codeInput).replace(/\D/g, "").slice(0, 6);
+    const confirmButton = actions.querySelector(".save");
+    if (confirmButton) {
+      confirmButton.disabled = true;
+    }
+
+    setSidebarProfileStatus(factNode, "Проверка кода...", "loading");
+
+    try {
+      if (isEmailFlow) {
+        const updatedUser = await apiFetch("/users/me/email-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ email: nextValue, code })
+        });
+        applySidebarProfileUserUpdate(updatedUser);
+        hideSidebarProfileEditor(factNode);
+        setSidebarProfileStatus(factNode, "Email обновлён", "success");
+      } else {
+        const response = await apiFetch("/users/me/password-change/confirm", {
+          method: "POST",
+          body: JSON.stringify({ password: nextValue, code })
+        });
+        hideSidebarProfileEditor(factNode);
+        setSidebarProfileStatus(factNode, response?.message || "Пароль изменён", "success");
+      }
+
+      window.setTimeout(() => {
+        setSidebarProfileStatus(factNode, "");
+      }, 1600);
+    } catch (error) {
+      setSidebarProfileStatus(factNode, error.message, "error");
+      if (confirmButton) {
+        confirmButton.disabled = false;
+      }
+    }
+  });
+
+  [valueInput, codeInput].forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        hideSidebarProfileEditor(factNode);
+      }
+    });
+  });
+
+  return {
+    editor,
+    focusTarget: valueInput
+  };
+}
+
 function openSidebarProfileEditor(field) {
   const sidebar = document.querySelector(".sidebar");
   const button = document.querySelector(`[data-profile-edit="${field}"]`);
@@ -410,25 +1962,29 @@ function openSidebarProfileEditor(field) {
   line.classList.add("editing");
   setSidebarProfileStatus(factNode, "");
 
-  line.querySelectorAll("strong, button").forEach((node) => {
-    if (!node.classList.contains("sidebar-profile-editor-button")) {
-      node.dataset.profileLineItem = "true";
-      node.hidden = true;
+  const valueNode = line.querySelector("strong, .sidebar-profile-secret");
+  if (valueNode) {
+    valueNode.dataset.profileLineItem = "true";
+    valueNode.hidden = true;
+  }
+  if (button) {
+    button.dataset.profileLineItem = "true";
+    button.hidden = true;
+  }
+
+  if (config.workflow === "email-change" || config.workflow === "password-change") {
+    const sensitiveEditor = createSidebarProfileSensitiveEditor(field, factNode);
+    if (!sensitiveEditor) {
+      return;
     }
-  });
+    line.appendChild(sensitiveEditor.editor);
+    focusSidebarProfileEditorControl(sensitiveEditor.focusTarget);
+    return;
+  }
 
   const editor = document.createElement("form");
   editor.className = "sidebar-profile-editor";
-
-  const input = document.createElement("input");
-
-  input.className = "sidebar-profile-editor-input";
-  input.type = field === "email" ? "email" : "text";
-  if (config.maxLength) {
-    input.maxLength = config.maxLength;
-  }
-  input.value = config.value(currentUser);
-  input.placeholder = `Введите ${config.label.toLowerCase()}`;
+  const control = createSidebarProfileEditorControl(field, config, config.value(currentUser));
 
   const actions = document.createElement("div");
   actions.className = "sidebar-profile-editor-actions";
@@ -437,28 +1993,17 @@ function openSidebarProfileEditor(field) {
     <button class="sidebar-profile-editor-button save" type="submit">Сохранить</button>
   `;
 
-  editor.appendChild(input);
+  editor.appendChild(control);
   editor.appendChild(actions);
   line.appendChild(editor);
-  input.focus();
-  if (typeof input.setSelectionRange === "function") {
-    input.setSelectionRange(input.value.length, input.value.length);
-  }
+  focusSidebarProfileEditorControl(control);
 
   actions.querySelector(".cancel")?.addEventListener("click", () => {
     hideSidebarProfileEditor(factNode);
   });
 
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      hideSidebarProfileEditor(factNode);
-    }
-  });
-
-  editor.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const nextValue = input.value.trim();
+  const onSubmit = async () => {
+    const nextValue = readSidebarProfileEditorValue(control);
     const saveButton = actions.querySelector(".save");
     if (saveButton) saveButton.disabled = true;
     setSidebarProfileStatus(factNode, "Сохранение...", "loading");
@@ -474,15 +2019,71 @@ function openSidebarProfileEditor(field) {
       setSidebarProfileStatus(factNode, error.message, "error");
       if (saveButton) saveButton.disabled = false;
     }
+  };
+
+  control.addEventListener("input", () => {
+    if (config.maxLength && control.matches('[contenteditable="true"]')) {
+      const currentValue = control.textContent || "";
+      if (currentValue.length > config.maxLength) {
+        control.textContent = currentValue.slice(0, config.maxLength);
+        focusSidebarProfileEditorControl(control);
+      }
+    }
+    updateSidebarProfileEditorVisualState(control);
+  });
+
+  control.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideSidebarProfileEditor(factNode);
+      return;
+    }
+
+    if (field === "bio") {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        void onSubmit();
+      }
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void onSubmit();
+    }
+  });
+
+  editor.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await onSubmit();
   });
 }
 
 function setSidebarProfileOpen(sidebar, isOpen) {
   if (!sidebar) return;
   const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
+  const settingsPanel = sidebar.querySelector(".sidebar-panel-settings");
   sidebar.classList.toggle("profile-open", Boolean(isOpen));
+  sidebar.classList.toggle("settings-open", false);
   if (profilePanel) {
     profilePanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  }
+  if (settingsPanel) {
+    settingsPanel.setAttribute("aria-hidden", "true");
+  }
+}
+
+function setSidebarSettingsOpen(sidebar, isOpen) {
+  if (!sidebar) return;
+  const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
+  const settingsPanel = sidebar.querySelector(".sidebar-panel-settings");
+  sidebar.classList.toggle("profile-open", Boolean(isOpen));
+  sidebar.classList.toggle("settings-open", Boolean(isOpen));
+  if (profilePanel) {
+    profilePanel.setAttribute("aria-hidden", isOpen ? "true" : "false");
+  }
+  if (settingsPanel) {
+    settingsPanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
   }
 }
 
@@ -511,8 +2112,8 @@ function buildQuickActionsMenu() {
   menu.className = "quick-actions-menu";
   menu.hidden = true;
   menu.innerHTML = `
-    <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">Написать пользователю</button>
-    <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">Создать группу</button>
+    <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">${renderActionMenuItemContent("/assets/icons/ui/Chat_alt_add.svg", "Написать пользователю")}</button>
+    <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">${renderActionMenuItemContent("/assets/icons/ui/group.svg", "Создать группу")}</button>
   `;
   document.body.appendChild(menu);
   return menu;
@@ -538,7 +2139,7 @@ function openQuickActionsMenu(trigger, menu) {
 
   const rect = trigger.getBoundingClientRect();
   const menuWidth = Math.min(240, window.innerWidth - 24);
-  const menuHeight = 116;
+  const menuHeight = menu.offsetHeight || 164;
   const left = Math.max(12, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 12));
   const top = Math.max(12, Math.min(rect.bottom + 10, window.innerHeight - menuHeight - 12));
 
@@ -572,6 +2173,10 @@ function initQuickActionsMenu() {
   const navigateForAction = (action) => {
     if (action === "search-user") {
       window.location.href = getSearchRoute();
+      return;
+    }
+    if (action === "open-graph") {
+      window.location.href = getGraphRoute();
       return;
     }
     if (action === "create-group") {
@@ -646,16 +2251,21 @@ function initSidebarProfile() {
   const badge = document.getElementById("currentUserBadge");
   const backButton = document.getElementById("sidebarProfileBack");
   const emailButton = document.getElementById("sidebarProfileEmail");
+  const usernameButton = document.getElementById("sidebarProfileHandle");
   const profileFacts = document.querySelector(".sidebar-profile-facts");
   const menuTrigger = document.getElementById("sidebarProfileMenuTrigger");
   const menu = document.getElementById("sidebarProfileMenu");
   const editActionButton = document.getElementById("sidebarProfileEditAction");
   const logoutButton = document.getElementById("sidebarProfileLogout");
+  const settingsButton = document.getElementById("sidebarSettingsOpen");
+  const settingsBackButton = document.getElementById("sidebarSettingsBack");
   const editButtons = document.querySelectorAll("[data-profile-edit]");
 
   fillSidebarProfile();
   buildProfileLogoutModal();
   initQuickActionsMenu();
+  initSettingsControls();
+  void syncSidebarProfile();
   const route = getCurrentRouteInfo();
 
   if (!sidebar || !badge || !backButton || !menuTrigger || !menu || badge.dataset.profileBound === "true") {
@@ -700,6 +2310,15 @@ function initSidebarProfile() {
     openProfileLogoutModal();
   });
 
+  settingsButton?.addEventListener("click", () => {
+    closeSidebarProfileMenu(menuTrigger, menu);
+    setSidebarSettingsOpen(sidebar, true);
+  });
+
+  settingsBackButton?.addEventListener("click", () => {
+    setSidebarProfileOpen(sidebar, true);
+  });
+
   if (emailButton && !emailButton.dataset.toggleBound) {
     emailButton.dataset.toggleBound = "true";
     emailButton.addEventListener("click", () => {
@@ -711,6 +2330,23 @@ function initSidebarProfile() {
       emailButton.classList.toggle("is-blurred", nextBlurState);
       emailButton.setAttribute("aria-pressed", nextBlurState ? "false" : "true");
       emailButton.setAttribute("aria-label", nextBlurState ? "Показать email" : "Скрыть email");
+    });
+  }
+
+  if (usernameButton && !usernameButton.dataset.copyBound) {
+    usernameButton.dataset.copyBound = "true";
+    usernameButton.addEventListener("click", async () => {
+      const user = getCurrentUser();
+      const usernameValue = String(user?.username || "").trim();
+      if (!usernameValue) {
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(`@${usernameValue}`);
+      } catch {
+        // Silent fail to match lightweight sidebar interactions.
+      }
     });
   }
 
@@ -727,6 +2363,10 @@ function initSidebarProfile() {
     }
     if (event.key === "Escape" && profileLogoutModal && !profileLogoutModal.hidden) {
       closeProfileLogoutModal();
+      return;
+    }
+    if (event.key === "Escape" && sidebar.classList.contains("settings-open")) {
+      setSidebarProfileOpen(sidebar, true);
       return;
     }
     if (event.key === "Escape" && sidebar.classList.contains("profile-open")) {
@@ -778,6 +2418,161 @@ function getVisibleChats() {
   return chatState.allChats.filter((chat) => !pendingDeletedChatKeys.has(getChatStateKey(chat.id, chat.type || "direct")));
 }
 
+function getChatTagFilterOptions() {
+  const tagMap = new Map();
+
+  getVisibleChats().forEach((chat) => {
+    const tag = getChatTag(chat.id, chat.type || "direct");
+    if (!tag) {
+      return;
+    }
+
+    const key = `${tag.label}::${tag.color}`;
+    if (!tagMap.has(key)) {
+      tagMap.set(key, {
+        key,
+        label: tag.label,
+        color: tag.color
+      });
+    }
+  });
+
+  return [...tagMap.values()].sort((left, right) => left.label.localeCompare(right.label, "ru-RU"));
+}
+
+function isChatMatchingActiveTagFilter(chat) {
+  if (activeChatTagFilter === "all") {
+    return true;
+  }
+
+  const tag = getChatTag(chat.id, chat.type || "direct");
+  if (activeChatTagFilter === "untagged") {
+    return !tag;
+  }
+
+  if (!tag || !activeChatTagFilter.startsWith("tag:")) {
+    return false;
+  }
+
+  return `tag:${tag.label}::${tag.color}` === activeChatTagFilter;
+}
+
+function normalizeActiveChatTagFilter() {
+  if (activeChatTagFilter === "all" || activeChatTagFilter === "untagged") {
+    return;
+  }
+
+  const hasActiveTag = getChatTagFilterOptions().some((tag) => `tag:${tag.key}` === activeChatTagFilter);
+  if (!hasActiveTag) {
+    activeChatTagFilter = "all";
+  }
+}
+
+function renderChatTagFilters(listId = "chatList") {
+  const container = document.getElementById("chatTagFilters");
+  if (!container) {
+    return;
+  }
+
+  const tags = getChatTagFilterOptions();
+  normalizeActiveChatTagFilter();
+  container.dataset.listId = listId;
+  container.innerHTML = [
+    '<button type="button" class="chat-tag-filter-chip" data-chat-tag-filter="all">Все</button>',
+    '<button type="button" class="chat-tag-filter-chip" data-chat-tag-filter="untagged">Без тега</button>',
+    ...tags.map((tag) => {
+      const styleVars = getChatTagStyleVars(tag.color);
+      return `
+        <button
+          type="button"
+          class="chat-tag-filter-chip chat-tag-filter-chip-custom"
+          data-chat-tag-filter="${escapeHtml(`tag:${tag.key}`)}"
+          style="--chat-tag-bg: ${styleVars.background}; --chat-tag-border: ${styleVars.border}; --chat-tag-text: ${styleVars.text}; --chat-tag-solid: ${styleVars.solid};"
+        >${escapeHtml(tag.label)}</button>
+      `;
+    })
+  ].join("");
+
+  container.querySelectorAll("[data-chat-tag-filter]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.chatTagFilter === activeChatTagFilter);
+  });
+}
+
+function bindChatTagFilters(listId = "chatList") {
+  const container = document.getElementById("chatTagFilters");
+  if (!container || container.dataset.chatTagFiltersBound === "true") {
+    return;
+  }
+
+  container.dataset.chatTagFiltersBound = "true";
+  let dragStartX = 0;
+  let dragStartScrollLeft = 0;
+  let isDragging = false;
+
+  container.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-chat-tag-filter]");
+    if (!trigger) {
+      return;
+    }
+
+    activeChatTagFilter = trigger.dataset.chatTagFilter || "all";
+    updateChatListView(container.dataset.listId || listId);
+  });
+
+  container.addEventListener("wheel", (event) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) && event.deltaX === 0) {
+      return;
+    }
+    if (container.scrollWidth <= container.clientWidth) {
+      return;
+    }
+
+    event.preventDefault();
+    const delta = Math.abs(event.deltaX) > 0 ? event.deltaX : event.deltaY;
+    container.scrollLeft += delta;
+  }, { passive: false });
+
+  container.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || container.scrollWidth <= container.clientWidth) {
+      return;
+    }
+
+    isDragging = true;
+    dragStartX = event.clientX;
+    dragStartScrollLeft = container.scrollLeft;
+    container.classList.add("is-dragging");
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!isDragging) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragStartX;
+    container.scrollLeft = dragStartScrollLeft - deltaX;
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!isDragging) {
+      return;
+    }
+
+    isDragging = false;
+    container.classList.remove("is-dragging");
+  });
+}
+
+function updateChatListView(listId = "chatList") {
+  const list = document.getElementById(listId);
+  if (!list) {
+    return;
+  }
+
+  bindChatTagFilters(listId);
+  renderChatTagFilters(listId);
+  renderChats(list, filterChats(getChatSearchQuery()));
+}
+
 function scheduleChatListRefresh(listId = "chatList", delayMs = 0) {
   if (chatListRefreshTimer) {
     window.clearTimeout(chatListRefreshTimer);
@@ -813,6 +2608,11 @@ function initChatListRealtime(listId = "chatList") {
   chatListRealtimeSocket.on("chat_deleted", refreshSidebar);
   chatListRealtimeSocket.on("group_updated", refreshSidebar);
   chatListRealtimeSocket.on("group_members_updated", refreshSidebar);
+  chatListRealtimeSocket.on("presence_updated", refreshSidebar);
+  chatListRealtimeSocket.on("inbox_message", (payload) => {
+    handleGlobalIncomingNotification(payload);
+    refreshSidebar();
+  });
 }
 
 async function loadChats(listId = "chatList", options = {}) {
@@ -832,8 +2632,9 @@ async function loadChats(listId = "chatList", options = {}) {
     const chats = await apiFetch("/chats");
     const normalizedChats = Array.isArray(chats) ? chats : chats.items || [];
     chatState.allChats = normalizedChats;
+    syncUserRelationStateFromChats(normalizedChats);
     bindChatSearch(listId);
-    renderChats(list, filterChats(getChatSearchQuery()));
+    updateChatListView(listId);
     return normalizedChats;
   } catch (error) {
     if (showLoading) {
@@ -848,7 +2649,7 @@ async function loadChats(listId = "chatList", options = {}) {
 
 function filterChats(query) {
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleChats = getVisibleChats();
+  const visibleChats = getVisibleChats().filter(isChatMatchingActiveTagFilter);
   if (!normalizedQuery) {
     return visibleChats;
   }
@@ -858,7 +2659,7 @@ function filterChats(query) {
     const haystack = [
       chat.title,
       chat.username,
-      chat.last_message?.text,
+      getChatListPreviewText(chat.last_message),
       customTag?.label
     ]
       .filter(Boolean)
@@ -878,7 +2679,7 @@ function bindChatSearch(listId = "chatList") {
 
   input.dataset.chatSearchBound = "true";
   input.addEventListener("input", () => {
-    renderChats(list, filterChats(input.value));
+    updateChatListView(listId);
   });
 }
 
@@ -926,7 +2727,7 @@ function buildChatTagEditorModal() {
     <div class="chat-tag-editor-card" role="dialog" aria-modal="true" aria-label="Редактирование тега">
       <div class="chat-tag-editor-header">
         <h3>Тег чата</h3>
-        <button type="button" class="chat-tag-editor-close" data-chat-tag-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="chat-tag-editor-close" data-chat-tag-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <form class="chat-tag-editor-form">
         <label class="label" for="chatTagLabelInput">Название</label>
@@ -989,7 +2790,7 @@ function buildGroupOwnerLeaveModal() {
     <div class="group-owner-leave-card" role="dialog" aria-modal="true" aria-labelledby="groupOwnerLeaveTitle">
       <div class="group-owner-leave-header">
         <h3 id="groupOwnerLeaveTitle">Выход создателя</h3>
-        <button type="button" class="group-owner-leave-close" data-group-owner-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="group-owner-leave-close" data-group-owner-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <div class="group-owner-leave-body">
         <p class="group-owner-leave-copy" id="groupOwnerLeaveCopy">Выберите действие перед выходом из группы.</p>
@@ -1027,7 +2828,7 @@ function buildGroupDeleteConfirmModal() {
     <div class="group-delete-confirm-card" role="dialog" aria-modal="true" aria-labelledby="groupDeleteConfirmTitle">
       <div class="group-delete-confirm-header">
         <h3 id="groupDeleteConfirmTitle">Удалить группу</h3>
-        <button type="button" class="group-delete-confirm-close" data-group-delete-close="true" aria-label="Закрыть">×</button>
+        <button type="button" class="group-delete-confirm-close" data-group-delete-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
       </div>
       <div class="group-delete-confirm-body">
         <p class="group-delete-confirm-copy">Вы уверены, что хотите удалить группу для всех участников?</p>
@@ -1156,14 +2957,14 @@ function showChatListActionMenu(targetNode, clientX, clientY) {
   const chatType = targetNode?.dataset.chatType || "direct";
   menu.innerHTML = chatType === "direct"
     ? `
-      <button type="button" data-action="edit-tag">Изменить тег</button>
-      <button type="button" data-action="delete-me">Удалить у меня</button>
-      <button type="button" data-action="delete-all" class="danger">Удалить у всех</button>
+      <button type="button" data-action="edit-tag">${renderActionMenuItemContent("/assets/icons/ui/Lable_fill.svg", "Изменить тег")}</button>
+      <button type="button" data-action="delete-me">${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить у меня")}</button>
+      <button type="button" data-action="delete-all" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Trash.svg", "Удалить у всех")}</button>
     `
     : `
-      <button type="button" data-action="edit-tag">Изменить тег</button>
-      <button type="button" data-action="clear-group-history">Очистить историю</button>
-      <button type="button" data-action="leave-group" class="danger">Выйти из группы</button>
+      <button type="button" data-action="edit-tag">${renderActionMenuItemContent("/assets/icons/ui/Lable_fill.svg", "Изменить тег")}</button>
+      <button type="button" data-action="clear-group-history">${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Очистить историю")}</button>
+      <button type="button" data-action="leave-group" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Out.svg", "Выйти из группы")}</button>
     `;
   menu.hidden = false;
   const menuRect = menu.getBoundingClientRect();
@@ -1233,13 +3034,13 @@ function openChatTagEditor(chatItem, listId = "chatList") {
       label: labelInput.value,
       color: colorInput.value
     });
-    renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+    updateChatListView(listId);
     closeChatTagEditorModal();
   };
 
   removeButton.onclick = () => {
     setChatTag(chatId, chatType, { label: "", color: colorInput.value });
-    renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+    updateChatListView(listId);
     closeChatTagEditorModal();
   };
 
@@ -1450,7 +3251,7 @@ async function deleteDirectChatFromList(chatItem, scope, listId = "chatList") {
   }
 
   pendingDeletedChatKeys.add(chatKey);
-  renderChats(document.getElementById(listId), filterChats(getChatSearchQuery()));
+  updateChatListView(listId);
 
   pendingChatDeleteState = {
     chatId,
@@ -1479,7 +3280,7 @@ async function flushPendingChatDelete(reason = "commit", listId = "chatList") {
 
   if (reason === "undo") {
     pendingDeletedChatKeys.delete(state.chatKey);
-    renderChats(document.getElementById(state.listId || listId), filterChats(getChatSearchQuery()));
+    updateChatListView(state.listId || listId);
     hideChatDeleteUndoToast();
     return;
   }
@@ -1499,7 +3300,7 @@ async function flushPendingChatDelete(reason = "commit", listId = "chatList") {
     }
   } catch (error) {
     pendingDeletedChatKeys.delete(state.chatKey);
-    renderChats(document.getElementById(state.listId || listId), filterChats(getChatSearchQuery()));
+    updateChatListView(state.listId || listId);
     hideChatDeleteUndoToast();
     window.alert(error.message);
   }
@@ -1768,7 +3569,13 @@ function renderChats(list, chats) {
 
   if (!chats.length) {
     const hasQuery = Boolean(document.querySelector(".sidebar-search .search-input")?.value.trim());
-    list.innerHTML = `<div class="empty-state">${hasQuery ? "Ничего не найдено" : "Чатов пока нет"}</div>`;
+    const hasTagFilter = activeChatTagFilter !== "all";
+    const emptyMessage = hasQuery
+      ? "Ничего не найдено"
+      : hasTagFilter
+        ? "Нет чатов по выбранному тегу"
+        : "Чатов пока нет";
+    list.innerHTML = `<div class="empty-state">${emptyMessage}</div>`;
     restoreChatListScroll(list, previousScrollTop);
     return;
   }
@@ -1778,10 +3585,11 @@ function renderChats(list, chats) {
   list.innerHTML = chats
     .map((chat) => {
       const href = chat.type === "group" ? getGroupChatRoute(chat.id) : getDirectChatRoute(chat.id);
-      const preview = chat.last_message?.text || "Нет сообщений";
+      const preview = getChatListPreviewText(chat.last_message);
       const name = chat.title || chat.username || chat.name || "Чат";
       const isGroup = chat.type === "group";
       const customTagMarkup = getChatTagMarkup(chat.id, chat.type || "direct");
+      const isOnline = !isGroup && Boolean(chat.is_online);
       const active = route.page === "group-chat"
         ? isGroup && String(chat.id) === String(route.chatId)
         : route.page === "direct-chat"
@@ -1801,7 +3609,7 @@ function renderChats(list, chats) {
         <a class="chat-item ${active ? "active" : ""}" href="${href}" data-chat-id="${escapeHtml(String(chat.id))}" data-chat-type="${escapeHtml(chat.type || "direct")}">
           <div class="avatar ${isGroup ? "group-avatar" : ""}">
             ${escapeHtml(initials(name))}
-            ${isGroup ? '<span class="chat-kind-badge" aria-hidden="true">👥</span>' : ""}
+            ${isGroup ? '<span class="chat-kind-badge" aria-hidden="true">👥</span>' : isOnline ? '<span class="presence-dot online" aria-hidden="true"></span>' : ""}
           </div>
           <div class="chat-meta">
             <div class="chat-main">

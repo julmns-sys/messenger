@@ -1,0 +1,230 @@
+{% extends "base_app.html" %}
+
+{% block content %}
+  <section class="content">
+    <header class="content-header">
+      <div class="thread-header">
+        <div class="thread-header-side">
+          <a class="icon-button thread-back" href="/" aria-label="Back"></a>
+        </div>
+        <div class="thread-header-main">
+          <div class="thread-header-title-row">
+            <h1 class="chat-name" id="chatTitle">Группа</h1>
+            <span class="desktop-only" id="chatPresenceDesktop"></span>
+          </div>
+          <p class="muted desktop-only" id="chatSubtitleDesktop">Загрузка...</p>
+          <p class="muted" id="chatSubtitle">Загрузка...</p>
+        </div>
+        <div class="thread-header-side">
+          <div class="avatar header-avatar" id="chatAvatar">?</div>
+        </div>
+      </div>
+    </header>
+    <div class="content-body">
+      <div class="thread-mobile-search" id="threadMobileSearch" hidden>
+        <div class="thread-mobile-search-bar">
+          <button class="icon-button page-back thread-mobile-search-close" id="threadMobileSearchClose" type="button" aria-label="Закрыть поиск"></button>
+          <input class="search-input thread-mobile-search-input" id="threadMobileSearchInput" type="search" placeholder="Поиск в сообщениях">
+          <button class="icon-button thread-mobile-search-clear" id="threadMobileSearchClear" type="button" aria-label="Очистить поиск"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
+        </div>
+        <div class="status thread-info-search-status thread-mobile-search-status" id="threadMobileSearchStatus"></div>
+        <div class="thread-info-search-results thread-mobile-search-results" id="threadMobileSearchResults"></div>
+      </div>
+      <div class="messages" id="messages"></div>
+      <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down"><img class="icon-asset" src="/assets/icons/ui/Arrow_down.svg" alt=""></button>
+      <div class="composer-wrap">
+        <form class="composer" id="messageForm" novalidate>
+          {% if photo_messages_enabled and global_file_uploads_enabled %}
+            <input id="photoMessageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+            <button class="composer-attach-button" id="photoMessageButton" type="button" aria-label="Прикрепить фотографию" title="Прикрепить фото"><img class="icon-asset" src="/assets/icons/ui/Upload.svg" alt=""></button>
+          {% endif %}
+          {% if global_stickers_enabled %}
+            <button class="composer-sticker-button" id="stickerPickerButton" type="button" aria-label="Открыть стикеры" title="Стикеры">
+              <img class="icon-asset" src="/assets/icons/ui/Bubble.svg" alt="">
+            </button>
+          {% endif %}
+          <div class="composer-input-shell">
+            <textarea class="textarea composer-textarea" id="messageInput" placeholder="Сообщение в группу..." rows="1" required></textarea>
+          </div>
+          <button class="send-button composer-action-button" type="submit" aria-label="Записать голосовое сообщение" title="Записать голосовое">
+            <img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt="">
+          </button>
+        </form>
+        <div class="sticker-picker-popup" id="stickerPickerPopup" hidden>
+          <div class="sticker-picker-head">
+            <div class="sticker-pack-tabs" id="stickerPackTabs"></div>
+          </div>
+          <div class="sticker-picker-status" id="stickerPickerStatus"></div>
+          <div class="sticker-grid" id="stickerGrid"></div>
+        </div>
+        <div id="messageStatus" class="status thread-status"></div>
+      </div>
+    </div>
+    <aside class="thread-info-panel" id="threadInfoPanel" aria-hidden="true">
+      <div class="thread-info-panel-header">
+        <div>
+          <h2 class="thread-info-title">Информация</h2>
+          <p class="thread-info-subtitle">Панель чата</p>
+        </div>
+        <div class="thread-info-panel-actions">
+          <button class="icon-button mobile-only thread-mobile-search-trigger" id="threadMobileSearchTrigger" type="button" aria-label="Поиск по сообщениям">
+            <img class="icon-asset" src="/assets/icons/ui/Search.svg" alt="">
+          </button>
+          <button class="icon-button thread-info-menu-trigger" id="threadInfoMenuTrigger" type="button" aria-label="Действия группы" aria-haspopup="menu" aria-expanded="false" hidden><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
+          <button class="icon-button" id="threadInfoClose" type="button" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
+        </div>
+        <div class="thread-info-action-menu" id="threadInfoActionMenu" hidden>
+          <button type="button" data-thread-info-action="edit-group">Редактировать группу</button>
+        </div>
+      </div>
+      <div class="thread-info-panel-body">
+        <div id="threadInfoProfilePanel"></div>
+        <section class="thread-info-card thread-info-card-chat" id="threadInfoChatCard">
+          <div class="thread-info-card-head">
+            <div>
+              <div class="thread-info-card-eyebrow">Chat Info</div>
+              <div class="thread-info-card-title-row">
+                <h3 class="thread-info-card-title">О чате</h3>
+                <div class="thread-info-tag-slot" id="threadInfoTag"></div>
+              </div>
+            </div>
+          </div>
+          <div class="thread-info-facts">
+            <button class="thread-info-search-action" id="threadInfoSearchAction" type="button">
+              <span class="thread-info-search-icon" aria-hidden="true">
+                <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Search_fill.svg" alt="">
+              </span>
+              <span class="thread-info-search-copy">
+                <strong>Поиск по сообщениям</strong>
+                <span>Найти сообщение и перейти к нему</span>
+              </span>
+            </button>
+            <div class="thread-info-search-panel" id="threadInfoSearchPanel" hidden>
+              <div class="thread-info-search-panel-row">
+                <input class="search-input thread-info-search-input" id="threadInfoSearchInput" type="search" placeholder="Поиск в сообщениях">
+                <button class="button button-secondary thread-info-search-reset" id="threadInfoSearchReset" type="button">Последние</button>
+              </div>
+              <div class="status thread-info-search-status" id="threadInfoSearchStatus"></div>
+              <div class="thread-info-search-results" id="threadInfoSearchResults"></div>
+            </div>
+            <div class="thread-info-fact">
+              <div class="thread-info-fact-pair">
+                <div class="thread-info-fact-item">
+                  <span class="thread-info-label">Дата начала</span>
+                  <strong id="threadInfoStartedAt">Пока нет</strong>
+                </div>
+                <div class="thread-info-fact-item">
+                  <span class="thread-info-label">Количество сообщений</span>
+                  <strong id="threadInfoMessagesCount">0</strong>
+                </div>
+              </div>
+            </div>
+            <div class="thread-info-shortcuts" aria-label="Разделы чата">
+              <button class="thread-info-shortcut" type="button">
+                <span class="thread-info-shortcut-icon" aria-hidden="true">
+                  <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Img_box_fill.svg" alt="">
+                </span>
+                <span class="thread-info-shortcut-copy">
+                  <strong>Медиа</strong>
+                  <span id="threadInfoMediaCount">Скоро</span>
+                </span>
+                <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
+              </button>
+              <button class="thread-info-shortcut" type="button">
+                <span class="thread-info-shortcut-icon" aria-hidden="true">
+                  <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Folder.svg" alt="">
+                </span>
+                <span class="thread-info-shortcut-copy">
+                  <strong>Файлы</strong>
+                  <span id="threadInfoFilesCount">Скоро</span>
+                </span>
+                <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
+              </button>
+            </div>
+            <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
+              <div class="thread-info-invite-card">
+                <button class="thread-info-invite-toggle" id="threadInfoInviteToggle" type="button" aria-expanded="false" aria-controls="threadInfoInvitePanel">
+                  <span class="thread-info-invite-toggle-main">
+                    <span class="thread-info-invite-icon-wrap" aria-hidden="true">
+                      <img class="menu-item-icon icon-asset" src="/assets/icons/ui/link.svg" alt="">
+                    </span>
+                    <span class="thread-info-invite-toggle-copy">
+                      <strong>Пригласительная ссылка</strong>
+                      <span id="threadInfoInviteHint">Нажмите, чтобы показать ссылку</span>
+                    </span>
+                  </span>
+                  <img class="thread-info-invite-chevron icon-asset" src="/assets/icons/ui/Expand_down.svg" alt="">
+                </button>
+                <div class="thread-info-invite-panel" id="threadInfoInvitePanel" aria-hidden="true" hidden>
+                  <div class="thread-info-invite-panel-inner">
+                    <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer" title="">
+                      <span class="thread-info-invite-link-text" id="threadInfoInviteLinkText"></span>
+                    </a>
+                    <div class="thread-info-invite-actions">
+                      <button class="thread-info-invite-action-button" id="threadInfoInviteCopy" type="button" aria-label="Скопировать ссылку" title="Скопировать ссылку">
+                        <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Copy.svg" alt="">
+                        <span class="menu-item-label">Скопировать</span>
+                      </button>
+                      <button class="thread-info-invite-action-button" id="threadInfoInviteRegenerate" type="button" aria-label="Обновить ссылку" title="Обновить ссылку">
+                        <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Refresh_2.svg" alt="">
+                        <span class="menu-item-label">Обновить ссылку</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
+              </div>
+            </div>
+          </div>
+          <div class="thread-info-members" id="threadInfoMembersWrap">
+            <div class="thread-info-members-header">
+              <h4>Участники</h4>
+              <button class="icon-button thread-member-add-trigger" id="threadMemberAddTrigger" type="button" aria-label="Добавить участников" hidden><img class="icon-asset" src="/assets/icons/ui/Add_round.svg" alt=""></button>
+            </div>
+            <div class="member-list thread-info-members-list" id="threadInfoMembersList"></div>
+          </div>
+        </section>
+      </div>
+    </aside>
+    <div class="thread-member-modal" id="threadMemberAddModal" hidden>
+      <div class="thread-member-modal-card" role="dialog" aria-modal="true" aria-labelledby="threadMemberAddTitle">
+        <div class="thread-member-modal-header">
+          <h3 class="thread-member-modal-title" id="threadMemberAddTitle">Добавить участников</h3>
+          <button class="icon-button thread-member-modal-close" id="threadMemberAddClose" type="button" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
+        </div>
+        <input class="search-input thread-member-add-input" id="threadMemberAddInput" type="text" placeholder="Поиск пользователей и контактов">
+        <div class="status thread-member-add-status" id="threadMemberAddStatus"></div>
+        <div class="member-list thread-member-search-results" id="threadMemberSearchResults"></div>
+        <button class="button thread-member-submit" id="threadMemberAddSubmit" type="button" hidden disabled>Добавить</button>
+      </div>
+    </div>
+    <div class="thread-group-edit-modal" id="threadGroupEditModal" hidden>
+      <div class="thread-group-edit-backdrop" data-group-edit-close="true"></div>
+      <div class="thread-group-edit-card" role="dialog" aria-modal="true" aria-labelledby="threadGroupEditTitle">
+        <div class="thread-group-edit-header">
+          <h3 class="thread-group-edit-title" id="threadGroupEditTitle">Редактировать группу</h3>
+          <button class="icon-button thread-group-edit-close" type="button" data-group-edit-close="true" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
+        </div>
+        <form class="thread-group-edit-form" id="threadGroupEditForm">
+          <label class="label" for="threadGroupEditTitleInput">Название группы</label>
+          <input class="search-input thread-group-edit-input" id="threadGroupEditTitleInput" type="text" maxlength="16" required>
+          <label class="label" for="threadGroupEditDescriptionInput">Описание группы</label>
+          <textarea class="thread-group-edit-textarea" id="threadGroupEditDescriptionInput" rows="4" placeholder="Описание группы"></textarea>
+          <div class="status thread-group-edit-status" id="threadGroupEditStatus"></div>
+          <div class="thread-group-edit-actions">
+            <button class="button button-secondary" type="button" data-group-edit-close="true">Отмена</button>
+            <button class="button" id="threadGroupEditSubmit" type="submit">Сохранить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+{% block shared_scripts %}
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+{% endblock %}
+
+{% block page_scripts %}
+  <script src="/assets/js/chat.js"></script>
+{% endblock %}

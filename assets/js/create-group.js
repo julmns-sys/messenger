@@ -49,7 +49,7 @@ function renderSelectedMembers() {
   container.innerHTML = users.map((user) => `
     <span class="chip">
       @${escapeHtml(user.username)}
-      <button type="button" data-remove="${escapeHtml(String(user.id))}" aria-label="Убрать участника">×</button>
+      <button type="button" data-remove="${escapeHtml(String(user.id))}" aria-label="Убрать участника"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
     </span>
   `).join("");
 

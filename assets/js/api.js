@@ -3,8 +3,29 @@ const API = {
   tokenKey: "messenger_token",
   userKey: "messenger_user",
   emailBookKey: "messenger_user_emails",
-  postAuthRedirectKey: "messenger_post_auth_redirect"
+  postAuthRedirectKey: "messenger_post_auth_redirect",
+  deviceIdKey: "messenger_device_id"
 };
+
+function generateLocalDeviceId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  const randomPart = Math.random().toString(36).slice(2);
+  return `device-${Date.now().toString(36)}-${randomPart}`;
+}
+
+function getOrCreateDeviceId() {
+  const existingDeviceId = localStorage.getItem(API.deviceIdKey);
+  if (typeof existingDeviceId === "string" && existingDeviceId.trim()) {
+    return existingDeviceId.trim();
+  }
+
+  const nextDeviceId = generateLocalDeviceId();
+  localStorage.setItem(API.deviceIdKey, nextDeviceId);
+  return nextDeviceId;
+}
 
 function getChatsRoute() {
   return "/";
@@ -14,8 +35,20 @@ function getSearchRoute() {
   return "/search";
 }
 
+function getGraphRoute() {
+  return "/graph";
+}
+
 function getCreateGroupRoute() {
   return "/create-group";
+}
+
+function getStickersRoute() {
+  return "/stickers";
+}
+
+function getAdminRoute() {
+  return "/admin";
 }
 
 function getLoginRoute() {
@@ -24,6 +57,15 @@ function getLoginRoute() {
 
 function getRegisterRoute() {
   return "/register";
+}
+
+function getVerifyEmailRoute(email = "") {
+  const params = new URLSearchParams();
+  if (typeof email === "string" && email.trim()) {
+    params.set("email", email.trim());
+  }
+  const query = params.toString();
+  return query ? `/verify-email?${query}` : "/verify-email";
 }
 
 function getProfileRoute() {
@@ -70,12 +112,20 @@ function getCurrentRouteInfo() {
     page = "chats";
   } else if (segments[0] === "search" || segments[0] === "search.html") {
     page = "search";
+  } else if (segments[0] === "graph" || segments[0] === "graph.html") {
+    page = "graph";
   } else if (segments[0] === "create-group" || segments[0] === "create_group.html") {
     page = "create-group";
+  } else if (segments[0] === "stickers" || segments[0] === "stickers.html") {
+    page = "stickers";
+  } else if (segments[0] === "admin" || segments[0] === "admin.html") {
+    page = "admin";
   } else if (segments[0] === "login" || segments[0] === "login.html") {
     page = "login";
   } else if (segments[0] === "register" || segments[0] === "register.html") {
     page = "register";
+  } else if (segments[0] === "verify-email" || segments[0] === "verify_email.html") {
+    page = "verify-email";
   } else if (segments[0] === "profile") {
     page = "profile";
   } else if (segments[0] === "chat" || segments[0] === "chat.html") {
@@ -222,6 +272,7 @@ function consumePostAuthRedirect() {
 async function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
+  headers.set("X-Device-Id", getOrCreateDeviceId());
 
   if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -247,7 +298,10 @@ async function apiFetch(path, options = {}) {
       (payload && payload.message) ||
       (payload && payload.detail) ||
       (typeof payload === "string" ? payload : "Request failed");
-    throw new Error(message);
+    const error = new Error(message);
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
   }
 
   return payload;
@@ -267,6 +321,14 @@ function getUserTimeZone() {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Moscow";
   } catch {
     return "Europe/Moscow";
+  }
+}
+
+function getPreferredTimeFormat() {
+  try {
+    return document.body?.dataset?.timeFormat === "12" ? "12" : "24";
+  } catch {
+    return "24";
   }
 }
 
@@ -329,8 +391,21 @@ function getLocalDateKey(value) {
 function formatTime(value) {
   const date = parseUtcDate(value);
   if (!date) return "";
+  const timeZone = getUserTimeZone();
+  if (getPreferredTimeFormat() === "12") {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h12"
+    });
+    return formatter.format(date);
+  }
+
   return date.toLocaleTimeString("ru-RU", {
-    timeZone: getUserTimeZone(),
+    timeZone,
+    hour12: false,
+    hourCycle: "h23",
     hour: "2-digit",
     minute: "2-digit"
   });

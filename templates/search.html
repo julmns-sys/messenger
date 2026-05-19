@@ -1,0 +1,50 @@
+{% extends "base_app.html" %}
+
+{% block content %}
+  <section class="content">
+    <div class="page-header">
+      <a class="icon-button mobile-only page-back" href="/" aria-label="Назад"></a>
+      <div class="page-header-copy">
+        <h1 class="page-title">Поиск пользователей</h1>
+        <p class="page-subtitle">Ищите пользователя по username в формате `@username`.</p>
+      </div>
+    </div>
+    <div class="panel stack">
+      <form id="searchForm" class="inline-actions">
+        <input class="search-input" id="searchInput" type="text" placeholder="@username" required>
+        <button class="button" style="width: auto;" type="submit">Найти</button>
+      </form>
+      <div id="searchStatus" class="status"></div>
+      <div class="result-list" id="resultList" hidden></div>
+    </div>
+
+    <div class="panel stack">
+      <div class="contacts-panel-header">
+        <div>
+          <h2 class="page-title contacts-panel-title">Контакты</h2>
+          <p class="page-subtitle contacts-panel-subtitle">Добавляйте пользователей в быстрый список и удаляйте их отсюда.</p>
+        </div>
+      </div>
+      <div id="contactsStatus" class="status"></div>
+      <div class="result-list" id="contactsList">
+        <div class="empty-state">Контактов пока нет</div>
+      </div>
+    </div>
+    <aside class="thread-info-panel" id="searchUserInfoPanel" aria-hidden="true">
+      <div class="thread-info-panel-header">
+        <div>
+          <h2 class="thread-info-title">Профиль</h2>
+          <p class="thread-info-subtitle">Информация о пользователе</p>
+        </div>
+        <button class="icon-button" id="searchUserInfoClose" type="button" aria-label="Закрыть"><img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt=""></button>
+      </div>
+      <div class="thread-info-panel-body">
+        <div id="searchUserInfoProfilePanel"></div>
+      </div>
+    </aside>
+  </section>
+{% endblock %}
+
+{% block page_scripts %}
+  <script src="/assets/js/search.js"></script>
+{% endblock %}

@@ -1,0 +1,100 @@
+<aside class="sidebar">
+  <div class="sidebar-slider">
+    <div class="sidebar-panel sidebar-panel-main">
+      <div class="sidebar-header">
+        <div>
+          <div class="brand">/Chatik</div>
+          <button class="current-user-badge" id="currentUserBadge" type="button" aria-label="Открыть профиль"></button>
+        </div>
+        <div class="sidebar-actions">
+          {% if sidebar_action_mode == "back" %}
+            <a class="icon-button page-back" href="{{ sidebar_back_href }}" aria-label="{{ sidebar_back_label }}"></a>
+          {% else %}
+            <a class="icon-button" href="/search" aria-label="Search"><img class="icon-asset" src="/assets/icons/ui/Search.svg" alt=""></a>
+            <a class="icon-button" href="/graph" aria-label="Граф общения"><img class="icon-asset" src="/assets/icons/ui/Bubble.svg" alt=""></a>
+            <button class="icon-button" type="button" data-quick-actions-trigger="true" aria-label="Быстрые действия" aria-haspopup="menu" aria-expanded="false"><img class="icon-asset" src="/assets/icons/ui/Add_round.svg" alt=""></button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="sidebar-search">
+        <input class="search-input" type="text" placeholder="Ваши чаты">
+      </div>
+      <div class="chat-tag-filter-bar" id="chatTagFilters" aria-label="Фильтр по тегам"></div>
+      <div class="chat-list" id="chatList"></div>
+    </div>
+
+    <div class="sidebar-panel sidebar-panel-profile" aria-hidden="true">
+      <div class="sidebar-header">
+        <div class="sidebar-profile-title">
+          <button class="icon-button page-back" id="sidebarProfileBack" type="button" aria-label="Назад"></button>
+          <div>
+            <div class="brand">Профиль</div>
+            <div class="muted">Ваши данные</div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-profile-body">
+        <div class="sidebar-profile-card">
+          <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false"><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
+          <div class="sidebar-profile-menu" id="sidebarProfileMenu" hidden>
+            <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button"><img class="menu-item-icon icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""><span class="menu-item-label">Изменить профиль</span></button>
+            <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button"><img class="menu-item-icon icon-asset" src="/assets/icons/ui/signout.svg" alt=""><span class="menu-item-label">Выйти из аккаунта</span></button>
+          </div>
+          <div class="avatar sidebar-profile-avatar" id="sidebarProfileAvatar">?</div>
+          <h2 class="sidebar-profile-name" id="sidebarProfileName">Пользователь</h2>
+          <p class="sidebar-profile-username" id="sidebarProfileUsername">@username</p>
+          <div class="sidebar-profile-facts">
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Имя</span>
+              <div class="sidebar-profile-line">
+                <strong id="sidebarProfileNameField">Не указано</strong>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="name" aria-label="Изменить имя"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
+              </div>
+            </div>
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Email</span>
+              <div class="sidebar-profile-line">
+                <button class="sidebar-profile-secret is-blurred" id="sidebarProfileEmail" type="button" aria-label="Показать email" aria-pressed="false">Не указана</button>
+              </div>
+            </div>
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Username</span>
+              <div class="sidebar-profile-line">
+                <button class="sidebar-profile-copyable" id="sidebarProfileHandle" type="button" aria-label="Скопировать username">@username</button>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="username" aria-label="Изменить username"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
+              </div>
+            </div>
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Bio</span>
+              <div class="sidebar-profile-line">
+                <strong id="sidebarProfileBio">Не указана</strong>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="bio" aria-label="Изменить bio"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
+              </div>
+            </div>
+            <div class="sidebar-profile-fact">
+              <span class="sidebar-profile-label">Дата рождения</span>
+              <div class="sidebar-profile-line">
+                <strong id="sidebarProfileDateOfBirth">Не указана</strong>
+                <button class="sidebar-profile-edit" type="button" data-profile-edit="date_of_birth" aria-label="Изменить дату рождения"><img class="icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-profile-actions">
+          <button class="settings-launch-tile" id="sidebarSettingsOpen" type="button" aria-label="Открыть настройки">
+            <span class="settings-launch-tile-icon" aria-hidden="true">
+              <img src="/assets/icons/app/settings.svg" alt="">
+            </span>
+            <span class="settings-launch-tile-copy">
+              <strong>Настройки</strong>
+              <span>Откройте отдельную панель в sidebar.</span>
+            </span>
+            <span class="settings-launch-tile-arrow" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+    {% include "partials/sidebar_settings_panel.html" %}
+  </div>
+</aside>
