@@ -324,7 +324,9 @@
               </div>
               <div class="thread-info-facts">
                 <button class="thread-info-search-action" id="threadInfoSearchAction" type="button">
-                  <span class="thread-info-search-icon" aria-hidden="true"></span>
+                  <span class="thread-info-search-icon" aria-hidden="true">
+                    <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Search_fill.svg" alt="">
+                  </span>
                   <span class="thread-info-search-copy">
                     <strong>Поиск по сообщениям</strong>
                     <span>Найти сообщение и перейти к нему</span>
@@ -350,13 +352,27 @@
                     </div>
                   </div>
                 </div>
-                <div class="thread-info-fact">
-                  <span class="thread-info-label">Медиа</span>
-                  <strong id="threadInfoMediaCount">Скоро</strong>
-                </div>
-                <div class="thread-info-fact">
-                  <span class="thread-info-label">Файлы</span>
-                  <strong id="threadInfoFilesCount">Скоро</strong>
+                <div class="thread-info-shortcuts" aria-label="Разделы чата">
+                  <button class="thread-info-shortcut" type="button">
+                    <span class="thread-info-shortcut-icon" aria-hidden="true">
+                      <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Img_box_fill.svg" alt="">
+                    </span>
+                    <span class="thread-info-shortcut-copy">
+                      <strong>Медиа</strong>
+                      <span id="threadInfoMediaCount">Скоро</span>
+                    </span>
+                    <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
+                  </button>
+                  <button class="thread-info-shortcut" type="button">
+                    <span class="thread-info-shortcut-icon" aria-hidden="true">
+                      <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Folder.svg" alt="">
+                    </span>
+                    <span class="thread-info-shortcut-copy">
+                      <strong>Файлы</strong>
+                      <span id="threadInfoFilesCount">Скоро</span>
+                    </span>
+                    <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
+                  </button>
                 </div>
                 <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
                   <div class="thread-info-invite-card">
