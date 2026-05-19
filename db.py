@@ -405,6 +405,23 @@ def _ensure_users_security_columns(conn):
               AND TABLE_NAME = 'users'
         """, (DB_NAME,))
         existing = {row[0] for row in cursor.fetchall() or []}
+        added_email_verified = False
+        if "email_verified" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0 AFTER email
+            """)
+            added_email_verified = True
+        if "email_verification_code_hash" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN email_verification_code_hash VARCHAR(255) NULL AFTER email_verified
+            """)
+        if "email_verification_expires_at" not in existing:
+            cursor.execute("""
+                ALTER TABLE users
+                ADD COLUMN email_verification_expires_at DATETIME NULL AFTER email_verification_code_hash
+            """)
         if "role" not in existing:
             cursor.execute("""
                 ALTER TABLE users
@@ -449,6 +466,11 @@ def _ensure_users_security_columns(conn):
             cursor.execute("""
                 ALTER TABLE users
                 ADD COLUMN login_alerts_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER date_of_birth
+            """)
+        if added_email_verified:
+            cursor.execute("""
+                UPDATE users
+                SET email_verified = 1
             """)
     finally:
         cursor.close()

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from html import unescape
 import hashlib
 import json
@@ -6,8 +6,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
+import smtplib
 from threading import Lock
 import uuid
+from email.message import EmailMessage
+from email.utils import formataddr
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -75,6 +79,14 @@ SYSTEM_OWNER_EMAIL = str(os.getenv("SYSTEM_OWNER_EMAIL", "owner@system.local") o
 SYSTEM_OWNER_PASSWORD = str(os.getenv("SYSTEM_OWNER_PASSWORD", "change-me-owner") or "change-me-owner")
 GLOBAL_FILES_SETTING_KEY = "global_file_uploads_enabled"
 GLOBAL_STICKERS_SETTING_KEY = "global_stickers_enabled"
+EMAIL_VERIFICATION_CODE_TTL_MINUTES = 10
+EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS = 60
+SMTP_HOST = str(os.getenv("SMTP_HOST", "") or "").strip()
+SMTP_PORT = int(str(os.getenv("SMTP_PORT", "0") or "0").strip() or 0)
+SMTP_USER = str(os.getenv("SMTP_USER", "") or "").strip()
+SMTP_PASSWORD = str(os.getenv("SMTP_PASSWORD", "") or "").strip()
+SMTP_FROM = str(os.getenv("SMTP_FROM", "") or "").strip()
+EMAIL_DEV_MODE = str(os.getenv("EMAIL_DEV_MODE", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @app.context_processor
@@ -179,6 +191,129 @@ def initialize_runtime_before_request():
     if is_ban_active(user):
         return jsonify({"message": "Аккаунт заблокирован"}), 403
     return None
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+def to_db_datetime(value):
+    if not isinstance(value, datetime):
+        return value
+    normalized = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return normalized.replace(tzinfo=None)
+
+
+def generate_email_verification_code():
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def build_email_verification_expiry():
+    return utcnow() + timedelta(minutes=EMAIL_VERIFICATION_CODE_TTL_MINUTES)
+
+
+def build_email_verification_hash(code):
+    return generate_password_hash(str(code))
+
+
+def build_email_verification_payload():
+    code = generate_email_verification_code()
+    expires_at = build_email_verification_expiry()
+    return code, build_email_verification_hash(code), expires_at
+
+
+def get_email_verification_sent_at(user):
+    expires_at = parse_datetime_value(row_value(user, "email_verification_expires_at"))
+    if not expires_at:
+        return None
+    return expires_at - timedelta(minutes=EMAIL_VERIFICATION_CODE_TTL_MINUTES)
+
+
+def get_email_verification_retry_after_seconds(user):
+    sent_at = get_email_verification_sent_at(user)
+    if not sent_at:
+        return 0
+    remaining = EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS - int((utcnow() - sent_at).total_seconds())
+    return max(0, remaining)
+
+
+def ensure_smtp_configured():
+    missing = [
+        key for key, value in {
+            "SMTP_HOST": SMTP_HOST,
+            "SMTP_PORT": SMTP_PORT,
+            "SMTP_USER": SMTP_USER,
+            "SMTP_PASSWORD": SMTP_PASSWORD,
+            "SMTP_FROM": SMTP_FROM,
+        }.items() if not value
+    ]
+    if missing:
+        raise RuntimeError("SMTP не настроен")
+
+
+def send_email_message(message):
+    ensure_smtp_configured()
+
+    class IPv4SMTP(smtplib.SMTP):
+        def _get_socket(self, host, port, timeout):
+            self.source_address = None
+            last_error = None
+            for family, socktype, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+                try:
+                    sock = socket.socket(family, socktype, proto)
+                    if timeout is not None:
+                        sock.settimeout(timeout)
+                    sock.connect(sockaddr)
+                    return sock
+                except OSError as exc:
+                    last_error = exc
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+            if last_error:
+                raise last_error
+            return super()._get_socket(host, port, timeout)
+
+    if SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
+            smtp.login(SMTP_USER, SMTP_PASSWORD)
+            smtp.send_message(message)
+        return
+
+    with IPv4SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as smtp:
+        smtp.ehlo()
+        if smtp.has_extn("starttls"):
+            smtp.starttls()
+            smtp.ehlo()
+        smtp.login(SMTP_USER, SMTP_PASSWORD)
+        smtp.send_message(message)
+
+
+def send_email_verification_code(email, code):
+    if EMAIL_DEV_MODE:
+        print(f"[EMAIL DEV MODE] verification code for {email}: {code}", flush=True)
+        return
+
+    message = EmailMessage()
+    message["Subject"] = "Код подтверждения email для /Chatik"
+    message["From"] = formataddr(("Chatik", SMTP_FROM))
+    message["To"] = email
+    message.set_content(
+        f"Ваш код подтверждения: {code}\n\n"
+        f"Код действует {EMAIL_VERIFICATION_CODE_TTL_MINUTES} минут.\n"
+        "Если вы не регистрировались в /Chatik, просто проигнорируйте это письмо.\n"
+    )
+    send_email_message(message)
+
+
+def issue_auth_payload(user):
+    token = secrets.token_hex(32)
+    persist_token(token, user["id"])
+    return {
+        "token": token,
+        "user": serialize_user_profile(user)
+    }
 
 
 def format_timestamp(value):
@@ -923,7 +1058,10 @@ def ensure_system_account(conn):
     if user:
         conn.execute("""
             UPDATE users
-            SET role = %s
+            SET role = %s,
+                email_verified = 1,
+                email_verification_code_hash = NULL,
+                email_verification_expires_at = NULL
             WHERE id = %s
         """, (ROLE_ADMIN, user["id"]))
         return user
@@ -931,8 +1069,8 @@ def ensure_system_account(conn):
     password_hash = generate_password_hash(SYSTEM_PASSWORD_PLACEHOLDER)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO users (name, username, email, password_hash, role, bio)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO users (name, username, email, email_verified, password_hash, role, bio)
+        VALUES (%s, %s, %s, 1, %s, %s, %s)
     """, (
         SYSTEM_NAME,
         SYSTEM_USERNAME,
@@ -959,6 +1097,9 @@ def ensure_system_owner_account(conn):
         conn.execute("""
             UPDATE users
             SET role = %s,
+                email_verified = 1,
+                email_verification_code_hash = NULL,
+                email_verification_expires_at = NULL,
                 is_banned = 0,
                 banned_reason = NULL,
                 banned_until = NULL,
@@ -976,6 +1117,7 @@ def ensure_system_owner_account(conn):
             name,
             username,
             email,
+            email_verified,
             password_hash,
             role,
             bio,
@@ -984,7 +1126,7 @@ def ensure_system_owner_account(conn):
             can_upload_files,
             can_create_groups
         )
-        VALUES (%s, %s, %s, %s, %s, %s, 0, 1, 1, 1)
+        VALUES (%s, %s, %s, 1, %s, %s, %s, 0, 1, 1, 1)
     """, (
         SYSTEM_OWNER_NAME,
         SYSTEM_OWNER_USERNAME,
@@ -1250,6 +1392,7 @@ def fetch_user_auth_state(conn, user_id):
             name,
             username,
             email,
+            email_verified,
             role,
             is_banned,
             banned_reason,
@@ -1640,6 +1783,7 @@ def serialize_user_profile(user):
         "name": user["name"],
         "username": user["username"],
         "email": user["email"],
+        "email_verified": bool(row_value(user, "email_verified", False)),
         "role": row_value(user, "role", ROLE_USER) or ROLE_USER,
         "bio": user["bio"],
         "date_of_birth": format_date_value(row_value(user, "date_of_birth")),
@@ -3717,6 +3861,11 @@ def register_page():
     return send_from_directory(".", "register.html")
 
 
+@app.get("/verify-email")
+def verify_email_page():
+    return send_from_directory(".", "verify_email.html")
+
+
 @app.get("/invite/<token>")
 def invite_page(token):
     conn = get_db()
@@ -3786,6 +3935,11 @@ def legacy_register_page():
     return redirect("/register", code=302)
 
 
+@app.get("/verify_email.html")
+def legacy_verify_email_page():
+    return redirect("/verify-email", code=302)
+
+
 @app.get("/chat.html")
 def legacy_direct_chat_page():
     chat_id = (request.args.get("id") or "").strip()
@@ -3812,28 +3966,47 @@ def pages(filename):
 
 @app.post("/auth/register")
 def register():
-    data = request.json
+    data = request.json or {}
 
     name = data.get("name", "").strip()
     username = data.get("username", "").strip().replace("@", "")
     email = data.get("email", "").strip()
     password = data.get("password", "")
 
-    if not name or not username or not password:
-        return jsonify({"message": "Заполните имя, username и пароль"}), 400
+    if not name or not username or not email or not password:
+        return jsonify({"message": "Заполните имя, username, email и пароль"}), 400
     if username.lower() in {SYSTEM_USERNAME.lower(), SYSTEM_OWNER_USERNAME.lower()}:
         return jsonify({"message": "Этот username зарезервирован"}), 400
 
     conn = get_db()
     cur = conn.cursor()
+    user_id = None
 
     try:
         password_hash = generate_password_hash(password)
+        verification_code, verification_hash, verification_expires_at = build_email_verification_payload()
 
         cur.execute("""
-            INSERT INTO users (name, username, email, password_hash, role)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (name, username, email, password_hash, ROLE_USER))
+            INSERT INTO users (
+                name,
+                username,
+                email,
+                email_verified,
+                email_verification_code_hash,
+                email_verification_expires_at,
+                password_hash,
+                role
+            )
+            VALUES (%s, %s, %s, 0, %s, %s, %s, %s)
+        """, (
+            name,
+            username,
+            email,
+            verification_hash,
+            to_db_datetime(verification_expires_at),
+            password_hash,
+            ROLE_USER,
+        ))
 
         conn.commit()
         user_id = cur.lastrowid
@@ -3841,36 +4014,24 @@ def register():
     except Exception:
         conn.close()
         return jsonify({"message": "Такой username уже занят"}), 400
+    try:
+        send_email_verification_code(email, verification_code)
+    except Exception:
+        try:
+            if user_id:
+                conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+                conn.commit()
+        finally:
+            conn.close()
+        return jsonify({"message": "Не удалось отправить код подтверждения. Попробуйте позже."}), 500
 
     conn.close()
 
-    token = secrets.token_hex(32)
-    persist_token(token, user_id)
-    try:
-        send_chatik_notification(user_id, build_chatik_welcome_message())
-    except Exception:
-        pass
-
     return jsonify({
-        "token": token,
-        "user": {
-            "id": user_id,
-            "name": name,
-            "username": username,
-            "email": email,
-            "role": ROLE_USER,
-            "bio": "",
-            "date_of_birth": None,
-            "permissions": {
-                "can_send_messages": True,
-                "can_upload_files": True,
-                "can_create_groups": True
-            },
-            "is_banned": False,
-            "banned_reason": None,
-            "banned_until": None
-        }
-    })
+        "need_email_verification": True,
+        "email": email,
+        "message": "Подтвердите email. Мы отправили 6-значный код."
+    }), 201
 
 
 @app.post("/auth/login")
@@ -3892,9 +4053,14 @@ def login():
         return jsonify({"message": "Неверный логин или пароль"}), 401
     if is_ban_active(user):
         return jsonify({"message": "Аккаунт заблокирован"}), 403
+    if not bool(row_value(user, "email_verified", False)):
+        return jsonify({
+            "message": "Подтвердите email",
+            "need_email_verification": True,
+            "email": row_value(user, "email", "") or ""
+        }), 403
 
-    token = secrets.token_hex(32)
-    persist_token(token, user["id"])
+    auth_payload = issue_auth_payload(user)
     try:
         is_new_device = register_login_device(user["id"], client_device_id)
         if is_new_device and bool(row_value(user, "login_alerts_enabled", True)):
@@ -3902,10 +4068,121 @@ def login():
     except Exception:
         pass
 
-    return jsonify({
-        "token": token,
-        "user": serialize_user_profile(user)
-    })
+    return jsonify(auth_payload)
+
+
+@app.post("/auth/verify-email")
+def verify_email():
+    data = request.json or {}
+
+    email = data.get("email", "").strip()
+    code = str(data.get("code", "")).strip()
+    client_device_id = data.get("device_id", "")
+
+    if not email or not re.fullmatch(r"\d{6}", code):
+        return jsonify({"message": "Неверный код подтверждения"}), 400
+
+    conn = get_db()
+    user = conn.execute("""
+        SELECT *
+        FROM users
+        WHERE email = %s
+        LIMIT 1
+    """, (email,)).fetchone()
+
+    if not user:
+        conn.close()
+        return jsonify({"message": "Неверный код подтверждения"}), 400
+    if bool(row_value(user, "email_verified", False)):
+        conn.close()
+        return jsonify({"message": "Email уже подтвержден"}), 400
+
+    expires_at = parse_datetime_value(row_value(user, "email_verification_expires_at"))
+    code_hash = row_value(user, "email_verification_code_hash", "")
+    if not expires_at or expires_at <= utcnow() or not code_hash:
+        conn.execute("""
+            UPDATE users
+            SET email_verification_code_hash = NULL,
+                email_verification_expires_at = NULL
+            WHERE id = %s
+        """, (user["id"],))
+        conn.commit()
+        conn.close()
+        return jsonify({"message": "Код недействителен или истек"}), 400
+    if not check_password_hash(code_hash, code):
+        conn.close()
+        return jsonify({"message": "Неверный код подтверждения"}), 400
+
+    conn.execute("""
+        UPDATE users
+        SET email_verified = 1,
+            email_verification_code_hash = NULL,
+            email_verification_expires_at = NULL
+        WHERE id = %s
+    """, (user["id"],))
+    conn.commit()
+    verified_user = conn.execute("SELECT * FROM users WHERE id = %s", (user["id"],)).fetchone()
+    conn.close()
+
+    auth_payload = issue_auth_payload(verified_user)
+    try:
+        is_new_device = register_login_device(verified_user["id"], client_device_id)
+        if is_new_device and bool(row_value(verified_user, "login_alerts_enabled", True)):
+            send_chatik_notification(verified_user["id"], build_chatik_login_alert())
+        send_chatik_notification(verified_user["id"], build_chatik_welcome_message())
+    except Exception:
+        pass
+
+    return jsonify(auth_payload)
+
+
+@app.post("/auth/resend-email-code")
+def resend_email_code():
+    data = request.json or {}
+    email = data.get("email", "").strip()
+
+    if not email:
+        return jsonify({"message": "Email обязателен"}), 400
+
+    conn = get_db()
+    user = conn.execute("""
+        SELECT *
+        FROM users
+        WHERE email = %s
+        LIMIT 1
+    """, (email,)).fetchone()
+
+    if not user:
+        conn.close()
+        return jsonify({"message": "Если аккаунт существует, код скоро придет на email."})
+    if bool(row_value(user, "email_verified", False)):
+        conn.close()
+        return jsonify({"message": "Email уже подтвержден", "already_verified": True})
+
+    retry_after = get_email_verification_retry_after_seconds(user)
+    if retry_after > 0:
+        conn.close()
+        return jsonify({
+            "message": f"Повторная отправка доступна через {retry_after} сек.",
+            "retry_after": retry_after
+        }), 429
+
+    code, code_hash, expires_at = build_email_verification_payload()
+    conn.execute("""
+        UPDATE users
+        SET email_verification_code_hash = %s,
+            email_verification_expires_at = %s
+        WHERE id = %s
+    """, (code_hash, to_db_datetime(expires_at), user["id"]))
+    conn.commit()
+    conn.close()
+
+    try:
+        send_email_verification_code(email, code)
+    except Exception:
+        return jsonify({"message": "Не удалось отправить код подтверждения. Попробуйте позже."}), 500
+
+    return jsonify({"message": "Если аккаунт существует, код скоро придет на email."})
 
 
 @app.get("/users/me")
@@ -3916,7 +4193,7 @@ def get_me():
 
     conn = get_db()
     user = conn.execute("""
-        SELECT id, name, username, email, role, bio, date_of_birth, login_alerts_enabled,
+        SELECT id, name, username, email, email_verified, role, bio, date_of_birth, login_alerts_enabled,
                is_banned, banned_reason, banned_until,
                can_send_messages, can_upload_files, can_create_groups
         FROM users
@@ -4060,6 +4337,7 @@ def update_me():
 
     user = conn.execute("""
         SELECT id, name, username, email, role, bio, date_of_birth, login_alerts_enabled,
+               email_verified,
                is_banned, banned_reason, banned_until,
                can_send_messages, can_upload_files, can_create_groups
         FROM users

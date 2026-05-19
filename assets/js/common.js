@@ -306,6 +306,7 @@ function applyAppSettings(settings = readAppSettings()) {
   };
   const densityPreset = densityPresets[normalizedSettings.messageDensity] || densityPresets.comfortable;
 
+  root.classList.toggle("settings-theme-dark", normalizedSettings.theme === "dark");
   document.body.classList.toggle("settings-theme-dark", normalizedSettings.theme === "dark");
   document.body.classList.toggle("settings-surface-compact", normalizedSettings.surfaceMode === "compact");
   document.body.classList.toggle("settings-surface-glass", normalizedSettings.surfaceMode !== "compact");

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Email | /Chatik</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/icons/app/favicon.svg">
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/app/favicon32x32.png">
+    <link rel="apple-touch-icon" href="/assets/icons/app/favicon32x32.png">
+    <link rel="stylesheet" href="/assets/css/styles.css">
+  </head>
+  <body class="auth-page">
+    <main class="auth-card">
+      <h1>Подтверждение email</h1>
+      <p>Введите 6-значный код из письма. Код действует 10 минут.</p>
+      <form data-auth="verify-email">
+        <div class="form-group">
+          <label class="label" for="email">Email</label>
+          <input class="input" id="email" name="email" type="email" placeholder="you@example.com" required>
+        </div>
+        <div class="form-group verify-code-group">
+          <div class="verify-code-header">
+            <label class="label" for="code-0">Код подтверждения</label>
+            <span class="verify-code-hint">6 цифр</span>
+          </div>
+          <input id="code" name="code" type="hidden" required>
+          <div class="verify-code-grid" data-verify-code-inputs>
+            <input class="verify-code-cell" id="code-0" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="1" aria-label="Цифра 1" data-code-index="0">
+            <input class="verify-code-cell" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Цифра 2" data-code-index="1">
+            <input class="verify-code-cell" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Цифра 3" data-code-index="2">
+            <input class="verify-code-cell" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Цифра 4" data-code-index="3">
+            <input class="verify-code-cell" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Цифра 5" data-code-index="4">
+            <input class="verify-code-cell" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="1" aria-label="Цифра 6" data-code-index="5">
+          </div>
+        </div>
+        <button class="button" type="submit">Подтвердить</button>
+        <button class="button button-secondary" type="button" data-resend-email-code>Отправить код ещё раз</button>
+        <div id="status" class="status"></div>
+      </form>
+      <p class="auth-footer"><a href="/login">Вернуться ко входу</a></p>
+    </main>
+    <script src="/assets/js/api.js"></script>
+    <script src="/assets/js/auth.js"></script>
+  </body>
+</html>

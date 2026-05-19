@@ -59,6 +59,15 @@ function getRegisterRoute() {
   return "/register";
 }
 
+function getVerifyEmailRoute(email = "") {
+  const params = new URLSearchParams();
+  if (typeof email === "string" && email.trim()) {
+    params.set("email", email.trim());
+  }
+  const query = params.toString();
+  return query ? `/verify-email?${query}` : "/verify-email";
+}
+
 function getProfileRoute() {
   return "/profile";
 }
@@ -115,6 +124,8 @@ function getCurrentRouteInfo() {
     page = "login";
   } else if (segments[0] === "register" || segments[0] === "register.html") {
     page = "register";
+  } else if (segments[0] === "verify-email" || segments[0] === "verify_email.html") {
+    page = "verify-email";
   } else if (segments[0] === "profile") {
     page = "profile";
   } else if (segments[0] === "chat" || segments[0] === "chat.html") {
@@ -287,7 +298,10 @@ async function apiFetch(path, options = {}) {
       (payload && payload.message) ||
       (payload && payload.detail) ||
       (typeof payload === "string" ? payload : "Request failed");
-    throw new Error(message);
+    const error = new Error(message);
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
   }
 
   return payload;
