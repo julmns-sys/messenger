@@ -89,6 +89,7 @@ SMTP_USER = str(os.getenv("SMTP_USER", "") or "").strip()
 SMTP_PASSWORD = str(os.getenv("SMTP_PASSWORD", "") or "").strip()
 SMTP_FROM = str(os.getenv("SMTP_FROM", "") or "").strip()
 EMAIL_DEV_MODE = str(os.getenv("EMAIL_DEV_MODE", "false") or "false").strip().lower() in {"1", "true", "yes", "on"}
+EMAIL_VERIFICATION_REQUIRED = str(os.getenv("EMAIL_VERIFICATION_REQUIRED", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
 SMTP_TIMEOUT_SECONDS = max(5, int(str(os.getenv("SMTP_TIMEOUT_SECONDS", "15") or "15").strip() or 15))
 EMAIL_ADDRESS_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MIN_PASSWORD_LENGTH = 6
@@ -331,6 +332,26 @@ def send_email_action_code(email, code, *, subject, intro, fallback_note):
         f"{fallback_note}\n"
     )
     send_email_message(message)
+
+
+def is_email_verification_required():
+    return EMAIL_VERIFICATION_REQUIRED
+
+
+def is_user_email_verified(user):
+    if not is_email_verification_required():
+        return True
+    return bool(row_value(user, "email_verified", False))
+
+
+def mark_user_email_verified(conn, user_id):
+    conn.execute("""
+        UPDATE users
+        SET email_verified = 1,
+            email_verification_code_hash = NULL,
+            email_verification_expires_at = NULL
+        WHERE id = %s
+    """, (user_id,))
 
 
 def issue_auth_payload(user):
@@ -1815,7 +1836,7 @@ def serialize_user_profile(user):
         "name": user["name"],
         "username": user["username"],
         "email": user["email"],
-        "email_verified": bool(row_value(user, "email_verified", False)),
+        "email_verified": is_user_email_verified(user),
         "role": row_value(user, "role", ROLE_USER) or ROLE_USER,
         "bio": user["bio"],
         "date_of_birth": format_date_value(row_value(user, "date_of_birth")),
@@ -4021,10 +4042,15 @@ def register():
     conn = get_db()
     cur = conn.cursor()
     user_id = None
+    verification_code = ""
 
     try:
         password_hash = generate_password_hash(password)
-        verification_code, verification_hash, verification_expires_at = build_email_verification_payload()
+        verification_hash = None
+        verification_expires_at = None
+        email_verified = 1 if not is_email_verification_required() else 0
+        if is_email_verification_required():
+            verification_code, verification_hash, verification_expires_at = build_email_verification_payload()
 
         cur.execute("""
             INSERT INTO users (
@@ -4037,11 +4063,12 @@ def register():
                 password_hash,
                 role
             )
-            VALUES (%s, %s, %s, 0, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             name,
             username,
             email,
+            email_verified,
             verification_hash,
             to_db_datetime(verification_expires_at),
             password_hash,
@@ -4054,6 +4081,12 @@ def register():
     except Exception:
         conn.close()
         return jsonify({"message": "Такой username уже занят"}), 400
+
+    created_user = conn.execute("SELECT * FROM users WHERE id = %s", (user_id,)).fetchone()
+    if not is_email_verification_required():
+        conn.close()
+        return jsonify(issue_auth_payload(created_user)), 201
+
     try:
         send_email_verification_code(email, verification_code)
     except Exception:
@@ -4087,18 +4120,26 @@ def login():
         "SELECT * FROM users WHERE username = %s",
         (username,)
     ).fetchone()
-    conn.close()
 
     if not user or not check_password_hash(user["password_hash"], password):
+        conn.close()
         return jsonify({"message": "Неверный логин или пароль"}), 401
     if is_ban_active(user):
+        conn.close()
         return jsonify({"message": "Аккаунт заблокирован"}), 403
-    if not bool(row_value(user, "email_verified", False)):
+    if not is_user_email_verified(user):
+        conn.close()
         return jsonify({
             "message": "Подтвердите email",
             "need_email_verification": True,
             "email": row_value(user, "email", "") or ""
         }), 403
+
+    if not bool(row_value(user, "email_verified", False)):
+        mark_user_email_verified(conn, user["id"])
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE id = %s", (user["id"],)).fetchone()
+    conn.close()
 
     auth_payload = issue_auth_payload(user)
     try:
@@ -4128,7 +4169,7 @@ def request_forgot_password():
             LIMIT 1
         """, (email,)).fetchone()
 
-        if not user or not bool(row_value(user, "email_verified", False)):
+        if not user or not is_user_email_verified(user):
             return jsonify({"message": "Если аккаунт существует, код скоро придет на email."})
 
         retry_after = get_change_request_retry_after_seconds(row_value(user, "password_change_expires_at"))
@@ -4196,7 +4237,7 @@ def confirm_forgot_password():
             WHERE LOWER(email) = LOWER(%s)
             LIMIT 1
         """, (email,)).fetchone()
-        if not user or not bool(row_value(user, "email_verified", False)):
+        if not user or not is_user_email_verified(user):
             return jsonify({"message": "Неверный код подтверждения"}), 400
 
         code_hash = row_value(user, "password_change_code_hash", "")
@@ -4234,6 +4275,12 @@ def verify_email():
     email = data.get("email", "").strip()
     code = str(data.get("code", "")).strip()
     client_device_id = data.get("device_id", "")
+
+    if not is_email_verification_required():
+        return jsonify({
+            "message": "Подтверждение email временно отключено. Войдите в аккаунт.",
+            "verification_disabled": True
+        }), 400
 
     if not email or not re.fullmatch(r"\d{6}", code):
         return jsonify({"message": "Неверный код подтверждения"}), 400
@@ -4296,6 +4343,12 @@ def verify_email():
 def resend_email_code():
     data = request.json or {}
     email = data.get("email", "").strip()
+
+    if not is_email_verification_required():
+        return jsonify({
+            "message": "Подтверждение email временно отключено.",
+            "verification_disabled": True
+        })
 
     if not email:
         return jsonify({"message": "Email обязателен"}), 400
@@ -4543,7 +4596,7 @@ def request_password_change():
         email = str(row_value(user, "email", "") or "").strip()
         if not email:
             return jsonify({"message": "Сначала добавьте email в профиль"}), 400
-        if not bool(row_value(user, "email_verified", False)):
+        if not is_user_email_verified(user):
             return jsonify({"message": "Сначала подтвердите текущий email"}), 400
 
         retry_after = get_change_request_retry_after_seconds(row_value(user, "password_change_expires_at"))
