@@ -109,8 +109,8 @@
               <div class="sidebar-profile-card">
                 <button class="sidebar-profile-menu-trigger" id="sidebarProfileMenuTrigger" type="button" aria-label="Действия профиля" aria-haspopup="menu" aria-expanded="false">⋯</button>
                 <div class="sidebar-profile-menu" id="sidebarProfileMenu" hidden>
-                  <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button">Изменить профиль</button>
-                  <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button">Выйти из аккаунта</button>
+                  <button class="sidebar-profile-menu-item" id="sidebarProfileEditAction" type="button"><img class="menu-item-icon icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""><span class="menu-item-label">Изменить профиль</span></button>
+                  <button class="sidebar-profile-menu-item danger" id="sidebarProfileLogout" type="button"><img class="menu-item-icon icon-asset" src="/assets/icons/ui/signout.svg" alt=""><span class="menu-item-label">Выйти из аккаунта</span></button>
                 </div>
                 <div class="avatar sidebar-profile-avatar" id="sidebarProfileAvatar">?</div>
                 <h2 class="sidebar-profile-name" id="sidebarProfileName">Пользователь</h2>
@@ -299,7 +299,7 @@
               <button class="icon-button" id="threadInfoClose" type="button" aria-label="Закрыть">×</button>
             </div>
             <div class="thread-info-action-menu" id="threadInfoActionMenu" hidden>
-              <button type="button" data-thread-info-action="edit-group">Редактировать группу</button>
+              <button type="button" data-thread-info-action="edit-group"><img class="menu-item-icon icon-asset" src="/assets/icons/ui/Edit_fill.svg" alt=""><span class="menu-item-label">Редактировать группу</span></button>
             </div>
           </div>
           <div class="thread-info-panel-body">
@@ -359,16 +359,35 @@
                   <strong id="threadInfoFilesCount">Скоро</strong>
                 </div>
                 <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
-                  <span class="thread-info-label">Пригласительная ссылка</span>
-                  <div class="thread-info-invite-body">
-                    <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer"></a>
-                    <div class="thread-info-invite-actions">
-                      <button class="button button-secondary thread-info-invite-button" id="threadInfoInviteCopy" type="button" aria-label="Скопировать ссылку" title="Скопировать ссылку">
-                        <span class="icon-symbol">⎘</span>
-                      </button>
-                      <button class="button thread-info-invite-button" id="threadInfoInviteRegenerate" type="button" aria-label="Обновить ссылку" title="Обновить ссылку">
-                        <span class="icon-symbol">↻</span>
-                      </button>
+                  <div class="thread-info-invite-card">
+                    <button class="thread-info-invite-toggle" id="threadInfoInviteToggle" type="button" aria-expanded="false" aria-controls="threadInfoInvitePanel">
+                      <span class="thread-info-invite-toggle-main">
+                        <span class="thread-info-invite-icon-wrap" aria-hidden="true">
+                          <img class="menu-item-icon icon-asset" src="/assets/icons/ui/link.svg" alt="">
+                        </span>
+                        <span class="thread-info-invite-toggle-copy">
+                          <strong>Пригласительная ссылка</strong>
+                          <span id="threadInfoInviteHint">Нажмите, чтобы показать ссылку</span>
+                        </span>
+                      </span>
+                      <img class="thread-info-invite-chevron icon-asset" src="/assets/icons/ui/Expand_down.svg" alt="">
+                    </button>
+                    <div class="thread-info-invite-panel" id="threadInfoInvitePanel" aria-hidden="true" hidden>
+                      <div class="thread-info-invite-panel-inner">
+                        <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer" title="">
+                          <span class="thread-info-invite-link-text" id="threadInfoInviteLinkText"></span>
+                        </a>
+                        <div class="thread-info-invite-actions">
+                          <button class="thread-info-invite-action-button" id="threadInfoInviteCopy" type="button" aria-label="Скопировать ссылку" title="Скопировать ссылку">
+                            <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Copy.svg" alt="">
+                            <span class="menu-item-label">Скопировать</span>
+                          </button>
+                          <button class="thread-info-invite-action-button" id="threadInfoInviteRegenerate" type="button" aria-label="Обновить ссылку" title="Обновить ссылку">
+                            <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Refresh_2.svg" alt="">
+                            <span class="menu-item-label">Обновить ссылку</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                     <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
                   </div>

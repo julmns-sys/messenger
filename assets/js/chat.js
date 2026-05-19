@@ -918,12 +918,12 @@ function buildMessageActionMenu() {
   menu.className = "message-action-menu";
   menu.hidden = true;
   menu.innerHTML = `
-    <button type="button" data-action="reply">Ответить</button>
-    <button type="button" data-action="forward">Переслать</button>
-    <button type="button" data-action="select">Выбрать</button>
-    <button type="button" data-action="edit">Редактировать</button>
-    <button type="button" data-action="delete-me">Удалить у меня</button>
-    <button type="button" data-action="delete-all" class="danger">Удалить у всех</button>
+    <button type="button" data-action="reply">${renderActionMenuItemContent("/assets/icons/ui/Refund_back.svg", "Ответить")}</button>
+    <button type="button" data-action="forward">${renderActionMenuItemContent("/assets/icons/ui/Refund_Forward.svg", "Переслать")}</button>
+    <button type="button" data-action="select">${renderActionMenuItemContent("/assets/icons/ui/Check_round_fill.svg", "Выбрать")}</button>
+    <button type="button" data-action="edit">${renderActionMenuItemContent("/assets/icons/ui/Edit_fill.svg", "Редактировать")}</button>
+    <button type="button" data-action="delete-me">${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить у меня")}</button>
+    <button type="button" data-action="delete-all" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Trash.svg", "Удалить у всех")}</button>
   `;
   document.body.appendChild(menu);
   return menu;
@@ -1221,14 +1221,28 @@ function fillThreadInfoPanel(info, chatType) {
   if (inviteFactNode && inviteLinkNode && inviteCopyNode && inviteRegenerateNode && inviteStatusNode) {
     if (!isEmbeddedUserProfile && threadInfoType === "group" && info?.can_manage_invite && info?.invite?.url) {
       inviteFactNode.hidden = false;
-      inviteLinkNode.textContent = info.invite.url;
-      inviteLinkNode.href = info.invite.url;
+      const inviteUrl = info.invite.url;
+      const inviteLinkTextNode = document.getElementById("threadInfoInviteLinkText");
+      if (inviteLinkTextNode) {
+        inviteLinkTextNode.textContent = inviteUrl;
+      } else {
+        inviteLinkNode.textContent = inviteUrl;
+      }
+      inviteLinkNode.href = inviteUrl;
+      inviteLinkNode.title = inviteUrl;
       inviteCopyNode.hidden = false;
       inviteRegenerateNode.hidden = false;
     } else {
+      const inviteLinkTextNode = document.getElementById("threadInfoInviteLinkText");
+      isThreadInviteExpanded = false;
       inviteFactNode.hidden = true;
-      inviteLinkNode.textContent = "";
+      if (inviteLinkTextNode) {
+        inviteLinkTextNode.textContent = "";
+      } else {
+        inviteLinkNode.textContent = "";
+      }
       inviteLinkNode.removeAttribute("href");
+      inviteLinkNode.removeAttribute("title");
       inviteCopyNode.hidden = true;
       inviteRegenerateNode.hidden = true;
       inviteStatusNode.textContent = "";
@@ -1345,11 +1359,14 @@ function renderThreadSearchResults(results, chatType) {
   }).join("");
 }
 
-function setInviteButtonIcon(button, icon, label) {
+function setInviteActionButton(button, iconPath, label) {
   if (!button) {
     return;
   }
-  button.innerHTML = `<span class="icon-symbol">${escapeHtml(icon)}</span>`;
+  button.innerHTML = `
+    <img class="menu-item-icon icon-asset" src="${iconPath}" alt="">
+    <span class="menu-item-label">${escapeHtml(label)}</span>
+  `;
   button.setAttribute("aria-label", label);
   button.setAttribute("title", label);
 }
@@ -1414,7 +1431,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadInfoMenuTrigger = document.getElementById("threadInfoMenuTrigger");
   const threadInfoActionMenu = document.getElementById("threadInfoActionMenu");
   const threadInfoInviteFact = document.getElementById("threadInfoInviteFact");
+  const threadInfoInviteToggle = document.getElementById("threadInfoInviteToggle");
+  const threadInfoInviteHint = document.getElementById("threadInfoInviteHint");
+  const threadInfoInvitePanel = document.getElementById("threadInfoInvitePanel");
   const threadInfoInviteLink = document.getElementById("threadInfoInviteLink");
+  const threadInfoInviteLinkText = document.getElementById("threadInfoInviteLinkText");
   const threadInfoInviteCopy = document.getElementById("threadInfoInviteCopy");
   const threadInfoInviteRegenerate = document.getElementById("threadInfoInviteRegenerate");
   const threadInfoInviteStatus = document.getElementById("threadInfoInviteStatus");
@@ -1503,6 +1524,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let isSubmittingThreadMembers = false;
   let isSavingGroupDetails = false;
   let isRefreshingInviteLink = false;
+  let isThreadInviteExpanded = false;
   let oldestMessageId = null;
   let hasMoreMessages = false;
   let isLoadingOlder = false;
@@ -2728,18 +2750,67 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (threadInfoInviteFact) {
       threadInfoInviteFact.hidden = !canManageInvite;
     }
+    if (threadInfoInviteToggle) {
+      threadInfoInviteToggle.disabled = !canManageInvite;
+    }
     if (threadInfoInviteCopy) {
       threadInfoInviteCopy.disabled = !canManageInvite || isRefreshingInviteLink;
-      setInviteButtonIcon(threadInfoInviteCopy, "⎘", "Скопировать ссылку");
+      setInviteActionButton(threadInfoInviteCopy, "/assets/icons/ui/Copy.svg", "Скопировать");
     }
     if (threadInfoInviteRegenerate) {
       threadInfoInviteRegenerate.disabled = !canManageInvite || isRefreshingInviteLink;
-      setInviteButtonIcon(
+      setInviteActionButton(
         threadInfoInviteRegenerate,
-        isRefreshingInviteLink ? "↺" : "↻",
-        isRefreshingInviteLink ? "Обновляем ссылку" : "Обновить ссылку"
+        "/assets/icons/ui/Refresh_2.svg",
+        isRefreshingInviteLink ? "Обновляем ссылку..." : "Обновить ссылку"
       );
     }
+  }
+
+  function setThreadInviteExpanded(isExpanded) {
+    const canManageInvite = chatType === "group" && Boolean(currentThreadInfo?.can_manage_invite && currentThreadInfo?.invite?.url);
+    isThreadInviteExpanded = Boolean(isExpanded) && canManageInvite;
+    if (threadInfoInviteToggle) {
+      threadInfoInviteToggle.setAttribute("aria-expanded", isThreadInviteExpanded ? "true" : "false");
+      threadInfoInviteToggle.classList.toggle("is-open", isThreadInviteExpanded);
+    }
+    if (threadInfoInvitePanel) {
+      if (isThreadInviteExpanded) {
+        threadInfoInvitePanel.hidden = false;
+      }
+      threadInfoInvitePanel.classList.toggle("is-open", isThreadInviteExpanded);
+      threadInfoInvitePanel.setAttribute("aria-hidden", isThreadInviteExpanded ? "false" : "true");
+    }
+    if (threadInfoInviteFact) {
+      threadInfoInviteFact.classList.toggle("is-open", isThreadInviteExpanded);
+    }
+    if (threadInfoInviteHint) {
+      threadInfoInviteHint.textContent = isThreadInviteExpanded
+        ? "Нажмите, чтобы скрыть ссылку"
+        : "Нажмите, чтобы показать ссылку";
+    }
+    syncThreadInvitePanelHeight();
+  }
+
+  function syncThreadInvitePanelHeight() {
+    if (!threadInfoInvitePanel) {
+      return;
+    }
+
+    const inner = threadInfoInvitePanel.firstElementChild;
+    if (!(inner instanceof HTMLElement)) {
+      return;
+    }
+
+    if (isThreadInviteExpanded) {
+      const nextHeight = `${inner.scrollHeight}px`;
+      threadInfoInvitePanel.style.maxHeight = nextHeight;
+      threadInfoInvitePanel.style.opacity = "1";
+      return;
+    }
+
+    threadInfoInvitePanel.style.maxHeight = "0px";
+    threadInfoInvitePanel.style.opacity = "0";
   }
 
   function closeThreadGroupEditModal() {
@@ -2819,6 +2890,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
       activeThreadInfoType === chatType ? chatType : activeThreadInfoType
     );
+    setThreadInviteExpanded(isThreadInviteExpanded);
     updateThreadInviteControls();
     updateThreadBlockNotice();
   }
@@ -2837,7 +2909,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       await navigator.clipboard.writeText(inviteUrl);
       if (threadInfoInviteCopy) {
-        setInviteButtonIcon(threadInfoInviteCopy, "✓", "Ссылка скопирована");
+        setInviteActionButton(threadInfoInviteCopy, "/assets/icons/ui/Check_fill.svg", "Скопировано");
       }
       setThreadInviteStatus("Ссылка скопирована", "success");
       window.setTimeout(() => {
@@ -2874,6 +2946,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
         activeThreadInfoType === chatType ? chatType : activeThreadInfoType
       );
+      setThreadInviteExpanded(isThreadInviteExpanded);
       setThreadInviteStatus("Ссылка обновлена", "success");
     } catch (error) {
       setThreadInviteStatus(error.message, "error");
@@ -3031,8 +3104,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const isAdmin = memberItem.dataset.memberIsAdmin === "true";
     threadMemberActionMenu.innerHTML = `
-      <button type="button" data-member-action="toggle-admin">${isAdmin ? "Снять админа" : "Сделать админом"}</button>
-      <button type="button" data-member-action="remove-member" class="danger">Удалить из группы</button>
+      <button type="button" data-member-action="toggle-admin">${renderActionMenuItemContent("/assets/icons/ui/Chield_check_fill.svg", isAdmin ? "Снять админа" : "Сделать админом")}</button>
+      <button type="button" data-member-action="remove-member" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить из группы")}</button>
     `;
     activeThreadMemberItem = memberItem;
     threadMemberActionMenu.hidden = false;
@@ -4251,6 +4324,28 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   threadInfoInviteCopy?.addEventListener("click", () => {
     void copyThreadInviteLink();
+  });
+
+  threadInfoInviteToggle?.addEventListener("click", () => {
+    if (threadInfoInviteFact?.hidden) {
+      return;
+    }
+    setThreadInviteExpanded(!isThreadInviteExpanded);
+  });
+
+  threadInfoInvitePanel?.addEventListener("transitionend", (event) => {
+    if (event.propertyName !== "max-height") {
+      return;
+    }
+    if (!isThreadInviteExpanded) {
+      threadInfoInvitePanel.hidden = true;
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    if (isThreadInviteExpanded) {
+      syncThreadInvitePanelHeight();
+    }
   });
 
   threadInfoSearchAction?.addEventListener("click", () => {

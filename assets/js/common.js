@@ -167,6 +167,13 @@ function getAppSetting(key) {
   return Boolean(readAppSettings()[key]);
 }
 
+function renderActionMenuItemContent(iconPath, label) {
+  return `
+    <img class="menu-item-icon icon-asset" src="${iconPath}" alt="">
+    <span class="menu-item-label">${escapeHtml(String(label || ""))}</span>
+  `;
+}
+
 function clampSetting(value, min, max, fallback) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -1074,31 +1081,31 @@ function renderUserProfilePanel(user = {}, options = {}) {
       ><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
       <div class="sidebar-profile-menu user-profile-action-menu" data-user-profile-menu hidden>
         <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="copy-username" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
-          Скопировать username
+          ${renderActionMenuItemContent("/assets/icons/ui/Copy.svg", "Скопировать username")}
         </button>
         ${canManageRelations ? `
           <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="${user?.is_muted ? "unmute" : "mute"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
-            ${user?.is_muted ? "Включить уведомления" : "Отключить уведомления"}
+            ${renderActionMenuItemContent(user?.is_muted ? "/assets/icons/ui/notifications_on.svg" : "/assets/icons/ui/sound_mute_fill.svg", user?.is_muted ? "Включить уведомления" : "Отключить уведомления")}
           </button>
           <button class="sidebar-profile-menu-item ${user?.is_blocked ? "" : "danger"}" type="button" data-profile-contact-action="${user?.is_blocked ? "unblock" : "block"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
-            ${user?.is_blocked ? "Разблокировать пользователя" : "Заблокировать пользователя"}
+            ${renderActionMenuItemContent(user?.is_blocked ? "/assets/icons/ui/block_line.svg" : "/assets/icons/ui/block.svg", user?.is_blocked ? "Разблокировать пользователя" : "Заблокировать пользователя")}
           </button>
         ` : ""}
         ${!isContact ? `
           <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="add" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
-            Добавить в контакты
+            ${renderActionMenuItemContent("/assets/icons/ui/Add_round.svg", "Добавить в контакты")}
           </button>
         ` : `
           <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="rename" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
-            Переименовать контакт
+            ${renderActionMenuItemContent("/assets/icons/ui/Edit_fill.svg", "Переименовать контакт")}
           </button>
           ${hasAlias ? `
             <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="reset-alias" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
-              Вернуть имя по умолчанию
+              ${renderActionMenuItemContent("/assets/icons/ui/Refresh_2.svg", "Вернуть имя по умолчанию")}
             </button>
           ` : ""}
           <button class="sidebar-profile-menu-item danger" type="button" data-profile-contact-action="remove" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
-            Удалить из контактов
+            ${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить из контактов")}
           </button>
         `}
       </div>
@@ -1776,8 +1783,8 @@ function buildQuickActionsMenu() {
   menu.className = "quick-actions-menu";
   menu.hidden = true;
   menu.innerHTML = `
-    <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">Написать пользователю</button>
-    <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">Создать группу</button>
+    <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">${renderActionMenuItemContent("/assets/icons/ui/Chat_alt_add.svg", "Написать пользователю")}</button>
+    <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">${renderActionMenuItemContent("/assets/icons/ui/group.svg", "Создать группу")}</button>
   `;
   document.body.appendChild(menu);
   return menu;
@@ -2621,14 +2628,14 @@ function showChatListActionMenu(targetNode, clientX, clientY) {
   const chatType = targetNode?.dataset.chatType || "direct";
   menu.innerHTML = chatType === "direct"
     ? `
-      <button type="button" data-action="edit-tag">Изменить тег</button>
-      <button type="button" data-action="delete-me">Удалить у меня</button>
-      <button type="button" data-action="delete-all" class="danger">Удалить у всех</button>
+      <button type="button" data-action="edit-tag">${renderActionMenuItemContent("/assets/icons/ui/Lable_fill.svg", "Изменить тег")}</button>
+      <button type="button" data-action="delete-me">${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить у меня")}</button>
+      <button type="button" data-action="delete-all" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Trash.svg", "Удалить у всех")}</button>
     `
     : `
-      <button type="button" data-action="edit-tag">Изменить тег</button>
-      <button type="button" data-action="clear-group-history">Очистить историю</button>
-      <button type="button" data-action="leave-group" class="danger">Выйти из группы</button>
+      <button type="button" data-action="edit-tag">${renderActionMenuItemContent("/assets/icons/ui/Lable_fill.svg", "Изменить тег")}</button>
+      <button type="button" data-action="clear-group-history">${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Очистить историю")}</button>
+      <button type="button" data-action="leave-group" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Out.svg", "Выйти из группы")}</button>
     `;
   menu.hidden = false;
   const menuRect = menu.getBoundingClientRect();
