@@ -1218,13 +1218,14 @@ function toggleUserProfileActionMenu(card) {
 
 function renderUserProfilePanel(user = {}, options = {}) {
   syncUserRelationStateFromProfile(user);
+  const resolvedUserId = String(user?.id || user?.user_id || "");
   const displayName = getUserProfileDisplayName(user);
   const originalName = getUserProfileOriginalName(user);
   const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "";
   const birthDate = formatProfileBirthDate(user?.date_of_birth);
   const username = user?.username ? `@${user.username}` : "";
   const currentUser = getCurrentUser() || {};
-  const canManageRelations = String(currentUser.id || "") !== String(user?.id || "");
+  const canManageRelations = String(currentUser.id || "") !== resolvedUserId;
   const presence = user?.hide_presence
     ? ""
     : renderPresenceBadge(user, { compact: true, includeUsername: false, showDot: false });
@@ -1243,31 +1244,31 @@ function renderUserProfilePanel(user = {}, options = {}) {
         aria-expanded="false"
       ><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>
       <div class="sidebar-profile-menu user-profile-action-menu" data-user-profile-menu hidden>
-        <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="copy-username" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+        <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="copy-username" data-profile-user-id="${escapeHtml(resolvedUserId)}">
           ${renderActionMenuItemContent("/assets/icons/ui/Copy.svg", "Скопировать username")}
         </button>
         ${canManageRelations ? `
-          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="${user?.is_muted ? "unmute" : "mute"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="${user?.is_muted ? "unmute" : "mute"}" data-profile-user-id="${escapeHtml(resolvedUserId)}">
             ${renderActionMenuItemContent(user?.is_muted ? "/assets/icons/ui/notifications_on.svg" : "/assets/icons/ui/sound_mute_fill.svg", user?.is_muted ? "Включить уведомления" : "Отключить уведомления")}
           </button>
-          <button class="sidebar-profile-menu-item ${user?.is_blocked ? "" : "danger"}" type="button" data-profile-contact-action="${user?.is_blocked ? "unblock" : "block"}" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+          <button class="sidebar-profile-menu-item ${user?.is_blocked ? "" : "danger"}" type="button" data-profile-contact-action="${user?.is_blocked ? "unblock" : "block"}" data-profile-user-id="${escapeHtml(resolvedUserId)}">
             ${renderActionMenuItemContent(user?.is_blocked ? "/assets/icons/ui/block_line.svg" : "/assets/icons/ui/block.svg", user?.is_blocked ? "Разблокировать пользователя" : "Заблокировать пользователя")}
           </button>
         ` : ""}
         ${!isContact ? `
-          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="add" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="add" data-profile-user-id="${escapeHtml(resolvedUserId)}">
             ${renderActionMenuItemContent("/assets/icons/ui/Add_round.svg", "Добавить в контакты")}
           </button>
         ` : `
-          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="rename" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+          <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="rename" data-profile-user-id="${escapeHtml(resolvedUserId)}">
             ${renderActionMenuItemContent("/assets/icons/ui/Edit_fill.svg", "Переименовать контакт")}
           </button>
           ${hasAlias ? `
-            <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="reset-alias" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+            <button class="sidebar-profile-menu-item" type="button" data-profile-contact-action="reset-alias" data-profile-user-id="${escapeHtml(resolvedUserId)}">
               ${renderActionMenuItemContent("/assets/icons/ui/Refresh_2.svg", "Вернуть имя по умолчанию")}
             </button>
           ` : ""}
-          <button class="sidebar-profile-menu-item danger" type="button" data-profile-contact-action="remove" data-profile-user-id="${escapeHtml(String(user.id || ""))}">
+          <button class="sidebar-profile-menu-item danger" type="button" data-profile-contact-action="remove" data-profile-user-id="${escapeHtml(resolvedUserId)}">
             ${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить из контактов")}
           </button>
         `}
@@ -1275,7 +1276,7 @@ function renderUserProfilePanel(user = {}, options = {}) {
     `;
 
   return `
-    <section class="thread-info-card thread-info-card-profile user-profile-panel-card" data-user-profile-card="true" data-user-profile-id="${escapeHtml(String(user.id || ""))}">
+    <section class="thread-info-card thread-info-card-profile user-profile-panel-card" data-user-profile-card="true" data-user-profile-id="${escapeHtml(resolvedUserId)}">
       <div class="thread-info-card-eyebrow">${escapeHtml(options.eyebrow || "Profile")}</div>
       ${menuMarkup}
       <div class="thread-info-hero user-profile-panel-hero">

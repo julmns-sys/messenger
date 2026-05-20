@@ -1,7 +1,25 @@
 const selectedMembers = new Map();
 const createGroupState = {
-  contacts: []
+  contacts: [],
+  searchResults: [],
+  activeSearchRequestId: 0
 };
+
+function mergeUsersById(...groups) {
+  const users = new Map();
+  groups.flat().forEach((user) => {
+    if (!user?.id) {
+      return;
+    }
+
+    const userId = String(user.id);
+    users.set(userId, {
+      ...(users.get(userId) || {}),
+      ...user
+    });
+  });
+  return [...users.values()];
+}
 
 function getSelectedMemberIds() {
   return new Set([...selectedMembers.keys()]);
@@ -90,7 +108,6 @@ function renderSelectableUsers(listId, users, emptyMessage) {
 }
 
 function renderContactsList(contacts) {
-  createGroupState.contacts = contacts;
   renderSelectableUsers("memberContactsList", contacts, "Контактов пока нет");
 }
 
@@ -128,20 +145,83 @@ async function loadContacts() {
 }
 
 function findUserById(userId) {
-  return createGroupState.contacts.find((user) => String(user.id) === String(userId)) || null;
+  return mergeUsersById(createGroupState.contacts, createGroupState.searchResults)
+    .find((user) => String(user.id) === String(userId)) || null;
 }
 
-function filterContacts(query = "") {
+function getFilteredCreateGroupUsers(query = "") {
   const normalizedQuery = query.trim().replace(/^@/, "").toLowerCase();
-  const filteredContacts = normalizedQuery
-    ? createGroupState.contacts.filter((user) => {
+  const sourceUsers = normalizedQuery
+    ? mergeUsersById(createGroupState.contacts, createGroupState.searchResults)
+    : createGroupState.contacts;
+
+  return normalizedQuery
+    ? sourceUsers.filter((user) => {
       const username = String(user.username || "").toLowerCase();
       const name = String(user.name || "").toLowerCase();
       return username.includes(normalizedQuery) || name.includes(normalizedQuery);
     })
-    : createGroupState.contacts;
+    : sourceUsers;
+}
 
-  renderSelectableUsers("memberContactsList", filteredContacts, normalizedQuery ? "Контакты не найдены" : "Контактов пока нет");
+function filterContacts(query = "") {
+  const normalizedQuery = query.trim().replace(/^@/, "").toLowerCase();
+  const filteredContacts = getFilteredCreateGroupUsers(query);
+  renderSelectableUsers(
+    "memberContactsList",
+    filteredContacts,
+    normalizedQuery ? "Пользователи не найдены" : "Контактов пока нет"
+  );
+  return filteredContacts;
+}
+
+async function searchUsersForGroup(query = "") {
+  const searchStatus = document.getElementById("memberSearchStatus");
+  const normalizedQuery = query.trim().replace(/^@/, "");
+  const requestId = ++createGroupState.activeSearchRequestId;
+
+  if (!normalizedQuery) {
+    createGroupState.searchResults = [];
+    const localResults = filterContacts("");
+    if (searchStatus) {
+      searchStatus.textContent = "";
+      searchStatus.className = "status";
+    }
+    return localResults;
+  }
+
+  const localResults = filterContacts(normalizedQuery);
+  if (searchStatus) {
+    searchStatus.textContent = "Ищем пользователей...";
+    searchStatus.className = "status";
+  }
+
+  try {
+    const data = await apiFetch(`/users/search?username=${encodeURIComponent(normalizedQuery)}`);
+    if (requestId !== createGroupState.activeSearchRequestId) {
+      return localResults;
+    }
+
+    createGroupState.searchResults = Array.isArray(data) ? data : data.items || [];
+    const results = filterContacts(normalizedQuery);
+    if (searchStatus) {
+      searchStatus.textContent = results.length ? `${results.length} найдено` : "Пользователи не найдены";
+      searchStatus.className = "status";
+    }
+    return results;
+  } catch (error) {
+    if (requestId !== createGroupState.activeSearchRequestId) {
+      return localResults;
+    }
+
+    createGroupState.searchResults = [];
+    const fallbackResults = filterContacts(normalizedQuery);
+    if (searchStatus) {
+      searchStatus.textContent = fallbackResults.length ? `${fallbackResults.length} найдено` : error.message;
+      searchStatus.className = fallbackResults.length ? "status" : "status error";
+    }
+    return fallbackResults;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -183,33 +263,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindSelectionList(contactsList);
 
   searchInput?.addEventListener("input", () => {
-    filterContacts(searchInput.value);
-    if (searchStatus) {
-      searchStatus.textContent = "";
-      searchStatus.className = "status";
+    const query = searchInput.value;
+    if (!query.trim()) {
+      createGroupState.searchResults = [];
+      createGroupState.activeSearchRequestId += 1;
+      filterContacts("");
+      if (searchStatus) {
+        searchStatus.textContent = "";
+        searchStatus.className = "status";
+      }
+      return;
     }
+
+    filterContacts(query);
   });
 
   if (searchForm) {
     searchForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const query = searchInput?.value.trim() || "";
-
-      if (searchStatus) {
-        searchStatus.textContent = query ? "Поиск по контактам..." : "";
-        searchStatus.className = "status";
-      }
-      filterContacts(query);
-      if (searchStatus) {
-        const normalizedQuery = query.trim();
-        if (!normalizedQuery) {
-          searchStatus.textContent = "";
-        } else {
-          const filteredCount = document.querySelectorAll('#memberContactsList [data-select-user]').length;
-          searchStatus.textContent = filteredCount ? `${filteredCount} найдено` : "Контакты не найдены";
-        }
-        searchStatus.className = "status";
-      }
+      await searchUsersForGroup(query);
     });
   }
 

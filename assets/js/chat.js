@@ -192,6 +192,18 @@ const COMPOSER_ACTION_ICONS = {
   save: "/assets/icons/ui/Check_fill.svg",
   recording: "/assets/icons/ui/Stop_fill.svg"
 };
+const VOICE_TOGGLE_ICON_MARKUP = {
+  play: `
+    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+      <path d="M8 6.78v10.44c0 1.1 1.2 1.79 2.16 1.23l8.36-5.22a1.41 1.41 0 0 0 0-2.46l-8.36-5.22C9.2 4.99 8 5.68 8 6.78Z"></path>
+    </svg>
+  `,
+  pause: `
+    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+      <path d="M8.5 6.5A1.5 1.5 0 0 1 10 8v8a1.5 1.5 0 1 1-3 0V8a1.5 1.5 0 0 1 1.5-1.5Zm7 0A1.5 1.5 0 0 1 17 8v8a1.5 1.5 0 1 1-3 0V8a1.5 1.5 0 0 1 1.5-1.5Z"></path>
+    </svg>
+  `
+};
 
 function formatVoiceDuration(durationMs = 0) {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
@@ -222,11 +234,11 @@ function renderVoiceMessageBody(message = {}, pending = false) {
         </div>
       ` : `
         <div class="voice-message-player" data-voice-player="true">
-          <audio class="voice-message-audio" preload="metadata" src="${audioUrl}" data-duration-ms="${escapeHtml(String(audio?.duration_ms || 0))}">
+          <audio class="voice-message-audio" preload="metadata" playsinline webkit-playsinline="true" src="${audioUrl}" data-duration-ms="${escapeHtml(String(audio?.duration_ms || 0))}">
             <source src="${audioUrl}" type="${audioType}">
           </audio>
           <button class="voice-message-play" type="button" data-voice-toggle="true" aria-label="Воспроизвести голосовое сообщение">
-            <span class="voice-message-play-icon" aria-hidden="true">▶</span>
+            <span class="voice-message-play-icon" aria-hidden="true">${VOICE_TOGGLE_ICON_MARKUP.play}</span>
           </button>
           <div class="voice-message-main">
             <div class="voice-message-topline">
@@ -298,7 +310,7 @@ function syncVoicePlayerState(player) {
   toggle.setAttribute("aria-label", audio.paused || audio.ended ? "Воспроизвести голосовое сообщение" : "Поставить голосовое на паузу");
   const iconNode = toggle.querySelector(".voice-message-play-icon");
   if (iconNode) {
-    iconNode.textContent = audio.paused || audio.ended ? "▶" : "❚❚";
+    iconNode.innerHTML = audio.paused || audio.ended ? VOICE_TOGGLE_ICON_MARKUP.play : VOICE_TOGGLE_ICON_MARKUP.pause;
   }
   currentTimeNode.textContent = formatVoiceTime(visibleCurrentTime);
   durationNode.textContent = formatVoiceTime(duration);
@@ -1522,7 +1534,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   let isLoadingStickerLibrary = false;
   let stickerPickerHideTimer = null;
   let threadMemberContacts = [];
+  let threadMemberSearchDirectory = [];
   let filteredThreadMemberCandidates = [];
+  let activeThreadMemberSearchRequestId = 0;
   let isSubmittingThreadMembers = false;
   let isSavingGroupDetails = false;
   let isRefreshingInviteLink = false;
@@ -1825,7 +1839,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const formData = new FormData();
-      formData.append("voice", blob, `voice-message.${blob.type.includes("ogg") ? "ogg" : "webm"}`);
+      const voiceExtension = blob.type.includes("ogg")
+        ? "ogg"
+        : (blob.type.includes("mp4") || blob.type.includes("m4a") ? "m4a" : "webm");
+      formData.append("voice", blob, `voice-message.${voiceExtension}`);
       formData.append("duration_ms", String(Math.max(0, Math.round(durationMs))));
       if (replyMessageState?.messageId) {
         formData.append("reply_to_id", String(replyMessageState.messageId));
@@ -2018,6 +2035,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       startRecordingLevelMeter(recordingStream);
       const mimeCandidates = [
+        "audio/mp4;codecs=mp4a.40.2",
+        "audio/mp4",
+        "audio/x-m4a",
         "audio/webm;codecs=opus",
         "audio/ogg;codecs=opus",
         "audio/webm",
@@ -2061,7 +2081,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
       }, { once: true });
 
-      mediaRecorder.start();
+      mediaRecorder.start(250);
       recordingStartedAt = Date.now();
       isRecordingVoice = true;
       input.disabled = true;
@@ -2087,6 +2107,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     status.textContent = "Обрабатываем запись...";
     status.className = "status thread-status";
+    if (mediaRecorder.state === "recording" && typeof mediaRecorder.requestData === "function") {
+      try {
+        mediaRecorder.requestData();
+      } catch {
+        // Some mobile browsers reject manual flush during shutdown.
+      }
+    }
     mediaRecorder.stop();
   }
 
@@ -3017,6 +3044,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     );
   }
 
+  function mergeThreadMemberUsers(...groups) {
+    const users = new Map();
+    groups.flat().forEach((user) => {
+      if (!user?.id) {
+        return;
+      }
+
+      const userId = String(user.id);
+      users.set(userId, {
+        ...(users.get(userId) || {}),
+        ...user
+      });
+    });
+    return [...users.values()];
+  }
+
   function updateThreadMemberSubmitState() {
     if (!threadMemberAddSubmit) {
       return;
@@ -3031,7 +3074,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const normalizedQuery = query.trim().replace(/^@/, "").toLowerCase();
     const existingMemberIds = getCurrentGroupMemberIds();
     const selectedIds = preserveSelection ? getSelectedThreadMemberIds() : new Set();
-    const baseCandidates = threadMemberContacts.filter((user) => !existingMemberIds.has(String(user.id)));
+    const baseCandidatesSource = normalizedQuery
+      ? mergeThreadMemberUsers(threadMemberContacts, threadMemberSearchDirectory)
+      : threadMemberContacts;
+    const baseCandidates = baseCandidatesSource.filter((user) => !existingMemberIds.has(String(user.id)));
     filteredThreadMemberCandidates = normalizedQuery
       ? baseCandidates.filter((user) => {
         const username = String(user.username || "").toLowerCase();
@@ -3049,6 +3095,40 @@ document.addEventListener("DOMContentLoaded", async () => {
     updateThreadMemberSubmitState();
   }
 
+  async function searchThreadMemberDirectory(query = "") {
+    const normalizedQuery = query.trim().replace(/^@/, "");
+    const requestId = ++activeThreadMemberSearchRequestId;
+
+    if (!normalizedQuery) {
+      threadMemberSearchDirectory = [];
+      filterThreadMemberCandidates("", true);
+      return;
+    }
+
+    filterThreadMemberCandidates(normalizedQuery, true);
+    setThreadMemberAddStatus("Ищем пользователей...", "");
+
+    try {
+      const data = await apiFetch(`/users/search?username=${encodeURIComponent(normalizedQuery)}`);
+      if (requestId !== activeThreadMemberSearchRequestId) {
+        return;
+      }
+
+      threadMemberSearchDirectory = Array.isArray(data) ? data : data.items || [];
+      filterThreadMemberCandidates(normalizedQuery, true);
+    } catch (error) {
+      if (requestId !== activeThreadMemberSearchRequestId) {
+        return;
+      }
+
+      threadMemberSearchDirectory = [];
+      filterThreadMemberCandidates(normalizedQuery, true);
+      if (!filteredThreadMemberCandidates.length) {
+        setThreadMemberAddStatus(error.message, "error");
+      }
+    }
+  }
+
   async function openThreadMemberAddModal() {
     if (!threadMemberAddModal || chatType !== "group" || !currentThreadInfo?.can_add_members) {
       return;
@@ -3061,6 +3141,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (threadMemberSearchResults) {
       threadMemberSearchResults.innerHTML = "";
     }
+    threadMemberSearchDirectory = [];
+    activeThreadMemberSearchRequestId += 1;
     if (threadMemberAddSubmit) {
       threadMemberAddSubmit.hidden = true;
       threadMemberAddSubmit.disabled = true;
@@ -3087,7 +3169,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     threadMemberAddModal.hidden = true;
     threadMemberContacts = [];
+    threadMemberSearchDirectory = [];
     filteredThreadMemberCandidates = [];
+    activeThreadMemberSearchRequestId += 1;
     isSubmittingThreadMembers = false;
     if (threadMemberAddInput) {
       threadMemberAddInput.value = "";
@@ -4505,7 +4589,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   threadMemberAddInput?.addEventListener("input", () => {
-    filterThreadMemberCandidates(threadMemberAddInput.value);
+    void searchThreadMemberDirectory(threadMemberAddInput.value);
   });
 
   threadMemberSearchResults?.addEventListener("click", (event) => {

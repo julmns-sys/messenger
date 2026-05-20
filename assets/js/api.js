@@ -6,6 +6,7 @@ const API = {
   postAuthRedirectKey: "messenger_post_auth_redirect",
   deviceIdKey: "messenger_device_id"
 };
+const API_REQUEST_TIMEOUT_MS = 12000;
 
 function generateLocalDeviceId() {
   if (window.crypto?.randomUUID) {
@@ -283,10 +284,23 @@ async function apiFetch(path, options = {}) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API.baseUrl}${path}`, {
-    ...options,
-    headers
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), options.timeoutMs || API_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(`${API.baseUrl}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("Сервер не отвечает. Попробуйте ещё раз.");
+    }
+    throw new Error("Не удалось связаться с сервером.");
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json")

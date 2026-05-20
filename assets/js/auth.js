@@ -109,6 +109,10 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     const endpoint = endpointByMode[mode];
 
+    if (["register", "login", "verify-email"].includes(mode) && API.baseUrl !== window.location.origin) {
+      setApiBase(window.location.origin);
+    }
+
     if (endpoint) {
       if (mode === "verify-email" && emailInput) {
         emailInput.value = params.get("email") || emailInput.value || "";

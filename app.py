@@ -5099,7 +5099,9 @@ def search_users():
     if not user_id:
         return jsonify({"message": "Не авторизован"}), 401
 
-    username = request.args.get("username", "").replace("@", "")
+    query = request.args.get("username", "").replace("@", "").strip()
+    if not query:
+        return jsonify([])
 
     conn = get_db()
     users = conn.execute("""
@@ -5133,9 +5135,12 @@ def search_users():
                     WHERE hdc.chat_id = c.id AND hdc.user_id = %s
                 )
             )
-        WHERE u.username LIKE %s AND u.id != %s
+        WHERE (
+            u.username LIKE %s
+            OR COALESCE(u.name, '') LIKE %s
+        ) AND u.id != %s
         LIMIT 20
-    """, (user_id, user_id, user_id, user_id, user_id, f"%{username}%", user_id)).fetchall()
+    """, (user_id, user_id, user_id, user_id, user_id, f"%{query}%", f"%{query}%", user_id)).fetchall()
     conn.close()
 
     return jsonify([

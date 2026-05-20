@@ -1847,6 +1847,7 @@ body.settings-theme-dark .thread-info-fact,
 body.settings-theme-dark .thread-info-search-action,
 body.settings-theme-dark .thread-member-action-menu,
 body.settings-theme-dark .thread-info-action-menu,
+body.settings-theme-dark .chat-list-action-menu,
 body.settings-theme-dark .sidebar-settings-section,
 body.settings-theme-dark .sidebar-settings-item,
 .settings-theme-dark .settings-launch-tile,
@@ -2115,6 +2116,7 @@ body.settings-theme-dark .sidebar-profile-editor-input[data-editor-field="bio"]:
 
 body.settings-theme-dark .thread-member-action-menu button,
 body.settings-theme-dark .thread-info-action-menu button,
+body.settings-theme-dark .chat-list-action-menu button,
 body.settings-theme-dark .quick-actions-menu-item {
   color: var(--text);
 }
@@ -2180,19 +2182,150 @@ body.settings-theme-dark .sidebar-profile-editor-button.request:hover {
 
 body.settings-theme-dark .thread-member-action-menu button:hover,
 body.settings-theme-dark .thread-info-action-menu button:hover,
+body.settings-theme-dark .chat-list-action-menu button:hover,
 body.settings-theme-dark .quick-actions-menu-item:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #f3f7fb;
 }
 
 body.settings-theme-dark .thread-member-action-menu button.danger,
-body.settings-theme-dark .thread-info-action-menu button.danger {
+body.settings-theme-dark .thread-info-action-menu button.danger,
+body.settings-theme-dark .chat-list-action-menu button.danger {
   color: #ff8f8f;
 }
 
 body.settings-theme-dark .thread-member-action-menu button.danger:hover,
-body.settings-theme-dark .thread-info-action-menu button.danger:hover {
+body.settings-theme-dark .thread-info-action-menu button.danger:hover,
+body.settings-theme-dark .chat-list-action-menu button.danger:hover {
   background: rgba(217, 83, 79, 0.14);
+}
+
+body.settings-theme-dark .thread-member-modal-title,
+body.settings-theme-dark .thread-member-add-status {
+  color: var(--text);
+}
+
+body.settings-theme-dark .thread-member-search-results {
+  scrollbar-color: rgba(143, 195, 255, 0.28) transparent;
+}
+
+body.settings-theme-dark .thread-member-option {
+  border-color: rgba(146, 170, 198, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.04));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+body.settings-theme-dark .thread-member-option:hover {
+  border-color: rgba(111, 182, 255, 0.28);
+  background:
+    linear-gradient(180deg, rgba(111, 182, 255, 0.12), rgba(111, 182, 255, 0.07));
+  box-shadow: 0 14px 28px rgba(3, 8, 14, 0.18);
+}
+
+body.settings-theme-dark .thread-member-option.selected {
+  border-color: rgba(111, 182, 255, 0.4);
+  background:
+    linear-gradient(180deg, rgba(111, 182, 255, 0.18), rgba(111, 182, 255, 0.1));
+  box-shadow: 0 16px 30px rgba(7, 16, 27, 0.22);
+}
+
+body.settings-theme-dark .thread-member-option .result-name {
+  color: #f3f7fb;
+}
+
+body.settings-theme-dark .thread-member-option .result-username {
+  color: rgba(224, 233, 242, 0.68);
+}
+
+body.settings-theme-dark .group-owner-leave-card {
+  border-color: rgba(146, 170, 198, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.035)) !important;
+  box-shadow: 0 22px 42px rgba(3, 8, 14, 0.28);
+}
+
+body.settings-theme-dark .group-owner-leave-header h3,
+body.settings-theme-dark .group-owner-leave-transfer-title,
+body.settings-theme-dark .group-owner-leave-status {
+  color: var(--text);
+}
+
+body.settings-theme-dark .group-owner-leave-copy {
+  color: rgba(224, 233, 242, 0.72);
+}
+
+body.settings-theme-dark .group-owner-leave-close {
+  background: rgba(255, 255, 255, 0.08);
+  color: #8fc3ff;
+}
+
+body.settings-theme-dark .group-owner-leave-close:hover {
+  background: rgba(111, 182, 255, 0.14);
+  color: #cfe6ff;
+}
+
+body.settings-theme-dark .group-owner-leave-members {
+  scrollbar-color: rgba(143, 195, 255, 0.28) transparent;
+}
+
+body.settings-theme-dark .group-owner-leave-member {
+  border-color: rgba(146, 170, 198, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.04));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+body.settings-theme-dark .group-owner-leave-member:hover {
+  border-color: rgba(111, 182, 255, 0.28);
+  background:
+    linear-gradient(180deg, rgba(111, 182, 255, 0.12), rgba(111, 182, 255, 0.07));
+  box-shadow: 0 14px 28px rgba(3, 8, 14, 0.18);
+}
+
+body.settings-theme-dark .group-owner-leave-member.selected {
+  border-color: rgba(111, 182, 255, 0.4);
+  background:
+    linear-gradient(180deg, rgba(111, 182, 255, 0.18), rgba(111, 182, 255, 0.1));
+  box-shadow: 0 16px 30px rgba(7, 16, 27, 0.22);
+}
+
+body.settings-theme-dark .group-owner-leave-member .result-name {
+  color: #f3f7fb;
+}
+
+body.settings-theme-dark .group-owner-leave-member .result-username {
+  color: rgba(224, 233, 242, 0.68);
+}
+
+body.settings-theme-dark .group-delete-confirm-card {
+  border-color: rgba(146, 170, 198, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.035)) !important;
+  box-shadow: 0 22px 42px rgba(3, 8, 14, 0.28);
+}
+
+body.settings-theme-dark .group-delete-confirm-header h3,
+body.settings-theme-dark .group-delete-confirm-status {
+  color: var(--text);
+}
+
+body.settings-theme-dark .group-delete-confirm-copy {
+  color: #f3f7fb;
+}
+
+body.settings-theme-dark .group-delete-confirm-note {
+  color: rgba(224, 233, 242, 0.72);
+}
+
+body.settings-theme-dark .group-delete-confirm-close {
+  background: rgba(255, 255, 255, 0.08);
+  color: #8fc3ff;
+}
+
+body.settings-theme-dark .group-delete-confirm-close:hover {
+  background: rgba(111, 182, 255, 0.14);
+  color: #cfe6ff;
 }
 
 body.settings-theme-dark .message-action-menu {
@@ -5598,8 +5731,19 @@ body.settings-link-previews-off .message-link-preview {
 }
 
 .voice-message-play-icon {
-  font-size: 13px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
+}
+
+.voice-message-play-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  fill: currentColor;
 }
 
 .voice-message-main {
@@ -6349,7 +6493,8 @@ body.settings-theme-dark .voice-message-wave span {
 
 .group-delete-confirm-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(132px, 220px));
+  justify-content: center;
   gap: 10px;
 }
 
