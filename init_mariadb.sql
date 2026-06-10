@@ -174,6 +174,48 @@ CREATE TABLE IF NOT EXISTS `groups` (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS servers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    owner_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS server_members (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    server_id INT NOT NULL,
+    user_id INT NOT NULL,
+    is_admin TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_server_member (server_id, user_id),
+    INDEX idx_server_members_server_id (server_id),
+    INDEX idx_server_members_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS server_categories (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    server_id INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    position INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_server_categories_server_id (server_id),
+    INDEX idx_server_categories_server_position (server_id, position)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS server_channels (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    server_id INT NOT NULL,
+    category_id INT NOT NULL,
+    group_id INT NOT NULL,
+    position INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_server_channel_group (group_id),
+    INDEX idx_server_channels_server_id (server_id),
+    INDEX idx_server_channels_category_id (category_id),
+    INDEX idx_server_channels_server_category_position (server_id, category_id, position)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS group_members (
     id INT AUTO_INCREMENT PRIMARY KEY,
     group_id INT NOT NULL,
@@ -211,6 +253,19 @@ CREATE TABLE IF NOT EXISTS group_messages (
     edited_at TIMESTAMP NULL DEFAULT NULL,
     INDEX idx_group_messages_group_id (group_id),
     INDEX idx_group_messages_group_id_id (group_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS message_attachments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    message_scope VARCHAR(16) NOT NULL,
+    message_id INT NOT NULL,
+    file_url VARCHAR(1000) NOT NULL,
+    file_name VARCHAR(255) NOT NULL,
+    mime_type VARCHAR(120) NOT NULL,
+    size INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_message_attachments_scope_message (message_scope, message_id),
+    INDEX idx_message_attachments_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS hidden_messages (

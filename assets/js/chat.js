@@ -153,13 +153,88 @@ function getMessageImageData(message = {}) {
   };
 }
 
+function normalizeMessageAttachment(attachment = {}) {
+  const url = String(attachment?.url || attachment?.file_url || "").trim();
+  if (!url) {
+    return null;
+  }
+  return {
+    id: attachment?.id ?? null,
+    url,
+    file_name: String(attachment?.file_name || "").trim(),
+    mime_type: attachment?.mime_type || "image/jpeg",
+    size: Number(attachment?.size || 0)
+  };
+}
+
+function getMessageAttachments(message = {}) {
+  const rawAttachments = Array.isArray(message?.attachments) ? message.attachments : [];
+  const attachments = rawAttachments
+    .map((attachment) => normalizeMessageAttachment(attachment))
+    .filter(Boolean);
+  if (attachments.length) {
+    return attachments;
+  }
+
+  const legacyImage = getMessageImageData(message);
+  if (!legacyImage?.url) {
+    return [];
+  }
+
+  return [normalizeMessageAttachment({
+    url: legacyImage.url,
+    mime_type: legacyImage.mime_type,
+    file_name: "photo"
+  })].filter(Boolean);
+}
+
+function renderMessageAttachments(attachments = []) {
+  if (!attachments.length) {
+    return "";
+  }
+
+  return `
+    <div class="message-attachments" data-count="${escapeHtml(String(Math.min(attachments.length, 6)))}">
+      ${attachments.map((attachment, index) => `
+        <button
+          class="message-image"
+          type="button"
+          data-image-modal-src="${escapeHtml(attachment.url)}"
+          data-image-modal-index="${escapeHtml(String(index))}"
+          aria-label="Открыть фотографию ${escapeHtml(String(index + 1))}"
+        >
+          <img src="${escapeHtml(attachment.url)}" alt="Фотография" loading="lazy">
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderMessageStandardBody(message = {}) {
+  const text = String(message?.text || "");
+  const hasText = Boolean(text.trim());
+  const attachments = getMessageAttachments(message);
+  const previewUrl = extractFirstUrl(text);
+  const previewData = getMessagePreviewData(message);
+
+  if (previewData?.url) {
+    linkPreviewCache.set(previewData.url, previewData);
+  }
+
+  return `
+    ${hasText ? `<p class="message-text">${renderMessageText(text)}</p>` : ""}
+    ${hasText ? (areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)) : ""}
+    ${renderMessageAttachments(attachments)}
+  `;
+}
+
 function renderPhotoMessageBody(message = {}, pending = false) {
-  const image = getMessageImageData(message);
-  const imageUrl = escapeHtml(image?.url || "");
-  const imageType = escapeHtml(image?.mime_type || "image/jpeg");
+  const attachment = getMessageAttachments(message)[0] || getMessageImageData(message) || {};
+  const imageUrl = escapeHtml(attachment?.url || "");
+  const imageType = escapeHtml(attachment?.mime_type || "image/jpeg");
   return `
     <div class="photo-message${pending ? " pending" : ""}">
-      <img class="photo-message-image" src="${imageUrl}" alt="Фотография" loading="lazy" ${pending ? "" : `data-photo-message="true" data-photo-type="${imageType}"`}>
+      <img class="photo-message-image" src="${imageUrl}" alt="Фотография" loading="lazy" ${pending ? "" : `data-image-modal-src="${imageUrl}" data-photo-type="${imageType}"`}>
       ${pending ? '<span class="photo-message-status">Отправляем фото...</span>' : ""}
     </div>
   `;
@@ -548,6 +623,9 @@ function getForwardedDialogItemText(item = {}) {
   if (messageType === "sticker") {
     return "Стикер";
   }
+  if (getMessageAttachments(item).length && !String(item?.text || "").trim()) {
+    return "Фотография";
+  }
   return String(item?.text || "").trim() || "Сообщение";
 }
 
@@ -628,9 +706,11 @@ function formatThreadInfoCount(value) {
 function renderMessageItem(message, currentUserId, chatType) {
   const isSystem = (message.message_type || "text") === "system";
   const isVoice = (message.message_type || "text") === "voice";
-  const isPhoto = (message.message_type || "text") === "photo";
   const isSticker = (message.message_type || "text") === "sticker";
   const isForwardedDialog = (message.message_type || "text") === "forwarded_dialog";
+  const attachments = getMessageAttachments(message);
+  const hasAttachments = attachments.length > 0;
+  const hasText = Boolean(String(message?.text || "").trim());
   const own = !isSystem && String(message.sender_id) === String(currentUserId);
   const messageClasses = ["message"];
   if (own) {
@@ -638,6 +718,12 @@ function renderMessageItem(message, currentUserId, chatType) {
   }
   if (chatType === "direct") {
     messageClasses.push("message-direct");
+  }
+  if (hasAttachments) {
+    messageClasses.push("message-has-attachments");
+  }
+  if (hasAttachments && !hasText) {
+    messageClasses.push("message-attachments-only");
   }
 
   if (isSystem) {
@@ -653,20 +739,12 @@ function renderMessageItem(message, currentUserId, chatType) {
       </article>
     `;
   }
-
-  const previewUrl = extractFirstUrl(message.text || "");
-  const previewData = getMessagePreviewData(message);
-  if (previewData?.url) {
-    linkPreviewCache.set(previewData.url, previewData);
-  }
-
   return `
     <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="${escapeHtml(String(message.message_type || "text"))}" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${renderSystemAccountLabel(message.sender_name, message.sender_username || "", { allowLabelFallback: true })}</button>` : ""}
       ${renderMessageForwardedMeta(message.forwarded_from)}
       ${renderMessageReplyPreview(message.reply)}
-      ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : isPhoto ? renderPhotoMessageBody(message) : isSticker ? renderStickerMessageBody(message) : `${areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)}
-      <p class="message-text">${renderMessageText(message.text || "")}</p>`}
+      ${isForwardedDialog ? renderForwardedDialogCard(message.forwarded_dialog) : isVoice ? renderVoiceMessageBody(message) : isSticker ? renderStickerMessageBody(message) : renderMessageStandardBody(message)}
       <div class="message-meta">
         ${renderEditedIndicator(message)}
         <span class="message-time">${escapeHtml(formatTime(message.created_at))}</span>
@@ -678,6 +756,22 @@ function renderMessageItem(message, currentUserId, chatType) {
 
 function renderPendingMessageItem(text, chatType, options = {}) {
   const directClass = chatType === "direct" ? " message-direct" : "";
+  if (Array.isArray(options.attachments) && options.attachments.length) {
+    return `
+      <article class="message own pending${directClass}" data-pending-message="true" data-own="true">
+        ${text ? `<p class="message-text">${renderMessageText(text)}</p>` : ""}
+        ${renderMessageAttachments(options.attachments)}
+        <div class="message-meta">
+          <span class="message-status-indicator" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+        </div>
+      </article>
+    `;
+  }
+
   if (options.type === "voice") {
     return `
       <article class="message own pending${directClass}" data-pending-message="true" data-message-type="voice" data-own="true">
@@ -787,6 +881,41 @@ function renderMessages(container, messages, currentUserId, chatType) {
   rebuildDateDividers(container);
   initializeVoicePlayers(container);
   hydrateLinkPreviews(container);
+}
+
+function renderMessagesSkeleton() {
+  return `
+    <div class="messages-skeleton" aria-hidden="true">
+      <div class="message-skeleton-row">
+        <span class="message-skeleton-avatar skeleton"></span>
+        <div class="message-skeleton-bubble">
+          <span class="skeleton skeleton-text lg" style="width:42%"></span>
+          <span class="skeleton skeleton-text" style="width:78%"></span>
+          <span class="skeleton skeleton-text" style="width:64%"></span>
+        </div>
+      </div>
+      <div class="message-skeleton-row own">
+        <div class="message-skeleton-bubble">
+          <span class="skeleton skeleton-text" style="width:72%"></span>
+          <span class="skeleton skeleton-text" style="width:88%"></span>
+        </div>
+      </div>
+      <div class="message-skeleton-row">
+        <span class="message-skeleton-avatar skeleton"></span>
+        <div class="message-skeleton-bubble">
+          <span class="skeleton skeleton-text lg" style="width:36%"></span>
+          <span class="skeleton skeleton-text" style="width:68%"></span>
+          <span class="message-skeleton-media skeleton"></span>
+        </div>
+      </div>
+      <div class="message-skeleton-row own">
+        <div class="message-skeleton-bubble">
+          <span class="skeleton skeleton-text" style="width:84%"></span>
+          <span class="skeleton skeleton-text" style="width:58%"></span>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function appendMessage(container, message, currentUserId, chatType) {
@@ -1028,6 +1157,38 @@ function buildDeleteUndoToast() {
     <button type="button" class="delete-undo-button">Отмена</button>
   `;
   return toast;
+}
+
+function buildImageModal() {
+  const modal = document.createElement("div");
+  modal.className = "image-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="image-modal-backdrop" data-image-modal-close="true"></div>
+    <div class="image-modal-dialog" role="dialog" aria-modal="true" aria-label="Просмотр изображения">
+      <div class="image-modal-toolbar">
+        <div class="image-modal-counter" data-image-modal-counter="true">1 / 1</div>
+        <div class="image-modal-actions">
+          <button type="button" class="icon-button image-modal-close" data-image-modal-close="true" aria-label="Закрыть">
+            <img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt="">
+          </button>
+        </div>
+      </div>
+      <div class="image-modal-stage">
+        <button type="button" class="image-modal-nav image-modal-nav-side is-prev" data-image-modal-nav="prev" aria-label="Предыдущее фото">
+          <img class="icon-asset" src="/assets/icons/ui/Arrow_left.svg" alt="">
+        </button>
+        <div class="image-modal-viewport">
+          <div class="image-modal-track" data-image-modal-track="true"></div>
+        </div>
+        <button type="button" class="image-modal-nav image-modal-nav-side is-next" data-image-modal-nav="next" aria-label="Следующее фото">
+          <img class="icon-asset" src="/assets/icons/ui/Arrow_right.svg" alt="">
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  return modal;
 }
 
 function setChatTitle(titleOrInfo, subtitle = "", desktopSubtitle = "", desktopPresence = "") {
@@ -1357,6 +1518,9 @@ function renderThreadSearchResults(results, chatType) {
 
   return results.map((message) => {
     const authorName = message.sender_name || (chatType === "group" ? "Участник" : "Пользователь");
+    const messageLabel = getMessageAttachments(message).length && !String(message.text || "").trim()
+      ? "Фотография"
+      : (message.text || "");
     return `
     <button
       class="thread-info-search-result"
@@ -1367,7 +1531,7 @@ function renderThreadSearchResults(results, chatType) {
         <strong class="thread-info-search-result-name">${escapeHtml(authorName)}</strong>
         <span class="thread-info-search-result-time">${escapeHtml(formatChatDateDivider(message.created_at) || formatDate(message.created_at))}, ${escapeHtml(formatTime(message.created_at))}</span>
       </span>
-      <span class="thread-info-search-result-text">${escapeHtml(message.text || "")}</span>
+      <span class="thread-info-search-result-text">${escapeHtml(messageLabel)}</span>
     </button>
   `;
   }).join("");
@@ -1422,14 +1586,30 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindLogout();
   fillUserBadge();
   initSidebarProfile();
-  await loadChats();
+  await loadSidebar();
   startChatsAutoRefresh();
 
   const route = getCurrentRouteInfo();
   let chatId = route.chatId;
-  const userId = route.userId;
-  const chatType = document.body.dataset.chatType || route.chatType || "direct";
+  let userId = route.userId;
+  let serverId = route.serverId;
+  let chatType = document.body.dataset.chatType || route.chatType || "direct";
   const currentUser = getCurrentUser() || {};
+
+  if (!chatId && serverId) {
+    try {
+      const server = chatState.activeServer || await apiFetch(`/servers/${encodeURIComponent(serverId)}`);
+      const defaultChannelId = server?.default_channel_id;
+      if (defaultChannelId) {
+        window.location.replace(getServerChannelRoute(serverId, defaultChannelId));
+        return;
+      }
+      chatState.activeServer = server;
+    } catch {
+      window.location.replace(getChatsRoute());
+      return;
+    }
+  }
 
   const messagesNode = document.getElementById("messages");
   const composer = document.getElementById("messageForm");
@@ -1484,17 +1664,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   const sendButton = composer?.querySelector('button[type="submit"]');
   const photoMessageButton = document.getElementById("photoMessageButton");
   const photoMessageInput = document.getElementById("photoMessageInput");
+  const composerAttachmentsNode = document.getElementById("composerAttachments");
   const stickerPickerButton = document.getElementById("stickerPickerButton");
   const stickerPickerPopup = document.getElementById("stickerPickerPopup");
   const stickerPackTabs = document.getElementById("stickerPackTabs");
   const stickerGrid = document.getElementById("stickerGrid");
   const stickerPickerStatus = document.getElementById("stickerPickerStatus");
   const COMPOSER_MAX_HEIGHT = 144;
+  const MESSAGE_IMAGE_MAX_DIMENSION = 1280;
+  const MESSAGE_IMAGE_QUALITY = 0.78;
+  const SUPPORTED_MESSAGE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
   const messageActionMenu = buildMessageActionMenu();
   const editBanner = buildEditBanner();
   const replyBanner = buildReplyBanner();
   const forwardModal = buildForwardModal();
   const deleteUndoToast = buildDeleteUndoToast();
+  const imageModal = buildImageModal();
   const selectionToolbar = buildSelectionToolbar();
   const threadMemberActionMenu = buildThreadMemberActionMenu();
   const threadBlockNotice = (() => {
@@ -1547,6 +1732,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   let pendingDeleteState = null;
   let deleteUndoCountdownTimer = null;
   let isSelectionMode = false;
+  let composerAttachmentId = 0;
+  let composerAttachments = [];
+  let activeImageGallery = [];
+  let activeImageIndex = 0;
+  let imageModalTouchStartX = 0;
+  let imageModalTouchDeltaX = 0;
+
+  setChatTitle("Загрузка...", "Подготавливаем переписку", "Подготавливаем переписку");
+  if (messagesNode) {
+    messagesNode.innerHTML = renderMessagesSkeleton();
+  }
+  let isDraggingImageModal = false;
+  let activeThreadNavigationToken = 0;
   let threadSearchDebounceTimer = null;
   let activeThreadSearchRequestId = 0;
   let isShowingSearchContext = false;
@@ -1580,18 +1778,510 @@ document.addEventListener("DOMContentLoaded", async () => {
   contentBody.insertBefore(selectionToolbar, composerWrap);
   contentBody.appendChild(deleteUndoToast);
 
+  function disconnectRealtime() {
+    emitTypingStop();
+    if (socket) {
+      socket.disconnect();
+      socket = null;
+    }
+  }
+
+  function syncSidebarActiveThread() {
+    const currentRoute = getCurrentRouteInfo();
+    document.querySelectorAll(".chat-item.active").forEach((node) => {
+      node.classList.remove("active");
+    });
+    document.querySelectorAll(".server-channel-row.active, .server-channel-item.active").forEach((node) => {
+      node.classList.remove("active");
+    });
+
+    if (currentRoute.page === "direct-chat" && currentRoute.chatId) {
+      const activeChatItem = document.querySelector(`.chat-item[data-chat-type="direct"][data-chat-id="${CSS.escape(String(currentRoute.chatId))}"]`);
+      activeChatItem?.classList.add("active");
+      return;
+    }
+
+    if (currentRoute.page === "group-chat" && currentRoute.chatId) {
+      if (chatState.sidebarView === "server-detail" && currentRoute.serverId) {
+        const activeChannel = document.querySelector(`.server-channel-item[data-chat-id="${CSS.escape(String(currentRoute.chatId))}"]`);
+        activeChannel?.classList.add("active");
+        activeChannel?.closest(".server-channel-row")?.classList.add("active");
+        return;
+      }
+
+      const activeGroupItem = document.querySelector(`.chat-item[data-chat-type="group"][data-chat-id="${CSS.escape(String(currentRoute.chatId))}"]`);
+      activeGroupItem?.classList.add("active");
+    }
+  }
+
+  function resetThreadUiForNavigation() {
+    activeThreadNavigationToken += 1;
+    closeThreadInfoActionMenu();
+    closeThreadMemberAddModal();
+    closeThreadGroupEditModal();
+    closeThreadSearchPanel();
+    closeMobileThreadSearchMode();
+    setThreadInfoOpen(false);
+    hideMessageMenu();
+    hideThreadMemberActionMenu();
+    hideStickerPicker();
+    closeForwardModal();
+    closeImageModal();
+    exitSelectionMode();
+    setEditingMessageState(null);
+    setReplyMessageState(null);
+    clearComposerAttachments();
+    selectedUser = null;
+    currentThreadInfo = null;
+    activeThreadInfoView = null;
+    oldestMessageId = null;
+    hasMoreMessages = false;
+    isShowingSearchContext = false;
+    if (threadSearchDebounceTimer) {
+      window.clearTimeout(threadSearchDebounceTimer);
+      threadSearchDebounceTimer = null;
+    }
+    if (typingPauseTimer) {
+      window.clearTimeout(typingPauseTimer);
+      typingPauseTimer = null;
+    }
+    if (typingCooldownTimer) {
+      window.clearTimeout(typingCooldownTimer);
+      typingCooldownTimer = null;
+    }
+    typingState.remoteUsers.clear();
+    typingState.localActive = false;
+    pendingMessageState = null;
+    forwardMessageState = null;
+    selectedForwardTargetKey = "";
+    status.textContent = "";
+    status.className = "status thread-status";
+    input.value = "";
+    input.placeholder = chatType === "group" ? "Сообщение в группу..." : "Напишите сообщение...";
+    composer.hidden = false;
+    composerWrap.hidden = false;
+    resizeComposerInput();
+    updateComposerActionButton();
+    setChatTitle("Загрузка...", "Подготавливаем переписку", "Подготавливаем переписку");
+    messagesNode.innerHTML = renderMessagesSkeleton();
+    updateScrollDownButton(messagesNode, scrollDownButton);
+  }
+
+  async function switchThreadRoute(nextRoute, targetPath) {
+    const nextPage = nextRoute?.page;
+    if (nextPage !== "direct-chat" && nextPage !== "group-chat" && nextPage !== "server") {
+      window.location.href = targetPath;
+      return;
+    }
+
+    chatId = nextRoute.chatId || null;
+    userId = nextRoute.userId || null;
+    serverId = nextRoute.serverId || null;
+    chatType = nextRoute.chatType || (nextPage === "group-chat" ? "group" : "direct");
+    activeThreadInfoType = chatType;
+    document.body.dataset.chatType = chatType;
+
+    disconnectRealtime();
+    resetThreadUiForNavigation();
+    syncSidebarActiveThread();
+
+    const navigationToken = activeThreadNavigationToken;
+    let sidebarServerPromise = null;
+
+    if (serverId) {
+      const serverPreview = Array.isArray(chatState?.allServers)
+        ? chatState.allServers.find((server) => String(server?.id || "") === String(serverId))
+        : null;
+      if (typeof writeSelectedServerId === "function") {
+        writeSelectedServerId(serverId);
+      }
+      if (typeof writeStoredSidebarView === "function") {
+        writeStoredSidebarView("server-detail");
+      }
+      if (typeof setSidebarMode === "function") {
+        setSidebarMode("server-detail", serverPreview || chatState.activeServer || {
+          id: serverId,
+          title: serverPreview?.title || "Сервер",
+          description: serverPreview?.description || ""
+        });
+      }
+      if (typeof loadServerDetail === "function") {
+        sidebarServerPromise = loadServerDetail(serverId, "chatList", { showLoading: true });
+      }
+    }
+
+    try {
+      if (!chatId && serverId) {
+        const server = (sidebarServerPromise ? await sidebarServerPromise : null)
+          || chatState.activeServer
+          || await apiFetch(`/servers/${encodeURIComponent(serverId)}`);
+        const defaultChannelId = server?.default_channel_id;
+        if (defaultChannelId) {
+          window.history.replaceState({}, "", getServerChannelRoute(serverId, defaultChannelId));
+          await switchThreadRoute(getCurrentRouteInfo(), getServerChannelRoute(serverId, defaultChannelId));
+          return;
+        }
+        chatState.activeServer = server;
+      }
+
+      if (chatId) {
+        await loadThread();
+        if (navigationToken !== activeThreadNavigationToken) {
+          return;
+        }
+        await markCurrentChatAsRead();
+        if (navigationToken !== activeThreadNavigationToken) {
+          return;
+        }
+        connectRealtime();
+      } else if (chatType !== "group" && userId) {
+        const user = await loadSelectedUser();
+        if (navigationToken !== activeThreadNavigationToken) {
+          return;
+        }
+        renderPendingDirectChat(user);
+      } else if (serverId) {
+        messagesNode.innerHTML = '<div class="empty-state">В этом сервере пока нет каналов. Создайте первый канал в одной из категорий.</div>';
+        status.textContent = "";
+        composer.hidden = true;
+      } else {
+        throw new Error("Чат не найден");
+      }
+    } catch (error) {
+      if (navigationToken !== activeThreadNavigationToken) {
+        return;
+      }
+      messagesNode.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    }
+  }
+
+  function bindThreadRouteNavigation() {
+    const list = document.getElementById("chatList");
+    if (!list || list.dataset.threadRouteNavigationBound === "true") {
+      return;
+    }
+
+    list.dataset.threadRouteNavigationBound = "true";
+    list.addEventListener("click", (event) => {
+      const link = event.target.closest(".chat-item[href], .server-channel-item[href]");
+      if (!link) {
+        return;
+      }
+
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+
+      const href = String(link.getAttribute("href") || "").trim();
+      if (!href || href.startsWith("http")) {
+        return;
+      }
+
+      const targetUrl = new URL(href, window.location.origin);
+      if (targetUrl.origin !== window.location.origin) {
+        return;
+      }
+
+      const targetPath = `${targetUrl.pathname}${targetUrl.search}`;
+      const currentPath = `${window.location.pathname}${window.location.search}`;
+      if (targetPath === currentPath) {
+        event.preventDefault();
+        return;
+      }
+
+      event.preventDefault();
+      window.history.pushState({}, "", targetPath);
+      void switchThreadRoute(getCurrentRouteInfo(), targetPath);
+    });
+
+    window.addEventListener("popstate", () => {
+      const nextRoute = getCurrentRouteInfo();
+      if (nextRoute.page === "direct-chat" || nextRoute.page === "group-chat" || nextRoute.page === "server") {
+        void switchThreadRoute(nextRoute, `${window.location.pathname}${window.location.search}`);
+        return;
+      }
+      window.location.reload();
+    });
+  }
+
+  bindThreadRouteNavigation();
+
   function setComposerBusyState(isBusy) {
     input.disabled = isBusy;
     if (sendButton) {
       sendButton.disabled = isBusy;
     }
     if (photoMessageButton) {
-      photoMessageButton.disabled = isBusy;
+      photoMessageButton.disabled = isBusy || Boolean(editingMessageState);
     }
     if (stickerPickerButton) {
       stickerPickerButton.disabled = isBusy;
     }
     updateComposerActionButton();
+  }
+
+  function revokeComposerAttachmentPreview(attachment) {
+    if (attachment?.previewUrl) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+  }
+
+  function clearComposerAttachments() {
+    composerAttachments.forEach((attachment) => revokeComposerAttachmentPreview(attachment));
+    composerAttachments = [];
+    if (photoMessageInput) {
+      photoMessageInput.value = "";
+    }
+    renderComposerAttachments();
+  }
+
+  function removeComposerAttachment(attachmentId) {
+    const nextAttachments = [];
+    for (const attachment of composerAttachments) {
+      if (attachment.id === attachmentId) {
+        revokeComposerAttachmentPreview(attachment);
+        continue;
+      }
+      nextAttachments.push(attachment);
+    }
+    composerAttachments = nextAttachments;
+    renderComposerAttachments();
+  }
+
+  function renderComposerAttachments() {
+    if (!composerAttachmentsNode) {
+      return;
+    }
+
+    if (!composerAttachments.length) {
+      composerAttachmentsNode.hidden = true;
+      composerAttachmentsNode.innerHTML = "";
+      updateComposerActionButton();
+      return;
+    }
+
+    composerAttachmentsNode.hidden = false;
+    composerAttachmentsNode.innerHTML = composerAttachments.map((attachment, index) => `
+      <div class="composer-preview-item">
+        <img class="composer-preview" src="${escapeHtml(attachment.previewUrl)}" alt="Предпросмотр фото ${escapeHtml(String(index + 1))}">
+        <button
+          class="composer-preview-remove"
+          type="button"
+          data-remove-composer-attachment="${escapeHtml(String(attachment.id))}"
+          aria-label="Удалить фотографию"
+        >×</button>
+      </div>
+    `).join("");
+    updateComposerActionButton();
+  }
+
+  function isSupportedMessageImageFile(file) {
+    return SUPPORTED_MESSAGE_IMAGE_TYPES.has(String(file?.type || "").toLowerCase());
+  }
+
+  function getMessageImageFilename(name = "photo") {
+    const baseName = String(name || "photo").replace(/\.[^.]+$/, "").trim() || "photo";
+    return `${baseName}.jpg`;
+  }
+
+  function loadImageForCompression(file) {
+    return new Promise((resolve, reject) => {
+      const objectUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(image);
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("Не удалось обработать изображение"));
+      };
+      image.src = objectUrl;
+    });
+  }
+
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        reject(new Error("Не удалось сжать изображение"));
+      }, type, quality);
+    });
+  }
+
+  async function compressImage(file) {
+    const image = await loadImageForCompression(file);
+    const originalWidth = Math.max(1, Number(image.naturalWidth || image.width || 1));
+    const originalHeight = Math.max(1, Number(image.naturalHeight || image.height || 1));
+    const scale = Math.min(1, MESSAGE_IMAGE_MAX_DIMENSION / Math.max(originalWidth, originalHeight));
+    const targetWidth = Math.max(1, Math.round(originalWidth * scale));
+    const targetHeight = Math.max(1, Math.round(originalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) {
+      throw new Error("Canvas недоступен для обработки изображения");
+    }
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, targetWidth, targetHeight);
+    context.drawImage(image, 0, 0, targetWidth, targetHeight);
+    const blob = await canvasToBlob(canvas, "image/jpeg", MESSAGE_IMAGE_QUALITY);
+    return new File([blob], getMessageImageFilename(file?.name), {
+      type: "image/jpeg",
+      lastModified: Date.now()
+    });
+  }
+
+  function getComposerAttachmentPayload() {
+    return composerAttachments.map((attachment) => ({
+      url: attachment.previewUrl
+    }));
+  }
+
+  function appendComposerAttachments(files = []) {
+    const validFiles = [];
+    const unsupportedFiles = [];
+    for (const file of files) {
+      if (!file) {
+        continue;
+      }
+      if (!isSupportedMessageImageFile(file)) {
+        unsupportedFiles.push(file.name || "Файл");
+        continue;
+      }
+      validFiles.push(file);
+    }
+
+    if (validFiles.length) {
+      composerAttachments = composerAttachments.concat(validFiles.map((file) => ({
+        id: composerAttachmentId += 1,
+        file,
+        previewUrl: URL.createObjectURL(file)
+      })));
+      renderComposerAttachments();
+      status.textContent = "";
+      status.className = "status thread-status";
+    }
+
+    if (unsupportedFiles.length) {
+      status.textContent = `Поддерживаются только JPG, PNG и WEBP: ${unsupportedFiles.join(", ")}`;
+      status.className = "status error";
+    }
+  }
+
+  function syncImageModal() {
+    const trackNode = imageModal?.querySelector('[data-image-modal-track="true"]');
+    const counterNode = imageModal?.querySelector('[data-image-modal-counter="true"]');
+    const prevButton = imageModal?.querySelector('[data-image-modal-nav="prev"]');
+    const nextButton = imageModal?.querySelector('[data-image-modal-nav="next"]');
+    if (!imageModal || !trackNode || !activeImageGallery.length) {
+      return;
+    }
+    const safeIndex = Math.min(Math.max(activeImageIndex, 0), activeImageGallery.length - 1);
+    activeImageIndex = safeIndex;
+    if (trackNode.dataset.gallerySignature !== activeImageGallery.join("|")) {
+      trackNode.dataset.gallerySignature = activeImageGallery.join("|");
+      trackNode.innerHTML = activeImageGallery.map((src, index) => `
+        <div class="image-modal-slide" data-image-modal-slide="${escapeHtml(String(index))}">
+          <img class="image-modal-image" src="${escapeHtml(src)}" alt="Просмотр изображения ${escapeHtml(String(index + 1))}">
+        </div>
+      `).join("");
+    }
+    trackNode.classList.remove("is-dragging");
+    trackNode.style.transition = "";
+    trackNode.style.transform = `translateX(-${safeIndex * 100}%)`;
+    if (counterNode) {
+      counterNode.textContent = `${safeIndex + 1} / ${activeImageGallery.length}`;
+    }
+    if (prevButton) {
+      prevButton.disabled = activeImageGallery.length <= 1;
+    }
+    if (nextButton) {
+      nextButton.disabled = activeImageGallery.length <= 1;
+    }
+  }
+
+  function stepImageModal(direction = 1) {
+    if (!activeImageGallery.length) {
+      return;
+    }
+    activeImageIndex = (activeImageIndex + direction + activeImageGallery.length) % activeImageGallery.length;
+    syncImageModal();
+  }
+
+  function updateImageModalDrag(deltaX = 0) {
+    const trackNode = imageModal?.querySelector('[data-image-modal-track="true"]');
+    const viewportNode = imageModal?.querySelector(".image-modal-viewport");
+    if (!trackNode || !viewportNode || !activeImageGallery.length) {
+      return;
+    }
+
+    let clampedDeltaX = Number(deltaX || 0);
+    if ((activeImageIndex === 0 && clampedDeltaX > 0) || (activeImageIndex === activeImageGallery.length - 1 && clampedDeltaX < 0)) {
+      clampedDeltaX *= 0.32;
+    }
+
+    trackNode.classList.add("is-dragging");
+    trackNode.style.transition = "none";
+    trackNode.style.transform = `translateX(calc(-${activeImageIndex * 100}% + ${clampedDeltaX}px))`;
+    imageModalTouchDeltaX = clampedDeltaX;
+  }
+
+  function settleImageModalDrag() {
+    const viewportNode = imageModal?.querySelector(".image-modal-viewport");
+    const viewportWidth = Math.max(1, viewportNode?.clientWidth || 1);
+    const threshold = Math.min(140, viewportWidth * 0.18);
+    const deltaX = imageModalTouchDeltaX;
+
+    isDraggingImageModal = false;
+    imageModalTouchDeltaX = 0;
+    if (Math.abs(deltaX) >= threshold && activeImageGallery.length > 1) {
+      stepImageModal(deltaX > 0 ? -1 : 1);
+      return;
+    }
+    syncImageModal();
+  }
+
+  function openImageModal(src = "", gallery = [], startIndex = 0) {
+    if (!imageModal || !src) {
+      return;
+    }
+    activeImageGallery = Array.isArray(gallery) && gallery.length ? gallery : [src];
+    const fallbackIndex = activeImageGallery.indexOf(src);
+    activeImageIndex = startIndex >= 0 ? startIndex : (fallbackIndex >= 0 ? fallbackIndex : 0);
+    syncImageModal();
+    imageModal.hidden = false;
+    document.body.classList.add("modal-open");
+  }
+
+  function closeImageModal() {
+    const trackNode = imageModal?.querySelector('[data-image-modal-track="true"]');
+    if (!imageModal || imageModal.hidden) {
+      return;
+    }
+    imageModal.hidden = true;
+    if (trackNode) {
+      trackNode.innerHTML = "";
+      trackNode.style.transform = "translateX(0)";
+      trackNode.dataset.gallerySignature = "";
+    }
+    activeImageGallery = [];
+    activeImageIndex = 0;
+    imageModalTouchStartX = 0;
+    imageModalTouchDeltaX = 0;
+    isDraggingImageModal = false;
+    document.body.classList.remove("modal-open");
   }
 
   function hideStickerPicker() {
@@ -1727,7 +2417,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   function updateComposerActionButton() {
     if (sendButton) {
       const hasText = Boolean(input.value.trim());
-      const state = isRecordingVoice ? "recording" : (editingMessageState ? "save" : (hasText ? "send" : "idle"));
+      const hasAttachments = composerAttachments.length > 0;
+      const state = isRecordingVoice ? "recording" : (editingMessageState ? "save" : ((hasText || hasAttachments) ? "send" : "idle"));
       const labels = {
         idle: "Записать голосовое сообщение",
         send: "Отправить сообщение",
@@ -1749,6 +2440,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       sendButton.disabled = isSendingMessage || (Boolean(input.disabled) && !isRecordingVoice);
       sendButton.style.setProperty("--voice-record-level", isRecordingVoice ? "0.28" : "0");
       sendButton.style.setProperty("--voice-record-scale", isRecordingVoice ? "1" : "0");
+    }
+    if (photoMessageButton) {
+      photoMessageButton.disabled = isSendingMessage || Boolean(input.disabled) || Boolean(editingMessageState);
     }
   }
 
@@ -1862,7 +2556,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       if (!hadChatId && chatType !== "group") {
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         await loadThread();
         await markCurrentChatAsRead();
         connectRealtime();
@@ -1928,7 +2622,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       if (!hadChatId && chatType !== "group") {
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         await loadThread();
         await markCurrentChatAsRead();
         connectRealtime();
@@ -1999,7 +2693,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       if (!hadChatId && chatType !== "group") {
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         await loadThread();
         await markCurrentChatAsRead();
         connectRealtime();
@@ -2675,7 +3369,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     const profile = await apiFetch(`/users/${encodeURIComponent(userId)}`);
     syncThreadUserProfileState(profile);
-    await loadChats("chatList", { showLoading: false });
+    await loadSidebar("chatList", { showLoading: false });
   }
 
   async function handleThreadProfileAction(action, profileUserId) {
@@ -2697,7 +3391,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           method: action === "mute" ? "POST" : "DELETE"
         });
         syncThreadUserProfileState(profile);
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         setThreadProfileStatus(action === "mute" ? "Уведомления отключены" : "Уведомления включены", "success");
         return;
       }
@@ -2720,7 +3414,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           method: action === "block" ? "POST" : "DELETE"
         });
         syncThreadUserProfileState(profile);
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         setThreadProfileStatus(action === "block" ? "Пользователь заблокирован" : "Пользователь разблокирован", "success");
         return;
       }
@@ -3515,6 +4209,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     editingMessageState = nextState;
     if (nextState) {
       setReplyMessageState(null);
+      clearComposerAttachments();
     }
     composer.classList.toggle("is-editing", Boolean(nextState));
     editBanner.hidden = !nextState;
@@ -3716,7 +4411,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
       closeForwardModal();
       showAppToast(isDialogForward ? "Диалог переслан" : "Сообщение переслано");
-      await loadChats("chatList", { showLoading: false });
+      await loadSidebar("chatList", { showLoading: false });
     } catch (error) {
       if (statusNode) {
         statusNode.textContent = error.message;
@@ -3850,7 +4545,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       state.removedItems.forEach((item) => {
         committedDeleteEchoIds.add(item.messageId);
       });
-      await loadChats("chatList", { showLoading: false });
+      await loadSidebar("chatList", { showLoading: false });
       await markCurrentChatAsRead();
     } catch (error) {
       restoreRemovedMessages(messagesNode, state.removedItems);
@@ -4151,7 +4846,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         } else {
           syncMessageSelectionState(data.message.id);
         }
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
       });
 
       socket.on("message_deleted", async (data) => {
@@ -4174,7 +4869,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (!removed) {
           await reloadThreadPreservingViewport();
         }
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
       });
 
       socket.on("message_read", (data) => {
@@ -4235,7 +4930,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           updateThreadInviteControls();
         }
 
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
       });
 
       socket.on("typing_started", (data) => {
@@ -4277,7 +4972,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         try {
           await refreshCurrentThreadInfo();
-          await loadChats("chatList", { showLoading: false });
+          await loadSidebar("chatList", { showLoading: false });
         } catch {
           window.location.href = getChatsRoute();
         }
@@ -4295,6 +4990,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else if (chatType !== "group" && userId) {
       const user = await loadSelectedUser();
       renderPendingDirectChat(user);
+    } else if (serverId) {
+      messagesNode.innerHTML = '<div class="empty-state">В этом сервере пока нет каналов. Создайте первый канал в одной из категорий.</div>';
+      status.textContent = "";
+      composer.hidden = true;
     } else {
       throw new Error("Чат не найден");
     }
@@ -4676,7 +5375,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       renderHeaderStatus();
       fillThreadInfoPanel(currentThreadInfo, chatType);
       updateThreadInviteControls();
-      await loadChats("chatList", { showLoading: false });
+      await loadSidebar("chatList", { showLoading: false });
       isSavingGroupDetails = false;
       closeThreadGroupEditModal();
     } catch (error) {
@@ -4761,11 +5460,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   photoMessageInput?.addEventListener("change", () => {
-    const file = photoMessageInput.files?.[0];
-    if (!file) {
+    const files = [...(photoMessageInput.files || [])];
+    if (!files.length) {
       return;
     }
-    void sendPhotoMessage(file);
+    appendComposerAttachments(files);
+    photoMessageInput.value = "";
+  });
+
+  composerAttachmentsNode?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-composer-attachment]");
+    if (!button) {
+      return;
+    }
+    const attachmentId = Number(button.dataset.removeComposerAttachment || "0");
+    if (!attachmentId) {
+      return;
+    }
+    removeComposerAttachment(attachmentId);
   });
 
   stickerPickerButton?.addEventListener("click", async (event) => {
@@ -4810,17 +5522,72 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const hasText = Boolean(input.value.trim());
+    const hasAttachments = composerAttachments.length > 0;
     if (isRecordingVoice) {
       event.preventDefault();
       stopVoiceRecording();
       return;
     }
 
-    if (!hasText && !editingMessageState) {
+    if (!hasText && !hasAttachments && !editingMessageState) {
       event.preventDefault();
       await startVoiceRecording();
     }
   });
+
+  messagesNode.addEventListener("click", (event) => {
+    const imageTrigger = event.target.closest("[data-image-modal-src]");
+    if (imageTrigger) {
+      const attachmentsNode = imageTrigger.closest(".message-attachments");
+      const gallery = attachmentsNode
+        ? [...attachmentsNode.querySelectorAll("[data-image-modal-src]")].map((node) => String(node.dataset.imageModalSrc || "").trim()).filter(Boolean)
+        : [String(imageTrigger.dataset.imageModalSrc || "").trim()].filter(Boolean);
+      const startIndex = Number(imageTrigger.dataset.imageModalIndex || "0");
+      openImageModal(String(imageTrigger.dataset.imageModalSrc || "").trim(), gallery, startIndex);
+      return;
+    }
+  });
+
+  imageModal?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-image-modal-close]")) {
+      closeImageModal();
+      return;
+    }
+    const navButton = event.target.closest("[data-image-modal-nav]");
+    if (navButton) {
+      stepImageModal(navButton.dataset.imageModalNav === "prev" ? -1 : 1);
+    }
+  });
+
+  imageModal?.addEventListener("touchstart", (event) => {
+    imageModalTouchStartX = Number(event.touches?.[0]?.clientX || 0);
+    imageModalTouchDeltaX = 0;
+    isDraggingImageModal = activeImageGallery.length > 1;
+  }, { passive: true });
+
+  imageModal?.addEventListener("touchmove", (event) => {
+    if (!isDraggingImageModal || activeImageGallery.length <= 1) {
+      return;
+    }
+    const touchX = Number(event.touches?.[0]?.clientX || 0);
+    updateImageModalDrag(touchX - imageModalTouchStartX);
+  }, { passive: true });
+
+  imageModal?.addEventListener("touchend", (event) => {
+    if (!isDraggingImageModal || activeImageGallery.length <= 1) {
+      return;
+    }
+    const touchEndX = Number(event.changedTouches?.[0]?.clientX || 0);
+    updateImageModalDrag(touchEndX - imageModalTouchStartX);
+    settleImageModalDrag();
+  }, { passive: true });
+
+  imageModal?.addEventListener("touchcancel", () => {
+    if (!isDraggingImageModal) {
+      return;
+    }
+    settleImageModalDrag();
+  }, { passive: true });
 
   messagesNode.addEventListener("scroll", () => {
     hideMessageMenu();
@@ -5082,7 +5849,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         return;
       }
 
-      await loadChats("chatList", { showLoading: false });
+      await loadSidebar("chatList", { showLoading: false });
       await markCurrentChatAsRead();
     } catch (error) {
       status.textContent = error.message;
@@ -5235,7 +6002,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (isSendingMessage || isRecordingVoice) return;
 
     const text = input.value.trim();
-    if (!text) return;
+    const hasAttachments = composerAttachments.length > 0;
+    if (!text && !hasAttachments) return;
 
     if (editingMessageState) {
       emitTypingStop();
@@ -5266,15 +6034,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         updateComposerActionButton();
         replaceMessageNode(messagesNode, updatedMessage, currentUser.id, chatType);
         syncMessageSelectionState(updatedMessage.id);
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         await markCurrentChatAsRead();
       } catch (error) {
         status.textContent = error.message;
         status.className = "status error";
       } finally {
+        isSendingMessage = false;
         setComposerBusyState(false);
         input.focus();
-        isSendingMessage = false;
       }
       return;
     }
@@ -5283,18 +6051,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     typingState.isSending = true;
     emitTypingStop();
     const shouldStickToBottom = isNearBottom(messagesNode);
-    const pendingMessageNode = appendPendingMessage(messagesNode, text, chatType);
+    const pendingMessageNode = appendPendingMessage(messagesNode, text, chatType, {
+      attachments: getComposerAttachmentPayload()
+    });
     pendingMessageState = { text, node: pendingMessageNode };
-    input.value = "";
-    resizeComposerInput();
-    updateComposerActionButton();
     setComposerBusyState(true);
     if (shouldStickToBottom) {
       scrollMessagesToBottom(messagesNode);
     }
     updateScrollDownButton(messagesNode, scrollDownButton);
 
-    status.textContent = "";
+    status.textContent = "Отправка...";
     status.className = "status thread-status";
 
     try {
@@ -5304,25 +6071,46 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const path = chatType === "group" ? `/groups/${chatId}/messages` : `/chats/${chatId}/messages`;
-      const sentMessage = await apiFetch(path, {
-        method: "POST",
-        body: JSON.stringify({
+      let requestBody;
+      if (hasAttachments) {
+        const compressedImages = await Promise.all(
+          composerAttachments.map((attachment) => compressImage(attachment.file))
+        );
+        const formData = new FormData();
+        formData.append("text", text);
+        if (replyMessageState?.messageId) {
+          formData.append("reply_to_id", String(replyMessageState.messageId));
+        }
+        compressedImages.forEach((file) => {
+          formData.append("images[]", file, file.name || "photo.jpg");
+        });
+        requestBody = formData;
+      } else {
+        requestBody = JSON.stringify({
           text,
           reply_to_id: replyMessageState?.messageId || null
-        })
+        });
+      }
+
+      const sentMessage = await apiFetch(path, {
+        method: "POST",
+        body: requestBody
       });
 
       removePendingMessage(pendingMessageNode);
       pendingMessageState = null;
+      input.value = "";
+      resizeComposerInput();
+      clearComposerAttachments();
       appendMessage(messagesNode, sentMessage, currentUser.id, chatType);
       syncMessageSelectionState(sentMessage.id);
+      await loadThread();
       if (shouldStickToBottom) {
         scrollMessagesToBottom(messagesNode);
       }
 
       if (!hadChatId && chatType !== "group") {
-        await loadChats("chatList", { showLoading: false });
-        await loadThread();
+        await loadSidebar("chatList", { showLoading: false });
         await markCurrentChatAsRead();
         connectRealtime();
       }
@@ -5337,10 +6125,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         pendingMessageState = null;
       }
       typingState.isSending = false;
+      isSendingMessage = false;
       setComposerBusyState(false);
       updateComposerActionButton();
       input.focus();
-      isSendingMessage = false;
       updateScrollDownButton(messagesNode, scrollDownButton);
     }
   });
@@ -5378,6 +6166,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   updateComposerActionButton();
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && imageModal && !imageModal.hidden) {
+      closeImageModal();
+      return;
+    }
+    if (event.key === "ArrowLeft" && imageModal && !imageModal.hidden) {
+      stepImageModal(-1);
+      return;
+    }
+    if (event.key === "ArrowRight" && imageModal && !imageModal.hidden) {
+      stepImageModal(1);
+      return;
+    }
     if (event.key === "Escape" && stickerPickerPopup && !stickerPickerPopup.hidden) {
       hideStickerPicker();
       return;

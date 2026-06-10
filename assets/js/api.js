@@ -81,8 +81,19 @@ function getDirectChatDraftRoute(userId) {
   return `/chat/user/${encodeURIComponent(String(userId))}`;
 }
 
-function getGroupChatRoute(groupId) {
+function getGroupChatRoute(groupId, serverId = null) {
+  if (serverId) {
+    return getServerChannelRoute(serverId, groupId);
+  }
   return `/group/${encodeURIComponent(String(groupId))}`;
+}
+
+function getServerRoute(serverId) {
+  return `/server/${encodeURIComponent(String(serverId))}`;
+}
+
+function getServerChannelRoute(serverId, groupId) {
+  return `/server/${encodeURIComponent(String(serverId))}/channel/${encodeURIComponent(String(groupId))}`;
 }
 
 function getInviteRoute(token) {
@@ -102,9 +113,16 @@ function getCurrentRouteInfo() {
   const directUserId = segments[0] === "chat" && segments[1] === "user" && segments[2]
     ? segments[2]
     : params.get("user_id");
+  const isServerChannelRoute = segments[0] === "server" && segments[1] && segments[2] === "channel" && segments[3];
+  const isServerRoute = segments[0] === "server" && segments[1] && !isServerChannelRoute;
+  const serverId = segments[0] === "server" && segments[1]
+    ? segments[1]
+    : params.get("server_id");
   const groupId = segments[0] === "group" && segments[1]
     ? segments[1]
-    : params.get("id");
+    : isServerChannelRoute
+      ? segments[3]
+      : params.get("id");
 
   let page = "unknown";
   let chatType = null;
@@ -132,9 +150,11 @@ function getCurrentRouteInfo() {
   } else if (segments[0] === "chat" || segments[0] === "chat.html") {
     page = "direct-chat";
     chatType = "direct";
-  } else if (segments[0] === "group" || segments[0] === "group_chat.html") {
+  } else if (segments[0] === "group" || segments[0] === "group_chat.html" || isServerChannelRoute) {
     page = "group-chat";
     chatType = "group";
+  } else if (isServerRoute) {
+    page = "server";
   } else if (segments[0] === "invite" && segments[1]) {
     page = "invite";
   }
@@ -145,7 +165,8 @@ function getCurrentRouteInfo() {
     pathname: normalizedPath,
     segments,
     chatId: page === "group-chat" ? groupId : directChatId,
-    userId: page === "direct-chat" ? directUserId : null
+    userId: page === "direct-chat" ? directUserId : null,
+    serverId
   };
 }
 

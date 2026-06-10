@@ -313,6 +313,156 @@ def _ensure_group_invites(conn):
         """, (group["id"], token, group["owner_id"]))
 
 
+def _ensure_server_tables(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS servers (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                description TEXT NULL,
+                owner_id INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS server_members (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL,
+                user_id INT NOT NULL,
+                is_admin TINYINT(1) NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_server_member (server_id, user_id),
+                INDEX idx_server_members_server_id (server_id),
+                INDEX idx_server_members_user_id (user_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS server_categories (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                position INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_server_categories_server_id (server_id),
+                INDEX idx_server_categories_server_position (server_id, position)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS server_channels (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL,
+                category_id INT NOT NULL,
+                group_id INT NOT NULL,
+                position INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_server_channel_group (group_id),
+                INDEX idx_server_channels_server_id (server_id),
+                INDEX idx_server_channels_category_id (category_id),
+                INDEX idx_server_channels_server_category_position (server_id, category_id, position)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+
+        cursor.execute("""
+            SELECT TABLE_NAME, COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = %s
+              AND TABLE_NAME IN ('server_categories', 'server_channels', 'server_members', 'servers')
+        """, (DB_NAME,))
+        existing = {}
+        for table_name, column_name in cursor.fetchall() or []:
+            existing.setdefault(table_name, set()).add(column_name)
+
+        if "invite_code" not in existing.get("servers", set()):
+            cursor.execute("""
+                ALTER TABLE servers
+                ADD COLUMN invite_code VARCHAR(255) NULL AFTER owner_id
+            """)
+
+        if "is_admin" not in existing.get("server_members", set()):
+            cursor.execute("""
+                ALTER TABLE server_members
+                ADD COLUMN is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER user_id
+            """)
+        if "role" not in existing.get("server_members", set()):
+            cursor.execute("""
+                ALTER TABLE server_members
+                ADD COLUMN role VARCHAR(32) NOT NULL DEFAULT 'member' AFTER is_admin
+            """)
+        cursor.execute("""
+            UPDATE server_members
+            SET
+                is_admin = CASE
+                    WHEN COALESCE(role, 'member') IN ('owner', 'admin') THEN 1
+                    ELSE COALESCE(is_admin, 0)
+                END,
+                role = CASE
+                    WHEN COALESCE(is_admin, 0) = 1 AND COALESCE(role, '') NOT IN ('owner', 'admin') THEN 'admin'
+                    WHEN COALESCE(role, '') = '' THEN 'member'
+                    ELSE role
+                END
+        """)
+
+        if "title" not in existing.get("server_categories", set()):
+            cursor.execute("""
+                ALTER TABLE server_categories
+                ADD COLUMN title VARCHAR(255) NULL AFTER server_id
+            """)
+        if "name" not in existing.get("server_categories", set()):
+            cursor.execute("""
+                ALTER TABLE server_categories
+                ADD COLUMN name VARCHAR(255) NULL AFTER title
+            """)
+        if "created_by" not in existing.get("server_categories", set()):
+            cursor.execute("""
+                ALTER TABLE server_categories
+                ADD COLUMN created_by INT NULL AFTER position
+            """)
+        cursor.execute("""
+            UPDATE server_categories
+            SET
+                title = COALESCE(NULLIF(title, ''), name),
+                name = COALESCE(NULLIF(name, ''), title)
+            WHERE title IS NULL OR title = '' OR name IS NULL OR name = ''
+        """)
+
+        if "title" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN title VARCHAR(255) NULL AFTER group_id
+            """)
+        if "name" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN name VARCHAR(255) NULL AFTER title
+            """)
+        if "slug" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN slug VARCHAR(255) NULL AFTER name
+            """)
+        if "created_by" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN created_by INT NULL AFTER position
+            """)
+        if "legacy_room_id" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN legacy_room_id INT NULL AFTER created_by
+            """)
+        cursor.execute("""
+            UPDATE server_channels
+            SET
+                title = COALESCE(NULLIF(title, ''), name),
+                name = COALESCE(NULLIF(name, ''), title),
+                slug = COALESCE(NULLIF(slug, ''), title, name)
+            WHERE title IS NULL OR title = '' OR name IS NULL OR name = '' OR slug IS NULL OR slug = ''
+        """)
+    finally:
+        cursor.close()
+
+
 def _ensure_contacts_alias_column(conn):
     cursor = conn.cursor(dictionary=False)
     try:
@@ -372,6 +522,27 @@ def _ensure_message_preview_columns(conn, table_name):
                 ALTER TABLE {table_name}
                 ADD COLUMN {column_name} {column_type}
             """)
+    finally:
+        cursor.close()
+
+
+def _ensure_message_attachments_table(conn):
+    cursor = conn.cursor(dictionary=False)
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                message_scope VARCHAR(16) NOT NULL,
+                message_id INT NOT NULL,
+                file_url VARCHAR(1000) NOT NULL,
+                file_name VARCHAR(255) NOT NULL,
+                mime_type VARCHAR(120) NOT NULL,
+                size INT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_message_attachments_scope_message (message_scope, message_id),
+                INDEX idx_message_attachments_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
     finally:
         cursor.close()
 
@@ -624,6 +795,8 @@ def init_db():
         _ensure_contacts_alias_column(conn)
         _ensure_message_preview_columns(conn, "messages")
         _ensure_message_preview_columns(conn, "group_messages")
+        _ensure_message_attachments_table(conn)
+        _ensure_server_tables(conn)
         _ensure_user_login_devices_table(conn)
         _ensure_users_security_columns(conn)
         _ensure_user_relations_tables(conn)

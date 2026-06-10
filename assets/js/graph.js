@@ -758,7 +758,7 @@ async function initGraphPage() {
   fillUserBadge();
   initSidebarProfile();
   bindGraphViewport();
-  await loadChats();
+  await loadSidebar();
   startChatsAutoRefresh();
   await fetchGraphData();
   buildGraphModel();

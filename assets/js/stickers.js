@@ -123,7 +123,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindLogout();
   fillUserBadge();
   initSidebarProfile();
-  await loadChats();
+  await loadSidebar();
   startChatsAutoRefresh();
 
   const createForm = document.getElementById("stickerPackCreateForm");

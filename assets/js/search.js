@@ -283,7 +283,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindLogout();
   fillUserBadge();
   initSidebarProfile();
-  await loadChats();
+  await loadSidebar();
   await loadContacts();
 
   const form = document.getElementById("searchForm");
@@ -425,7 +425,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         syncUserRelationStateFromProfile(profile);
         searchState.activeProfile = getProfileCardUser(profile);
         fillSearchUserInfoPanel(searchState.activeProfile);
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         setSearchProfileStatus(action === "mute" ? "Уведомления отключены" : "Уведомления включены", "success");
         return;
       }
@@ -451,7 +451,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         syncUserRelationStateFromProfile(profile);
         searchState.activeProfile = getProfileCardUser(profile);
         fillSearchUserInfoPanel(searchState.activeProfile);
-        await loadChats("chatList", { showLoading: false });
+        await loadSidebar("chatList", { showLoading: false });
         setSearchProfileStatus(action === "block" ? "Пользователь заблокирован" : "Пользователь разблокирован", "success");
         return;
       }

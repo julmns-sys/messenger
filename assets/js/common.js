@@ -1,11 +1,17 @@
 const chatState = {
   allChats: [],
+  allServers: [],
   refreshIntervalId: null,
-  refreshListId: null
+  refreshListId: null,
+  activeServer: null,
+  sidebarView: "chats"
 };
 const CHAT_LIST_SCROLL_KEY = "messenger:chat-list-scroll-top";
 const CHAT_TAGS_KEY = "messenger:chat-tags";
 const APP_SETTINGS_KEY = "messenger:settings";
+const SERVER_CATEGORY_STATE_KEY = "messenger:server-category-state";
+const SIDEBAR_VIEW_KEY = "messenger:sidebar-view";
+const SIDEBAR_SELECTED_SERVER_KEY = "messenger:selected-server-id";
 let chatListActionMenu = null;
 let activeChatListItem = null;
 let chatListMenuHideTimer = null;
@@ -25,6 +31,12 @@ let chatDeleteUndoCountdownTimer = null;
 let activeChatTagFilter = "all";
 const pendingDeletedChatKeys = new Set();
 let userRelationConfirmModal = null;
+let serverStructureModal = null;
+let serverSidebarActionMenu = null;
+let sidebarServerHeaderMenuHideTimer = null;
+let serverSettingsModal = null;
+let activeServerSettingsSection = "profile";
+let sidebarSwipeTransition = Promise.resolve();
 const defaultAppSettings = {
   theme: "light",
   accentColor: "#3390ec",
@@ -143,6 +155,66 @@ function isUserMutedLocally(userId) {
 
 function getChatStateKey(chatId, chatType = "direct") {
   return `${chatType}:${chatId}`;
+}
+
+function readServerCategoryUiState() {
+  const rawValue = window.localStorage.getItem(SERVER_CATEGORY_STATE_KEY);
+  if (!rawValue) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeServerCategoryUiState(state) {
+  window.localStorage.setItem(SERVER_CATEGORY_STATE_KEY, JSON.stringify(state || {}));
+}
+
+function getServerCategoryUiKey(serverId, categoryId) {
+  return `${serverId}:${categoryId}`;
+}
+
+function isServerCategoryCollapsed(serverId, categoryId) {
+  const state = readServerCategoryUiState();
+  return state[getServerCategoryUiKey(serverId, categoryId)] === true;
+}
+
+function setServerCategoryCollapsed(serverId, categoryId, collapsed) {
+  const state = readServerCategoryUiState();
+  const key = getServerCategoryUiKey(serverId, categoryId);
+  if (collapsed) {
+    state[key] = true;
+  } else {
+    delete state[key];
+  }
+  writeServerCategoryUiState(state);
+}
+
+function readStoredSidebarView() {
+  const rawValue = String(window.localStorage.getItem(SIDEBAR_VIEW_KEY) || "").trim();
+  return rawValue === "servers" || rawValue === "server-detail" ? rawValue : "chats";
+}
+
+function writeStoredSidebarView(view) {
+  const normalizedView = view === "servers" ? "servers" : view === "server-detail" ? "server-detail" : "chats";
+  window.localStorage.setItem(SIDEBAR_VIEW_KEY, normalizedView);
+}
+
+function readSelectedServerId() {
+  const rawValue = String(window.localStorage.getItem(SIDEBAR_SELECTED_SERVER_KEY) || "").trim();
+  return rawValue || null;
+}
+
+function writeSelectedServerId(serverId) {
+  if (!serverId) {
+    window.localStorage.removeItem(SIDEBAR_SELECTED_SERVER_KEY);
+    return;
+  }
+  window.localStorage.setItem(SIDEBAR_SELECTED_SERVER_KEY, String(serverId));
 }
 
 function readAppSettings() {
@@ -377,7 +449,13 @@ function applyAppSettings(settings = readAppSettings()) {
 
   const chatList = document.getElementById("chatList");
   if (chatList && Array.isArray(chatState.allChats)) {
-    renderChats(chatList, filterChats(getChatSearchQuery()));
+    if (chatState.sidebarView === "server-detail" && chatState.activeServer) {
+      renderServerSidebar(chatList, chatState.activeServer);
+    } else if (chatState.sidebarView === "servers") {
+      renderServerList(chatList, getVisibleServers());
+    } else {
+      renderChats(chatList, filterChats(getChatSearchQuery()));
+    }
   }
 }
 
@@ -2143,6 +2221,7 @@ function buildQuickActionsMenu() {
   menu.hidden = true;
   menu.innerHTML = `
     <button class="quick-actions-menu-item" type="button" data-quick-action="search-user">${renderActionMenuItemContent("/assets/icons/ui/Chat_alt_add.svg", "Написать пользователю")}</button>
+    <button class="quick-actions-menu-item" type="button" data-quick-action="create-server">${renderActionMenuItemContent("/assets/icons/ui/Folder.svg", "Создать сервер")}</button>
     <button class="quick-actions-menu-item" type="button" data-quick-action="create-group">${renderActionMenuItemContent("/assets/icons/ui/group.svg", "Создать группу")}</button>
   `;
   document.body.appendChild(menu);
@@ -2182,6 +2261,812 @@ function openQuickActionsMenu(trigger, menu) {
   });
 }
 
+function buildServerStructureModal() {
+  if (serverStructureModal) {
+    return serverStructureModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "server-structure-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="server-structure-backdrop" data-server-structure-close="true"></div>
+    <div class="server-structure-card" role="dialog" aria-modal="true" aria-labelledby="serverStructureTitle">
+      <div class="server-structure-header">
+        <h3 id="serverStructureTitle">Создание</h3>
+        <button class="icon-button server-structure-close" type="button" data-server-structure-close="true" aria-label="Закрыть">
+          <img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt="">
+        </button>
+      </div>
+      <form class="server-structure-form" id="serverStructureForm">
+        <label class="label" for="serverStructureName">Название</label>
+        <input class="search-input" id="serverStructureName" type="text" maxlength="80" required>
+        <div class="server-structure-description-wrap" id="serverStructureDescriptionWrap" hidden>
+          <label class="label" for="serverStructureDescription">Описание</label>
+          <textarea class="thread-group-edit-textarea" id="serverStructureDescription" rows="4" placeholder="Коротко о сервере"></textarea>
+        </div>
+        <div class="status" id="serverStructureStatus"></div>
+        <div class="server-structure-actions">
+          <button class="button button-secondary" type="button" data-server-structure-close="true">Отмена</button>
+          <button class="button" id="serverStructureSubmit" type="submit">Создать</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  serverStructureModal = modal;
+
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-server-structure-close='true']")) {
+      closeServerStructureModal();
+    }
+  });
+
+  modal.querySelector("#serverStructureForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const mode = modal.dataset.mode || "";
+    const nameInput = modal.querySelector("#serverStructureName");
+    const descriptionInput = modal.querySelector("#serverStructureDescription");
+    const statusNode = modal.querySelector("#serverStructureStatus");
+    const submitButton = modal.querySelector("#serverStructureSubmit");
+    const title = nameInput?.value.trim() || "";
+    const description = descriptionInput?.value.trim() || "";
+    if (!title) {
+      if (statusNode) {
+        statusNode.textContent = "Название обязательно";
+        statusNode.className = "status error";
+      }
+      return;
+    }
+
+    if (submitButton) {
+      submitButton.disabled = true;
+    }
+    if (statusNode) {
+      statusNode.textContent = "Сохраняем...";
+      statusNode.className = "status";
+    }
+
+    try {
+      if (mode === "server") {
+        const data = await apiFetch("/servers", {
+          method: "POST",
+          body: JSON.stringify({
+            title,
+            description
+          })
+        });
+        closeServerStructureModal();
+        const serverId = data?.server_id || data?.server?.id;
+        const groupId = data?.group_id || data?.server?.default_channel_id;
+        if (serverId) {
+          writeSelectedServerId(serverId);
+          writeStoredSidebarView("server-detail");
+        }
+        if (serverId && groupId) {
+          window.location.href = getServerChannelRoute(serverId, groupId);
+          return;
+        }
+        if (serverId) {
+          window.location.href = getServerRoute(serverId);
+        }
+        return;
+      }
+
+      if (mode === "category") {
+        const serverId = modal.dataset.serverId;
+        await apiFetch(`/servers/${encodeURIComponent(serverId)}/categories`, {
+          method: "POST",
+          body: JSON.stringify({ title })
+        });
+        closeServerStructureModal();
+        await loadSidebar("chatList", { showLoading: false });
+        return;
+      }
+
+      if (mode === "category-rename") {
+        const serverId = modal.dataset.serverId;
+        const categoryId = modal.dataset.categoryId;
+        await apiFetch(`/servers/${encodeURIComponent(serverId)}/categories/${encodeURIComponent(categoryId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title })
+        });
+        closeServerStructureModal();
+        await loadSidebar("chatList", { showLoading: false });
+        return;
+      }
+
+      if (mode === "channel") {
+        const serverId = modal.dataset.serverId;
+        const categoryId = modal.dataset.categoryId;
+        const data = await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels`, {
+          method: "POST",
+          body: JSON.stringify({
+            title,
+            category_id: Number(categoryId)
+          })
+        });
+        closeServerStructureModal();
+        const groupId = data?.group_id || data?.id;
+        if (serverId && groupId) {
+          window.location.href = getServerChannelRoute(serverId, groupId);
+          return;
+        }
+      }
+
+      if (mode === "channel-rename") {
+        const serverId = modal.dataset.serverId;
+        const groupId = modal.dataset.groupId;
+        const data = await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(groupId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title })
+        });
+        closeServerStructureModal();
+        const nextGroupId = data?.group_id || groupId;
+        await loadSidebar("chatList", { showLoading: false });
+        const route = getCurrentRouteInfo();
+        if (String(route.serverId || "") === String(serverId) && String(route.chatId || "") === String(groupId)) {
+          window.location.replace(getServerChannelRoute(serverId, nextGroupId));
+        }
+        return;
+      }
+    } catch (error) {
+      if (statusNode) {
+        statusNode.textContent = error.message;
+        statusNode.className = "status error";
+      }
+    } finally {
+      if (submitButton) {
+        submitButton.disabled = false;
+      }
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && serverStructureModal && !serverStructureModal.hidden) {
+      closeServerStructureModal();
+    }
+  });
+
+  return modal;
+}
+
+function closeServerStructureModal() {
+  if (!serverStructureModal) {
+    return;
+  }
+  serverStructureModal.hidden = true;
+}
+
+function openServerStructureModal(mode, options = {}) {
+  const modal = buildServerStructureModal();
+  const titleNode = modal.querySelector("#serverStructureTitle");
+  const nameInput = modal.querySelector("#serverStructureName");
+  const descriptionWrap = modal.querySelector("#serverStructureDescriptionWrap");
+  const descriptionInput = modal.querySelector("#serverStructureDescription");
+  const statusNode = modal.querySelector("#serverStructureStatus");
+  const submitButton = modal.querySelector("#serverStructureSubmit");
+
+  modal.dataset.mode = mode;
+  modal.dataset.serverId = options.serverId ? String(options.serverId) : "";
+  modal.dataset.categoryId = options.categoryId ? String(options.categoryId) : "";
+  modal.dataset.groupId = options.groupId ? String(options.groupId) : "";
+  modal.hidden = false;
+
+  if (titleNode) {
+    titleNode.textContent = mode === "server"
+      ? "Создать сервер"
+      : mode === "category-rename"
+        ? "Переименовать категорию"
+        : mode === "channel-rename"
+          ? "Переименовать канал"
+      : mode === "category"
+        ? "Создать категорию"
+        : "Создать канал";
+  }
+  if (submitButton) {
+    submitButton.textContent = mode === "category-rename" || mode === "channel-rename" ? "Сохранить" : "Создать";
+    submitButton.disabled = false;
+  }
+  if (statusNode) {
+    statusNode.textContent = "";
+    statusNode.className = "status";
+  }
+  if (nameInput) {
+    nameInput.value = options.initialTitle || "";
+    nameInput.placeholder = mode === "server"
+      ? "Например, Product Team"
+      : mode === "category-rename"
+        ? "Например, Разработка"
+        : mode === "channel-rename"
+          ? "Например, general"
+      : mode === "category"
+        ? "Например, Разработка"
+        : "Например, general";
+  }
+  if (descriptionWrap) {
+    descriptionWrap.hidden = mode !== "server";
+  }
+  if (descriptionInput) {
+    descriptionInput.value = "";
+  }
+  nameInput?.focus();
+}
+
+function getServerSettingsSections() {
+  return [
+    { id: "profile", label: "Профиль сервера" },
+    { id: "members", label: "Участники" },
+    { id: "roles", label: "Роли" },
+    { id: "bans", label: "Баны" },
+    { id: "access", label: "Доступ" }
+  ];
+}
+
+function renderServerSettingsProfileSection(server = {}) {
+  return `
+    <section class="server-settings-section-card">
+      <header class="server-settings-content-head">
+        <div>
+          <h2>Профиль сервера</h2>
+          <p>Основные данные сервера и публичное описание.</p>
+        </div>
+      </header>
+      <div class="server-settings-form-grid">
+        <div class="server-settings-avatar-row">
+          <div class="server-settings-avatar-preview">${escapeHtml(initials(server?.title || "Сервер"))}</div>
+          <div class="server-settings-avatar-copy">
+            <strong>Иконка сервера</strong>
+            <span>Загрузка изображения будет подключена отдельно.</span>
+          </div>
+          <button class="button button-secondary server-settings-disabled-button" type="button" disabled>Загрузить изображение</button>
+        </div>
+        <label class="server-settings-field">
+          <span class="label">Название сервера</span>
+          <input class="search-input" id="serverSettingsTitleInput" type="text" maxlength="80" value="${escapeHtml(server?.title || "")}">
+        </label>
+        <label class="server-settings-field">
+          <span class="label">Описание сервера</span>
+          <textarea class="thread-group-edit-textarea server-settings-textarea" id="serverSettingsDescriptionInput" rows="5" placeholder="Опишите назначение сервера">${escapeHtml(server?.description || "")}</textarea>
+        </label>
+        <div class="server-settings-actions">
+          <button class="button" type="button" data-server-settings-save-profile="true">Сохранить изменения</button>
+        </div>
+        <div class="status" id="serverSettingsProfileStatus"></div>
+      </div>
+    </section>
+  `;
+}
+
+function renderServerSettingsMembersSection(server = {}) {
+  return `
+    <section class="server-settings-section-card">
+      <header class="server-settings-content-head">
+        <div>
+          <h2>Участники</h2>
+          <p>Список участников сервера и их текущий статус.</p>
+        </div>
+      </header>
+      <div class="server-settings-members-table-wrap">
+        <div class="server-settings-members-table">
+          <div class="server-settings-members-row is-head">
+            <div>Участник</div>
+            <div>Роль</div>
+            <div>Статус</div>
+            <div>Действия</div>
+          </div>
+          <div class="server-settings-members-empty">
+            <strong>Здесь будет список участников сервера.</strong>
+            <span>Для таблицы участников нужен отдельный endpoint. Сервер: ${escapeHtml(server?.title || "Сервер")}.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderServerSettingsRolesSection() {
+  return `
+    <section class="server-settings-section-card">
+      <header class="server-settings-content-head">
+        <div>
+          <h2>Роли</h2>
+          <p>Управляйте ролями и правами внутри сервера.</p>
+        </div>
+        <button class="button button-secondary server-settings-disabled-button" type="button" disabled>Создать роль</button>
+      </header>
+      <div class="server-settings-placeholder">
+        <strong>Здесь будут роли сервера.</strong>
+        <span>Структура секции готова, подключение серверной логики ролей можно сделать следующим шагом.</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderServerSettingsBansSection() {
+  return `
+    <section class="server-settings-section-card">
+      <header class="server-settings-content-head">
+        <div>
+          <h2>Баны</h2>
+          <p>Пользователи, которым закрыт доступ к серверу.</p>
+        </div>
+      </header>
+      <div class="server-settings-placeholder">
+        <strong>Пока нет забаненных пользователей.</strong>
+        <span>Когда появится API банов, список можно будет подключить без смены layout.</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderServerSettingsAccessSection(server = {}) {
+  return `
+    <section class="server-settings-section-card">
+      <header class="server-settings-content-head">
+        <div>
+          <h2>Доступ</h2>
+          <p>Как пользователи могут попасть на сервер и какие правила действуют.</p>
+        </div>
+      </header>
+      <div class="server-settings-access-grid">
+        <div class="server-settings-choice-group">
+          <span class="label">Как можно присоединиться к вашему серверу?</span>
+          <div class="server-settings-choice-list">
+            <button class="server-settings-choice-chip is-active" type="button">Только по приглашению</button>
+            <button class="server-settings-choice-chip" type="button">По заявке</button>
+            <button class="server-settings-choice-chip" type="button">Публичный</button>
+          </div>
+        </div>
+        <div class="settings-item server-settings-inline-item">
+          <div class="settings-copy">
+            <strong>Сервер с возрастным ограничением</strong>
+            <span>Отметьте, если сервер содержит контент 18+.</span>
+          </div>
+          <label class="settings-switch" aria-label="Сервер с возрастным ограничением">
+            <input type="checkbox">
+            <span class="settings-switch-ui"></span>
+          </label>
+        </div>
+        <div class="settings-item server-settings-inline-item">
+          <div class="settings-copy">
+            <strong>Правила сервера</strong>
+            <span>Добавьте базовые правила для участников сервера ${escapeHtml(server?.title || "")}.</span>
+          </div>
+          <label class="settings-switch" aria-label="Правила сервера">
+            <input type="checkbox" checked>
+            <span class="settings-switch-ui"></span>
+          </label>
+        </div>
+        <div class="server-settings-rules-box">
+          <label class="server-settings-field">
+            <span class="label">Новое правило</span>
+            <div class="server-settings-rule-input-row">
+              <input class="search-input" type="text" placeholder="Введите правило" disabled>
+              <button class="button button-secondary server-settings-disabled-button" type="button" disabled>Добавить</button>
+            </div>
+          </label>
+          <div class="server-settings-rule-list">
+            <div class="server-settings-rule-item">1. Уважайте участников сервера.</div>
+            <div class="server-settings-rule-item">2. Не публикуйте спам и вредоносные ссылки.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderServerSettingsContent(server = {}, section = "profile") {
+  if (section === "members") {
+    return renderServerSettingsMembersSection(server);
+  }
+  if (section === "roles") {
+    return renderServerSettingsRolesSection(server);
+  }
+  if (section === "bans") {
+    return renderServerSettingsBansSection(server);
+  }
+  if (section === "access") {
+    return renderServerSettingsAccessSection(server);
+  }
+  return renderServerSettingsProfileSection(server);
+}
+
+function renderServerSettingsModal(server = {}) {
+  if (!serverSettingsModal) {
+    return;
+  }
+
+  const navNode = serverSettingsModal.querySelector("[data-server-settings-nav]");
+  const contentNode = serverSettingsModal.querySelector("[data-server-settings-content]");
+  const captionNode = serverSettingsModal.querySelector("[data-server-settings-server-name]");
+
+  if (captionNode) {
+    captionNode.textContent = server?.title || "Сервер";
+  }
+
+  if (navNode) {
+    navNode.innerHTML = getServerSettingsSections().map((section) => `
+      <button
+        class="server-settings-nav-item ${activeServerSettingsSection === section.id ? "is-active" : ""}"
+        type="button"
+        data-server-settings-section="${escapeHtml(section.id)}"
+      >
+        ${escapeHtml(section.label)}
+      </button>
+    `).join("");
+  }
+
+  if (contentNode) {
+    contentNode.innerHTML = renderServerSettingsContent(server, activeServerSettingsSection);
+  }
+}
+
+function closeServerSettingsModal() {
+  if (!serverSettingsModal) {
+    return;
+  }
+  serverSettingsModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (serverSettingsModal && !serverSettingsModal.classList.contains("visible")) {
+      serverSettingsModal.hidden = true;
+    }
+  }, 180);
+}
+
+function openServerSettingsModal(section = "profile") {
+  if (!chatState.activeServer) {
+    showAppToast("Сначала откройте сервер", { type: "error" });
+    return;
+  }
+  buildServerSettingsModal();
+  activeServerSettingsSection = section;
+  renderServerSettingsModal(chatState.activeServer);
+  serverSettingsModal.hidden = false;
+  requestAnimationFrame(() => {
+    serverSettingsModal?.classList.add("visible");
+  });
+}
+
+function buildServerSettingsModal() {
+  if (serverSettingsModal) {
+    return serverSettingsModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "server-settings-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="server-settings-backdrop" data-server-settings-close="true"></div>
+    <div class="server-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="serverSettingsHeading">
+      <aside class="server-settings-sidebar">
+        <div class="server-settings-sidebar-caption">СЕРВЕР <span data-server-settings-server-name>Server</span></div>
+        <div class="server-settings-sidebar-nav" data-server-settings-nav></div>
+      </aside>
+      <section class="server-settings-content-wrap">
+        <h1 class="server-settings-shell-title" id="serverSettingsHeading">Настройки сервера</h1>
+        <button class="server-settings-close" type="button" data-server-settings-close="true" aria-label="Закрыть настройки сервера">
+          <span class="server-settings-close-icon">×</span>
+          <span class="server-settings-close-copy">ESC</span>
+        </button>
+        <div class="server-settings-content" data-server-settings-content></div>
+      </section>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  serverSettingsModal = modal;
+
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-server-settings-close='true']")) {
+      closeServerSettingsModal();
+      return;
+    }
+
+    const navButton = event.target.closest("[data-server-settings-section]");
+    if (navButton) {
+      activeServerSettingsSection = String(navButton.dataset.serverSettingsSection || "profile");
+      renderServerSettingsModal(chatState.activeServer || {});
+      return;
+    }
+
+    const saveProfileButton = event.target.closest("[data-server-settings-save-profile='true']");
+    if (saveProfileButton) {
+      const titleInput = modal.querySelector("#serverSettingsTitleInput");
+      const descriptionInput = modal.querySelector("#serverSettingsDescriptionInput");
+      const statusNode = modal.querySelector("#serverSettingsProfileStatus");
+      const nextTitle = String(titleInput?.value || "").trim();
+      const nextDescription = String(descriptionInput?.value || "").trim();
+
+      if (!nextTitle) {
+        if (statusNode) {
+          statusNode.textContent = "Название сервера обязательно";
+          statusNode.className = "status error";
+        }
+        return;
+      }
+
+      chatState.activeServer = {
+        ...(chatState.activeServer || {}),
+        title: nextTitle,
+        description: nextDescription
+      };
+      renderServerSettingsModal(chatState.activeServer);
+      setSidebarMode(chatState.sidebarView, chatState.activeServer);
+      if (statusNode) {
+        statusNode.textContent = "Изменения сохранены локально. Серверный PATCH можно подключить следующим шагом.";
+        statusNode.className = "status success";
+      }
+      showAppToast("Профиль сервера обновлён локально");
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && serverSettingsModal && !serverSettingsModal.hidden) {
+      closeServerSettingsModal();
+    }
+  });
+
+  return modal;
+}
+
+function buildServerSidebarActionMenu() {
+  if (serverSidebarActionMenu) {
+    return serverSidebarActionMenu;
+  }
+
+  const menu = document.createElement("div");
+  menu.className = "chat-list-action-menu server-sidebar-action-menu";
+  menu.hidden = true;
+  document.body.appendChild(menu);
+  serverSidebarActionMenu = menu;
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && serverSidebarActionMenu && !serverSidebarActionMenu.hidden) {
+      hideServerSidebarActionMenu();
+    }
+  });
+  window.addEventListener("resize", hideServerSidebarActionMenu);
+  return menu;
+}
+
+function hideServerSidebarActionMenu() {
+  if (!serverSidebarActionMenu) {
+    return;
+  }
+  serverSidebarActionMenu.classList.remove("visible");
+  window.setTimeout(() => {
+    if (serverSidebarActionMenu && !serverSidebarActionMenu.classList.contains("visible")) {
+      serverSidebarActionMenu.hidden = true;
+    }
+  }, 140);
+}
+
+function closeSidebarServerHeaderMenu() {
+  const trigger = document.getElementById("sidebarServerMenuTrigger");
+  const menu = document.getElementById("sidebarServerDropdown");
+  if (!menu || !trigger) {
+    return;
+  }
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.classList.remove("is-open");
+  menu.classList.remove("visible");
+  if (sidebarServerHeaderMenuHideTimer) {
+    window.clearTimeout(sidebarServerHeaderMenuHideTimer);
+  }
+  sidebarServerHeaderMenuHideTimer = window.setTimeout(() => {
+    if (!menu.classList.contains("visible")) {
+      menu.hidden = true;
+    }
+    sidebarServerHeaderMenuHideTimer = null;
+  }, 160);
+}
+
+function openSidebarServerHeaderMenu() {
+  const trigger = document.getElementById("sidebarServerMenuTrigger");
+  const menu = document.getElementById("sidebarServerDropdown");
+  if (!menu || !trigger || trigger.disabled || chatState.sidebarView !== "server-detail") {
+    return;
+  }
+
+  const canManageServer = Boolean(chatState.activeServer?.can_manage_server);
+  menu.querySelectorAll("[data-server-header-action]").forEach((button) => {
+    const action = String(button.dataset.serverHeaderAction || "");
+    const shouldDisable = !canManageServer && action !== "invite";
+    button.disabled = shouldDisable;
+  });
+
+  if (sidebarServerHeaderMenuHideTimer) {
+    window.clearTimeout(sidebarServerHeaderMenuHideTimer);
+    sidebarServerHeaderMenuHideTimer = null;
+  }
+  menu.hidden = false;
+  trigger.setAttribute("aria-expanded", "true");
+  trigger.classList.add("is-open");
+  requestAnimationFrame(() => {
+    menu.classList.add("visible");
+  });
+}
+
+function bindSidebarServerHeaderMenu() {
+  const trigger = document.getElementById("sidebarServerMenuTrigger");
+  const menu = document.getElementById("sidebarServerDropdown");
+  if (!trigger || !menu || trigger.dataset.serverHeaderMenuBound === "true") {
+    return;
+  }
+
+  trigger.dataset.serverHeaderMenuBound = "true";
+  trigger.addEventListener("click", (event) => {
+    if (chatState.sidebarView !== "server-detail" || trigger.disabled) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (menu.hidden) {
+      openSidebarServerHeaderMenu();
+      return;
+    }
+    closeSidebarServerHeaderMenu();
+  });
+
+  menu.addEventListener("click", (event) => {
+    const actionButton = event.target.closest("[data-server-header-action]");
+    if (!actionButton || actionButton.disabled) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const action = String(actionButton.dataset.serverHeaderAction || "");
+    const activeServer = chatState.activeServer;
+    const serverId = activeServer?.id;
+    closeSidebarServerHeaderMenu();
+
+    if (!serverId) {
+      return;
+    }
+
+    if (action === "invite") {
+      showAppToast("Приглашения на сервер будут доступны в следующем обновлении");
+      return;
+    }
+
+    if (action === "settings") {
+      openServerSettingsModal("profile");
+      return;
+    }
+
+    if (action === "create-category") {
+      openServerStructureModal("category", {
+        serverId
+      });
+      return;
+    }
+
+    if (action === "create-channel") {
+      const firstCategoryId = Array.isArray(activeServer?.categories) ? activeServer.categories[0]?.id : null;
+      if (!firstCategoryId) {
+        showAppToast("Сначала создайте категорию", { type: "error", duration: 1900 });
+        return;
+      }
+      openServerStructureModal("channel", {
+        serverId,
+        categoryId: firstCategoryId
+      });
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("#sidebarServerMenuTrigger") && !event.target.closest("#sidebarServerDropdown")) {
+      closeSidebarServerHeaderMenu();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      closeSidebarServerHeaderMenu();
+    }
+  });
+
+  window.addEventListener("resize", closeSidebarServerHeaderMenu);
+}
+
+function showServerSidebarActionMenu(anchor, mode, payload = {}) {
+  const menu = buildServerSidebarActionMenu();
+  const serverId = payload.serverId ? String(payload.serverId) : "";
+  const categoryId = payload.categoryId ? String(payload.categoryId) : "";
+  const groupId = payload.groupId ? String(payload.groupId) : "";
+  const targetTitle = String(payload.title || "").trim() || (mode === "category" ? "Категория" : "Канал");
+  const targetLabel = mode === "category" ? "Категория" : "Канал";
+
+  menu.dataset.mode = mode;
+  menu.dataset.serverId = serverId;
+  menu.dataset.categoryId = categoryId;
+  menu.dataset.groupId = groupId;
+  menu.dataset.title = payload.title || "";
+  menu.innerHTML = `
+    <div class="server-sidebar-action-menu-header">
+      <div class="server-sidebar-action-menu-label">${escapeHtml(targetLabel)}</div>
+      <div class="server-sidebar-action-menu-target">${escapeHtml(targetTitle)}</div>
+    </div>
+    <button type="button" data-server-sidebar-action="rename">${renderActionMenuItemContent("/assets/icons/ui/Edit_fill.svg", "Переименовать")}</button>
+    <button type="button" data-server-sidebar-action="delete" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Trash.svg", "Удалить")}</button>
+  `;
+  menu.hidden = false;
+  const menuWidth = 200;
+  const fallbackRect = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+  const pointX = Number(anchor?.clientX);
+  const pointY = Number(anchor?.clientY);
+  const left = Number.isFinite(pointX)
+    ? Math.max(12, Math.min(pointX, window.innerWidth - menuWidth - 12))
+    : Math.max(12, Math.min((fallbackRect?.right || 12) - menuWidth, window.innerWidth - menuWidth - 12));
+  const top = Number.isFinite(pointY)
+    ? Math.max(12, Math.min(pointY, window.innerHeight - 120))
+    : Math.max(12, Math.min((fallbackRect?.bottom || 12) + 8, window.innerHeight - 120));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.width = `${menuWidth}px`;
+
+  requestAnimationFrame(() => {
+    menu.classList.add("visible");
+  });
+}
+
+async function handleServerSidebarDeleteAction(mode, payload = {}) {
+  const serverId = String(payload.serverId || "");
+  const route = getCurrentRouteInfo();
+
+  if (mode === "category") {
+    const confirmed = await openUserRelationConfirmModal({
+      title: "Удалить категорию",
+      body: `Категория "${payload.title || "Категория"}" будет удалена вместе со всеми её каналами.`,
+      confirmText: "Удалить",
+      danger: true
+    });
+    if (!confirmed) {
+      return;
+    }
+    const response = await apiFetch(`/servers/${encodeURIComponent(serverId)}/categories/${encodeURIComponent(payload.categoryId)}`, {
+      method: "DELETE"
+    });
+    const deletedIds = new Set((response?.deleted_channel_ids || []).map((value) => String(value)));
+    const refreshedServer = await loadSidebar("chatList", { showLoading: false });
+    const nextChannelId = refreshedServer?.default_channel_id;
+    if (deletedIds.has(String(route.chatId || ""))) {
+      if (nextChannelId) {
+        window.location.replace(getServerChannelRoute(serverId, nextChannelId));
+      } else {
+        window.location.replace(getServerRoute(serverId));
+      }
+    }
+    return;
+  }
+
+  if (mode === "channel") {
+    const confirmed = await openUserRelationConfirmModal({
+      title: "Удалить канал",
+      body: `Канал "${payload.title || "Канал"}" будет удалён вместе со всеми сообщениями.`,
+      confirmText: "Удалить",
+      danger: true
+    });
+    if (!confirmed) {
+      return;
+    }
+    await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(payload.groupId)}`, {
+      method: "DELETE"
+    });
+    const refreshedServer = await loadSidebar("chatList", { showLoading: false });
+    const nextChannelId = refreshedServer?.default_channel_id;
+    if (String(route.chatId || "") === String(payload.groupId || "")) {
+      if (nextChannelId) {
+        window.location.replace(getServerChannelRoute(serverId, nextChannelId));
+      } else {
+        window.location.replace(getServerRoute(serverId));
+      }
+    }
+  }
+}
+
 function initQuickActionsMenu() {
   const triggers = [...document.querySelectorAll("[data-quick-actions-trigger='true']")];
   if (!triggers.length) {
@@ -2211,6 +3096,10 @@ function initQuickActionsMenu() {
     }
     if (action === "create-group") {
       window.location.href = getCreateGroupRoute();
+      return;
+    }
+    if (action === "create-server") {
+      openServerStructureModal("server");
     }
   };
 
@@ -2294,6 +3183,9 @@ function initSidebarProfile() {
   fillSidebarProfile();
   buildProfileLogoutModal();
   initQuickActionsMenu();
+  buildServerStructureModal();
+  buildServerSettingsModal();
+  buildServerSidebarActionMenu();
   initSettingsControls();
   void syncSidebarProfile();
   const route = getCurrentRouteInfo();
@@ -2303,6 +3195,106 @@ function initSidebarProfile() {
   }
 
   badge.dataset.profileBound = "true";
+  document.addEventListener("click", (event) => {
+    const categoryToggle = event.target.closest("[data-server-category-toggle]");
+    if (categoryToggle) {
+      event.preventDefault();
+      const serverId = categoryToggle.dataset.serverId;
+      const categoryId = categoryToggle.dataset.serverCategoryToggle;
+      const nextCollapsed = !isServerCategoryCollapsed(serverId, categoryId);
+      setServerCategoryCollapsed(serverId, categoryId, nextCollapsed);
+      const list = document.getElementById("chatList");
+      if (list && chatState.activeServer) {
+        renderServerSidebar(list, chatState.activeServer);
+      }
+      return;
+    }
+
+    const createCategoryTrigger = event.target.closest("[data-server-create-category]");
+    if (createCategoryTrigger) {
+      event.preventDefault();
+      openServerStructureModal("category", {
+        serverId: createCategoryTrigger.dataset.serverCreateCategory
+      });
+      return;
+    }
+
+    const createChannelTrigger = event.target.closest("[data-server-create-channel]");
+    if (createChannelTrigger) {
+      event.preventDefault();
+      openServerStructureModal("channel", {
+        serverId: createChannelTrigger.dataset.serverCreateChannel,
+        categoryId: createChannelTrigger.dataset.serverCategoryId
+      });
+      return;
+    }
+
+    const serverSidebarAction = event.target.closest("[data-server-sidebar-action]");
+    if (serverSidebarAction && serverSidebarActionMenu && !serverSidebarActionMenu.hidden) {
+      event.preventDefault();
+      const action = serverSidebarAction.dataset.serverSidebarAction;
+      const mode = serverSidebarActionMenu.dataset.mode || "";
+      const payload = {
+        serverId: serverSidebarActionMenu.dataset.serverId,
+        categoryId: serverSidebarActionMenu.dataset.categoryId,
+        groupId: serverSidebarActionMenu.dataset.groupId,
+        title: serverSidebarActionMenu.dataset.title || ""
+      };
+      hideServerSidebarActionMenu();
+      if (action === "rename") {
+        openServerStructureModal(mode === "category" ? "category-rename" : "channel-rename", {
+          serverId: payload.serverId,
+          categoryId: payload.categoryId,
+          groupId: payload.groupId,
+          initialTitle: payload.title
+        });
+        return;
+      }
+      if (action === "delete") {
+        void handleServerSidebarDeleteAction(mode, payload);
+        return;
+      }
+    }
+
+    if (serverSidebarActionMenu && !serverSidebarActionMenu.hidden) {
+      if (!event.target.closest(".server-sidebar-action-menu")) {
+        hideServerSidebarActionMenu();
+      }
+    }
+  });
+
+  document.addEventListener("contextmenu", (event) => {
+    if (!chatState.activeServer?.can_manage_server) {
+      return;
+    }
+    const channelNode = event.target.closest("[data-server-channel-context]");
+    if (channelNode) {
+      event.preventDefault();
+      showServerSidebarActionMenu({
+        clientX: event.clientX,
+        clientY: event.clientY
+      }, "channel", {
+        serverId: channelNode.dataset.serverId,
+        groupId: channelNode.dataset.serverChannelContext,
+        title: channelNode.dataset.serverChannelTitle || ""
+      });
+      return;
+    }
+
+    const categoryNode = event.target.closest("[data-server-category-context]");
+    if (categoryNode) {
+      event.preventDefault();
+      showServerSidebarActionMenu({
+        clientX: event.clientX,
+        clientY: event.clientY
+      }, "category", {
+        serverId: categoryNode.dataset.serverId,
+        categoryId: categoryNode.dataset.serverCategoryContext,
+        title: categoryNode.dataset.serverCategoryTitle || ""
+      });
+    }
+  });
+
   badge.addEventListener("click", () => {
     setSidebarProfileOpen(sidebar, true);
     setSidebarProfileEditMode(sidebar, false);
@@ -2445,7 +3437,18 @@ function getChatSearchQuery() {
 }
 
 function getVisibleChats() {
-  return chatState.allChats.filter((chat) => !pendingDeletedChatKeys.has(getChatStateKey(chat.id, chat.type || "direct")));
+  return chatState.allChats.filter((chat) => (
+    (chat?.type || "direct") !== "server"
+    && !pendingDeletedChatKeys.has(getChatStateKey(chat.id, chat.type || "direct"))
+  ));
+}
+
+function getVisibleServers() {
+  return chatState.allServers.filter((server) => !pendingDeletedChatKeys.has(getChatStateKey(server.id, "server")));
+}
+
+function getChatFilterMode() {
+  return chatState.sidebarView === "servers" || chatState.sidebarView === "server-detail" ? "servers" : activeChatTagFilter;
 }
 
 function getChatTagFilterOptions() {
@@ -2471,6 +3474,9 @@ function getChatTagFilterOptions() {
 }
 
 function isChatMatchingActiveTagFilter(chat) {
+  if (chatState.sidebarView === "servers") {
+    return false;
+  }
   if (activeChatTagFilter === "all") {
     return true;
   }
@@ -2507,7 +3513,19 @@ function renderChatTagFilters(listId = "chatList") {
   const tags = getChatTagFilterOptions();
   normalizeActiveChatTagFilter();
   container.dataset.listId = listId;
+  const activeFilter = getChatFilterMode();
   container.innerHTML = [
+    `
+      <button
+        type="button"
+        class="chat-tag-filter-chip chat-tag-filter-chip-icon"
+        data-chat-tag-filter="servers"
+        aria-label="Серверы"
+        title="Серверы"
+      >
+        <img class="icon-asset" src="/assets/icons/ui/Folder.svg" alt="">
+      </button>
+    `,
     '<button type="button" class="chat-tag-filter-chip" data-chat-tag-filter="all">Все</button>',
     '<button type="button" class="chat-tag-filter-chip" data-chat-tag-filter="untagged">Без тега</button>',
     ...tags.map((tag) => {
@@ -2524,8 +3542,68 @@ function renderChatTagFilters(listId = "chatList") {
   ].join("");
 
   container.querySelectorAll("[data-chat-tag-filter]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.chatTagFilter === activeChatTagFilter);
+    button.classList.toggle("active", button.dataset.chatTagFilter === activeFilter);
   });
+}
+
+function waitForSidebarSwipeTransition(element, expectedClassName, timeoutMs = 320) {
+  return new Promise((resolve) => {
+    if (!element) {
+      resolve();
+      return;
+    }
+
+    let resolved = false;
+    const finish = () => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      element.removeEventListener("transitionend", handleTransitionEnd);
+      window.clearTimeout(timerId);
+      resolve();
+    };
+    const handleTransitionEnd = (event) => {
+      if (event.target !== element || !element.classList.contains(expectedClassName)) {
+        return;
+      }
+      finish();
+    };
+    const timerId = window.setTimeout(finish, timeoutMs);
+    element.addEventListener("transitionend", handleTransitionEnd);
+  });
+}
+
+async function animateSidebarContentSwipe(direction, updateContent) {
+  const run = async () => {
+    const content = document.getElementById("sidebarMainContent");
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    if (!content || prefersReducedMotion || !getAppSetting("animations")) {
+      return updateContent();
+    }
+
+    const normalizedDirection = direction === "right" ? "right" : "left";
+    content.dataset.swipeDirection = normalizedDirection;
+    content.classList.remove("is-swiping-in", "is-ready");
+    content.classList.add("is-swiping-out");
+    await waitForSidebarSwipeTransition(content, "is-swiping-out", 260);
+
+    await updateContent();
+
+    content.classList.remove("is-swiping-out");
+    content.classList.add("is-swiping-in");
+    await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+    content.classList.add("is-ready");
+    await waitForSidebarSwipeTransition(content, "is-ready", 280);
+    content.classList.remove("is-swiping-in", "is-ready");
+    delete content.dataset.swipeDirection;
+  };
+
+  sidebarSwipeTransition = sidebarSwipeTransition
+    .catch(() => {})
+    .then(run);
+
+  return sidebarSwipeTransition;
 }
 
 function bindChatTagFilters(listId = "chatList") {
@@ -2539,14 +3617,33 @@ function bindChatTagFilters(listId = "chatList") {
   let dragStartScrollLeft = 0;
   let isDragging = false;
 
-  container.addEventListener("click", (event) => {
+  container.addEventListener("click", async (event) => {
     const trigger = event.target.closest("[data-chat-tag-filter]");
     if (!trigger) {
       return;
     }
 
-    activeChatTagFilter = trigger.dataset.chatTagFilter || "all";
-    updateChatListView(container.dataset.listId || listId);
+    const nextFilter = trigger.dataset.chatTagFilter || "all";
+    if (nextFilter === "servers") {
+      writeStoredSidebarView("servers");
+      await animateSidebarContentSwipe("left", async () => {
+        await loadServers(container.dataset.listId || listId, { showLoading: false });
+      });
+      return;
+    }
+
+    activeChatTagFilter = nextFilter;
+    const previousSidebarMode = chatState.sidebarView;
+    const route = getCurrentRouteInfo();
+    writeStoredSidebarView("chats");
+    writeSelectedServerId(null);
+    chatState.activeServer = null;
+    setSidebarMode("chats");
+    if (route.serverId || previousSidebarMode === "server-detail") {
+      window.location.replace(getChatsRoute());
+      return;
+    }
+    await loadChats(container.dataset.listId || listId, { showLoading: false, renderList: true });
   });
 
   container.addEventListener("wheel", (event) => {
@@ -2600,7 +3697,70 @@ function updateChatListView(listId = "chatList") {
 
   bindChatTagFilters(listId);
   renderChatTagFilters(listId);
+  if (chatState.sidebarView === "servers") {
+    renderServerList(list, getVisibleServers());
+    return;
+  }
   renderChats(list, filterChats(getChatSearchQuery()));
+}
+
+function renderChatListSkeleton(count = 8) {
+  return `
+    <div class="chat-list-skeleton" aria-hidden="true">
+      ${Array.from({ length: count }, (_, index) => `
+        <div class="chat-skeleton-item">
+          <span class="chat-skeleton-avatar skeleton"></span>
+          <div class="chat-skeleton-body">
+            <span class="skeleton skeleton-text lg" style="width:${index % 3 === 0 ? 58 : index % 3 === 1 ? 72 : 64}%"></span>
+            <span class="skeleton skeleton-text" style="width:${index % 2 === 0 ? 82 : 67}%"></span>
+          </div>
+          <div class="chat-skeleton-side">
+            <span class="skeleton skeleton-text sm chat-skeleton-time"></span>
+            <span class="chat-skeleton-badge skeleton"></span>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderServerSidebarSkeleton() {
+  return `
+    <div class="chat-list-skeleton" aria-hidden="true">
+      <div class="server-sidebar-shell">
+        <div class="server-sidebar-head">
+          <div class="server-sidebar-copy" style="width:100%">
+            <span class="skeleton skeleton-text sm" style="width:24%"></span>
+            <span class="skeleton skeleton-text lg" style="width:56%; margin-top:8px"></span>
+            <span class="skeleton skeleton-text" style="width:72%; margin-top:8px"></span>
+          </div>
+          <span class="chat-skeleton-badge skeleton" style="width:42px; height:42px"></span>
+        </div>
+        <div class="server-category-card">
+          <div class="server-category-head">
+            <span class="skeleton skeleton-text" style="width:34%"></span>
+            <span class="chat-skeleton-badge skeleton" style="width:38px; height:38px"></span>
+          </div>
+          <div class="server-channel-list">
+            <div class="chat-skeleton-item" style="padding:10px 0">
+              <span class="chat-skeleton-avatar skeleton" style="width:34px;height:34px"></span>
+              <div class="chat-skeleton-body">
+                <span class="skeleton skeleton-text" style="width:44%"></span>
+                <span class="skeleton skeleton-text sm" style="width:68%"></span>
+              </div>
+            </div>
+            <div class="chat-skeleton-item" style="padding:10px 0">
+              <span class="chat-skeleton-avatar skeleton" style="width:34px;height:34px"></span>
+              <div class="chat-skeleton-body">
+                <span class="skeleton skeleton-text" style="width:52%"></span>
+                <span class="skeleton skeleton-text sm" style="width:61%"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function scheduleChatListRefresh(listId = "chatList", delayMs = 0) {
@@ -2610,7 +3770,7 @@ function scheduleChatListRefresh(listId = "chatList", delayMs = 0) {
 
   chatListRefreshTimer = window.setTimeout(() => {
     chatListRefreshTimer = null;
-    loadChats(listId, { showLoading: false });
+    loadSidebar(listId, { showLoading: false });
   }, Math.max(0, delayMs));
 }
 
@@ -2638,6 +3798,7 @@ function initChatListRealtime(listId = "chatList") {
   chatListRealtimeSocket.on("chat_deleted", refreshSidebar);
   chatListRealtimeSocket.on("group_updated", refreshSidebar);
   chatListRealtimeSocket.on("group_members_updated", refreshSidebar);
+  chatListRealtimeSocket.on("server_structure_updated", refreshSidebar);
   chatListRealtimeSocket.on("presence_updated", refreshSidebar);
   chatListRealtimeSocket.on("inbox_message", (payload) => {
     handleGlobalIncomingNotification(payload);
@@ -2646,16 +3807,20 @@ function initChatListRealtime(listId = "chatList") {
 }
 
 async function loadChats(listId = "chatList", options = {}) {
-  const { showLoading = true } = options;
+  const { showLoading = true, renderList = true } = options;
   const list = document.getElementById(listId);
   if (!list) return [];
 
+  if (renderList) {
+    setSidebarMode("chats");
+  }
+  bindSidebarServerNavigation(listId);
   bindChatListScrollPersistence(listId);
   bindChatListActions(listId);
   initChatListRealtime(listId);
 
-  if (showLoading) {
-    list.innerHTML = '<div class="empty-state">Загрузка чатов...</div>';
+  if (showLoading && renderList) {
+    list.innerHTML = renderChatListSkeleton();
   }
 
   try {
@@ -2663,11 +3828,17 @@ async function loadChats(listId = "chatList", options = {}) {
     const normalizedChats = Array.isArray(chats) ? chats : chats.items || [];
     chatState.allChats = normalizedChats;
     syncUserRelationStateFromChats(normalizedChats);
+    if (renderList) {
+      writeStoredSidebarView("chats");
+      setSidebarMode("chats");
+    }
     bindChatSearch(listId);
-    updateChatListView(listId);
+    if (renderList) {
+      updateChatListView(listId);
+    }
     return normalizedChats;
   } catch (error) {
-    if (showLoading) {
+    if (showLoading && renderList) {
       list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
       chatState.allChats = [];
       return [];
@@ -2675,6 +3846,344 @@ async function loadChats(listId = "chatList", options = {}) {
 
     return chatState.allChats;
   }
+}
+
+function getServerSidebarPreviewText(lastMessage) {
+  return getChatListPreviewText(lastMessage);
+}
+
+function getServerSidebarQuery() {
+  return document.querySelector(".sidebar-search .search-input")?.value.trim().toLowerCase() || "";
+}
+
+function renderServerList(list, servers = []) {
+  if (!list) {
+    return;
+  }
+
+  const query = getServerSidebarQuery();
+  const route = getCurrentRouteInfo();
+  const selectedServerId = String(route.serverId || readSelectedServerId() || "");
+  const filteredServers = !query
+    ? servers
+    : servers.filter((server) => {
+      const haystack = [
+        server?.title,
+        server?.description,
+        getServerSidebarPreviewText(server?.last_message)
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+
+  if (!filteredServers.length) {
+    list.innerHTML = `
+      <div class="server-list-shell">
+        <div class="empty-state">
+          ${query ? "Попробуйте изменить запрос" : "У вас пока нет серверов"}
+        </div>
+        ${query ? "" : '<button class="button" type="button" data-quick-action-server-create="true">Создать сервер</button>'}
+      </div>
+    `;
+    return;
+  }
+
+  list.innerHTML = `
+    <div class="server-list-shell">
+      ${filteredServers.map((server) => {
+        const unreadCount = Math.max(0, Number(server?.unread_count || 0));
+        const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
+        const active = String(server?.id || "") === selectedServerId;
+        const preview = server?.description || getServerSidebarPreviewText(server?.last_message);
+        const href = server?.default_channel_id
+          ? getServerChannelRoute(server.id, server.default_channel_id)
+          : getServerRoute(server.id);
+        return `
+          <a class="chat-item ${active ? "active" : ""}" href="${href}" data-server-open-id="${escapeHtml(String(server.id || ""))}" data-chat-id="${escapeHtml(String(server.id || ""))}" data-chat-type="server">
+            <div class="avatar server-avatar">
+              ${escapeHtml(initials(server?.title || "Сервер"))}
+              <span class="chat-kind-badge chat-kind-badge-icon" aria-hidden="true"><img class="icon-asset" src="/assets/icons/ui/Folder.svg" alt=""></span>
+            </div>
+            <div class="chat-meta">
+              <div class="chat-main">
+                <div class="chat-title-row">
+                  <h3 class="chat-name">${escapeHtml(server?.title || "Сервер")}</h3>
+                </div>
+                <p class="chat-preview">${escapeHtml(preview || "Нет активности")}</p>
+              </div>
+              <div class="chat-side${unreadCount > 0 ? " has-unread" : ""}">
+                <span class="time">${escapeHtml(formatDate(server?.updated_at || server?.started_at))}</span>
+                ${unreadCount > 0 ? `<span class="chat-unread-wrap"><span class="chat-unread-badge">${escapeHtml(unreadLabel)}</span></span>` : ""}
+              </div>
+            </div>
+          </a>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderServerSidebar(list, server) {
+  if (!list) {
+    return;
+  }
+
+  const route = getCurrentRouteInfo();
+  const currentGroupId = String(route.chatId || "");
+  const query = getServerSidebarQuery();
+  const categories = Array.isArray(server?.categories) ? server.categories : [];
+  const filteredCategories = categories
+    .map((category) => {
+      const normalizedCategoryTitle = String(category?.title || "").toLowerCase();
+      const channels = Array.isArray(category?.channels) ? category.channels : [];
+      const filteredChannels = !query
+        ? channels
+        : channels.filter((channel) => {
+          const preview = getServerSidebarPreviewText(channel.last_message);
+          return [
+            channel?.title,
+            preview,
+            category?.title
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+        });
+      if (query && !filteredChannels.length && !normalizedCategoryTitle.includes(query)) {
+        return null;
+      }
+      return {
+        ...category,
+        channels: filteredChannels,
+        isCollapsed: query ? false : isServerCategoryCollapsed(server?.id, category?.id)
+      };
+    })
+    .filter(Boolean);
+
+  if (!categories.length) {
+    list.innerHTML = `
+      <div class="server-sidebar-shell">
+        <div class="empty-state">${server?.can_manage_server ? "В этом сервере пока нет категорий. Создайте первую." : "В этом сервере пока нет категорий."}</div>
+      </div>
+    `;
+    return;
+  }
+
+  if (!filteredCategories.length) {
+    list.innerHTML = `
+      <div class="server-sidebar-shell">
+        <div class="empty-state">Ничего не найдено</div>
+      </div>
+    `;
+    return;
+  }
+
+  list.innerHTML = `
+    <div class="server-sidebar-shell">
+      <div class="server-category-list">
+        ${filteredCategories.map((category) => `
+          <section
+            class="server-category-card ${category.isCollapsed ? "is-collapsed" : ""}"
+            data-server-category-context="${escapeHtml(String(category.id || ""))}"
+            data-server-id="${escapeHtml(String(server.id || ""))}"
+            data-server-category-title="${escapeHtml(category.title || "")}"
+          >
+            <header class="server-category-head">
+              <button
+                class="server-category-toggle"
+                type="button"
+                data-server-category-toggle="${escapeHtml(String(category.id || ""))}"
+                data-server-id="${escapeHtml(String(server.id || ""))}"
+                aria-expanded="${category.isCollapsed ? "false" : "true"}"
+              >
+                <img class="icon-asset server-category-chevron" src="${category.isCollapsed ? "/assets/icons/ui/Expand_right.svg" : "/assets/icons/ui/Expand_down.svg"}" alt="">
+                <h4 class="server-category-title">${escapeHtml(category.title || "Категория")}</h4>
+              </button>
+              ${server?.can_manage_server ? `
+                <div class="server-category-actions">
+                  <button class="icon-button server-category-action" type="button" data-server-create-channel="${escapeHtml(String(server.id || ""))}" data-server-category-id="${escapeHtml(String(category.id || ""))}" aria-label="Создать канал">
+                    <img class="icon-asset" src="/assets/icons/ui/Add_round.svg" alt="">
+                  </button>
+                </div>
+              ` : ""}
+            </header>
+            <div class="server-channel-list" ${category.isCollapsed ? 'hidden' : ''}>
+              ${(Array.isArray(category.channels) ? category.channels : []).map((channel) => {
+                const unreadCount = Math.max(0, Number(channel?.unread_count || 0));
+                const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
+                return `
+                  <div
+                    class="server-channel-row ${String(channel?.id || "") === currentGroupId ? "active" : ""}"
+                    data-server-channel-context="${escapeHtml(String(channel.id || ""))}"
+                    data-server-id="${escapeHtml(String(server.id || ""))}"
+                    data-server-channel-title="${escapeHtml(channel.title || "")}"
+                  >
+                    <a
+                      class="server-channel-item ${String(channel?.id || "") === currentGroupId ? "active" : ""}"
+                      href="${getServerChannelRoute(server.id, channel.id)}"
+                      data-chat-id="${escapeHtml(String(channel.id || ""))}"
+                      data-chat-type="group"
+                    >
+                      <span class="server-channel-icon" aria-hidden="true">
+                        <img class="icon-asset" src="/assets/icons/ui/comment.svg" alt="">
+                      </span>
+                      <span class="server-channel-copy">
+                        <strong class="server-channel-name">${escapeHtml(channel.title || "channel")}</strong>
+                        <span class="server-channel-preview">${escapeHtml(getServerSidebarPreviewText(channel.last_message))}</span>
+                      </span>
+                      ${unreadCount > 0 ? `<span class="chat-unread-badge">${escapeHtml(unreadLabel)}</span>` : ""}
+                    </a>
+                  </div>
+                `;
+              }).join("") || '<div class="empty-state compact">Каналов пока нет</div>'}
+            </div>
+          </section>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderServerDetail(list, server) {
+  renderServerSidebar(list, server);
+}
+
+async function loadServerDetail(serverId, listId = "chatList", options = {}) {
+  const { showLoading = true } = options;
+  const list = document.getElementById(listId);
+  if (!list || !serverId) {
+    return null;
+  }
+
+  bindChatTagFilters(listId);
+  if (chatState.activeServer && String(chatState.activeServer.id || "") === String(serverId)) {
+    setSidebarMode("server-detail", chatState.activeServer);
+  }
+  if (showLoading) {
+    list.innerHTML = renderServerSidebarSkeleton();
+  }
+
+  try {
+    const server = await apiFetch(`/servers/${encodeURIComponent(serverId)}`);
+    chatState.activeServer = server;
+    writeSelectedServerId(serverId);
+    writeStoredSidebarView("server-detail");
+    setSidebarMode("server-detail", server);
+    renderServerDetail(list, server);
+    renderChatTagFilters(listId);
+    return server;
+  } catch (error) {
+    chatState.activeServer = null;
+    list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    return null;
+  }
+}
+
+async function loadServers(listId = "chatList", options = {}) {
+  const { showLoading = true } = options;
+  const list = document.getElementById(listId);
+  if (!list) {
+    return [];
+  }
+
+  bindChatTagFilters(listId);
+  bindSidebarServerNavigation(listId);
+  bindChatSearch(listId);
+  if (showLoading) {
+    list.innerHTML = renderChatListSkeleton(6);
+  }
+
+  try {
+    const servers = await apiFetch("/servers");
+    const normalizedServers = Array.isArray(servers) ? servers : servers.items || [];
+    chatState.allServers = normalizedServers;
+    chatState.activeServer = null;
+    writeStoredSidebarView("servers");
+    setSidebarMode("servers");
+    renderServerList(list, normalizedServers);
+    renderChatTagFilters(listId);
+    return normalizedServers;
+  } catch (error) {
+    chatState.allServers = [];
+    list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    return [];
+  }
+}
+
+async function loadSidebar(listId = "chatList", options = {}) {
+  const route = getCurrentRouteInfo();
+  const preferredView = readStoredSidebarView();
+  if (route.serverId) {
+    if (preferredView === "servers") {
+      await loadChats(listId, {
+        showLoading: false,
+        renderList: false
+      });
+      return loadServers(listId, options);
+    }
+    if (preferredView === "chats") {
+      chatState.activeServer = null;
+      setSidebarMode("chats");
+      return loadChats(listId, options);
+    }
+    await loadChats(listId, {
+      showLoading: false,
+      renderList: false
+    });
+    return loadServerDetail(route.serverId, listId, options);
+  }
+
+  chatState.activeServer = null;
+  if (preferredView === "servers") {
+    return loadServers(listId, options);
+  }
+  if (preferredView === "server-detail" && readSelectedServerId()) {
+    await loadChats(listId, {
+      showLoading: false,
+      renderList: false
+    });
+    return loadServerDetail(readSelectedServerId(), listId, options);
+  }
+
+  setSidebarMode("chats");
+  return loadChats(listId, options);
+}
+
+function bindSidebarServerNavigation(listId = "chatList") {
+  const list = document.getElementById(listId);
+  const backButton = document.getElementById("sidebarServerBack");
+  bindSidebarServerHeaderMenu();
+
+  if (backButton && backButton.dataset.serverBackBound !== "true") {
+    backButton.dataset.serverBackBound = "true";
+    backButton.addEventListener("click", async () => {
+      writeStoredSidebarView("servers");
+      await loadServers(listId, { showLoading: false });
+    });
+  }
+
+  if (!list || list.dataset.sidebarServerActionsBound === "true") {
+    return;
+  }
+
+  list.dataset.sidebarServerActionsBound = "true";
+  list.addEventListener("click", (event) => {
+    const createServerTrigger = event.target.closest("[data-quick-action-server-create='true']");
+    if (createServerTrigger) {
+      event.preventDefault();
+      openServerStructureModal("server");
+      return;
+    }
+
+    const serverLink = event.target.closest("[data-server-open-id]");
+    if (serverLink) {
+      writeSelectedServerId(serverLink.dataset.serverOpenId);
+      writeStoredSidebarView("server-detail");
+    }
+  });
 }
 
 function filterChats(query) {
@@ -2709,6 +4218,14 @@ function bindChatSearch(listId = "chatList") {
 
   input.dataset.chatSearchBound = "true";
   input.addEventListener("input", () => {
+    if (chatState.sidebarView === "server-detail" && chatState.activeServer) {
+      renderServerSidebar(list, chatState.activeServer);
+      return;
+    }
+    if (chatState.sidebarView === "servers") {
+      renderServerList(list, getVisibleServers());
+      return;
+    }
     updateChatListView(listId);
   });
 }
@@ -2985,6 +4502,10 @@ function showChatListActionMenu(targetNode, clientX, clientY) {
 
   activeChatListItem = targetNode;
   const chatType = targetNode?.dataset.chatType || "direct";
+  if (chatType === "server") {
+    hideChatListActionMenu();
+    return;
+  }
   menu.innerHTML = chatType === "direct"
     ? `
       <button type="button" data-action="edit-tag">${renderActionMenuItemContent("/assets/icons/ui/Lable_fill.svg", "Изменить тег")}</button>
@@ -3207,7 +4728,7 @@ function openGroupOwnerLeaveModal(groupContext, payload, listId = "chatList") {
         });
         closeGroupDeleteConfirmModal();
         closeGroupOwnerLeaveModal();
-        await loadChats(listId, { showLoading: false });
+        await loadSidebar(listId, { showLoading: false });
         if (groupContext.currentPath === "group-chat" && String(groupContext.currentId) === String(groupContext.groupId)) {
           window.location.href = getChatsRoute();
         }
@@ -3251,7 +4772,7 @@ function openGroupOwnerLeaveModal(groupContext, payload, listId = "chatList") {
         body: JSON.stringify({ new_owner_id: selectedMemberId })
       });
       closeGroupOwnerLeaveModal();
-      await loadChats(listId, { showLoading: false });
+      await loadSidebar(listId, { showLoading: false });
       if (groupContext.currentPath === "group-chat" && String(groupContext.currentId) === String(groupContext.groupId)) {
         window.location.href = getChatsRoute();
       }
@@ -3322,7 +4843,7 @@ async function flushPendingChatDelete(reason = "commit", listId = "chatList") {
       method: "DELETE"
     });
     pendingDeletedChatKeys.delete(state.chatKey);
-    await loadChats(state.listId || listId, { showLoading: false });
+    await loadSidebar(state.listId || listId, { showLoading: false });
 
     const { currentPath, currentId } = getActiveDirectChatContext();
     if (currentPath === "direct-chat" && String(currentId) === String(state.chatId)) {
@@ -3346,7 +4867,7 @@ async function clearGroupHistoryFromList(chatItem, listId = "chatList") {
   await apiFetch(`/groups/${encodeURIComponent(groupId)}/messages`, {
     method: "DELETE"
   });
-  await loadChats(listId, { showLoading: false });
+  await loadSidebar(listId, { showLoading: false });
 
   const { currentPath, currentId } = getActiveThreadContext();
   if (currentPath === "group-chat" && String(currentId) === String(groupId)) {
@@ -3378,7 +4899,7 @@ async function leaveGroupFromList(chatItem, listId = "chatList") {
     : await response.text();
 
   if (response.ok) {
-    await loadChats(listId, { showLoading: false });
+    await loadSidebar(listId, { showLoading: false });
     const { currentPath, currentId } = getActiveThreadContext();
     if (currentPath === "group-chat" && String(currentId) === String(groupId)) {
       window.location.href = getChatsRoute();
@@ -3581,7 +5102,7 @@ function startChatsAutoRefresh(listId = "chatList", intervalMs = 2000) {
   stopChatsAutoRefresh();
   chatState.refreshListId = listId;
   chatState.refreshIntervalId = window.setInterval(() => {
-    loadChats(listId, { showLoading: false });
+    loadSidebar(listId, { showLoading: false });
   }, intervalMs);
 }
 
@@ -3593,6 +5114,67 @@ window.addEventListener("pagehide", () => {
 window.addEventListener("beforeunload", () => {
   saveChatListScroll(document.getElementById("chatList"));
 });
+
+function setSidebarMode(mode = "chats", server = null) {
+  const sidebar = document.querySelector(".sidebar");
+  const tagBar = document.getElementById("chatTagFilters");
+  const searchWrap = document.querySelector(".sidebar-search");
+  const searchInput = document.querySelector(".sidebar-search .search-input");
+  const brandNode = document.getElementById("sidebarBrand");
+  const subtitleNode = document.getElementById("sidebarServerSubtitle");
+  const userBadge = document.getElementById("currentUserBadge");
+  const actionsNode = document.getElementById("sidebarActions");
+  const backButton = document.getElementById("sidebarServerBack");
+  const brandTrigger = document.getElementById("sidebarServerMenuTrigger");
+  const normalizedMode = mode === "servers" ? "servers" : mode === "server-detail" ? "server-detail" : "chats";
+  const isChatsMode = normalizedMode === "chats";
+  const isServerListMode = normalizedMode === "servers";
+  const isServerDetailMode = normalizedMode === "server-detail";
+
+  chatState.sidebarView = normalizedMode;
+  sidebar?.classList.toggle("is-server-detail", isServerDetailMode);
+  if (tagBar) {
+    tagBar.hidden = isServerDetailMode;
+  }
+  if (searchWrap) {
+    searchWrap.hidden = false;
+  }
+  if (searchInput) {
+    searchInput.placeholder = isChatsMode
+      ? "Ваши чаты"
+      : isServerListMode
+        ? "Ваши серверы"
+        : `Каналы ${server?.title ? `в ${server.title}` : "сервера"}`;
+  }
+  if (brandNode) {
+    brandNode.textContent = isServerDetailMode ? (server?.title || "Сервер") : "/Chatik";
+  }
+  if (brandTrigger) {
+    brandTrigger.disabled = !isServerDetailMode;
+    brandTrigger.classList.toggle("is-interactive", isServerDetailMode);
+    brandTrigger.setAttribute("aria-expanded", "false");
+    if (!isServerDetailMode) {
+      closeSidebarServerHeaderMenu();
+    }
+  }
+  if (subtitleNode) {
+    const subtitle = isServerDetailMode
+      ? String(server?.description || "").trim() || "Структура сервера"
+      : "";
+    subtitleNode.textContent = subtitle;
+    subtitleNode.hidden = !isServerDetailMode;
+  }
+  if (userBadge) {
+    userBadge.hidden = isServerDetailMode;
+  }
+  if (actionsNode) {
+    actionsNode.hidden = isServerDetailMode;
+  }
+  if (backButton) {
+    backButton.hidden = !isServerDetailMode;
+    backButton.style.display = isServerDetailMode ? "inline-flex" : "none";
+  }
+}
 
 function renderChats(list, chats) {
   const previousScrollTop = list.scrollTop;
@@ -3614,16 +5196,24 @@ function renderChats(list, chats) {
 
   list.innerHTML = chats
     .map((chat) => {
-      const href = chat.type === "group" ? getGroupChatRoute(chat.id) : getDirectChatRoute(chat.id);
+      const isGroup = chat.type === "group";
+      const isServer = chat.type === "server";
+      const href = isServer
+        ? getServerRoute(chat.id)
+        : isGroup
+          ? getGroupChatRoute(chat.id, chat.server_id || null)
+          : getDirectChatRoute(chat.id);
       const preview = getChatListPreviewText(chat.last_message);
       const name = chat.title || chat.username || chat.name || "Чат";
-      const isGroup = chat.type === "group";
       const customTagMarkup = getChatTagMarkup(chat.id, chat.type || "direct");
-      const isOnline = !isGroup && Boolean(chat.is_online);
+      const isOnline = !isGroup && !isServer && Boolean(chat.is_online);
       const active = route.page === "group-chat"
-        ? isGroup && String(chat.id) === String(route.chatId)
+        ? (isServer && String(chat.id) === String(route.serverId))
+          || (isGroup && String(chat.id) === String(route.chatId))
         : route.page === "direct-chat"
-          ? !isGroup && String(chat.id) === String(route.chatId)
+          ? !isGroup && !isServer && String(chat.id) === String(route.chatId)
+          : route.page === "server"
+            ? isServer && String(chat.id) === String(route.serverId)
           : false;
       const unreadCount = Math.max(0, Number(chat.unread_count || 0));
       const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
@@ -3637,9 +5227,15 @@ function renderChats(list, chats) {
 
       return `
         <a class="chat-item ${active ? "active" : ""}" href="${href}" data-chat-id="${escapeHtml(String(chat.id))}" data-chat-type="${escapeHtml(chat.type || "direct")}">
-          <div class="avatar ${isGroup ? "group-avatar" : ""}">
+          <div class="avatar ${isServer ? "server-avatar" : isGroup ? "group-avatar" : ""}">
             ${escapeHtml(initials(name))}
-            ${isGroup ? '<span class="chat-kind-badge" aria-hidden="true">👥</span>' : isOnline ? '<span class="presence-dot online" aria-hidden="true"></span>' : ""}
+            ${isServer
+              ? '<span class="chat-kind-badge chat-kind-badge-icon" aria-hidden="true"><img class="icon-asset" src="/assets/icons/ui/Folder.svg" alt=""></span>'
+              : isGroup
+                ? '<span class="chat-kind-badge chat-kind-badge-icon" aria-hidden="true"><img class="icon-asset" src="/assets/icons/ui/group.svg" alt=""></span>'
+                : isOnline
+                  ? '<span class="presence-dot online" aria-hidden="true"></span>'
+                  : ""}
           </div>
           <div class="chat-meta">
             <div class="chat-main">

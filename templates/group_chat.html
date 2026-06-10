@@ -9,7 +9,7 @@
         </div>
         <div class="thread-header-main">
           <div class="thread-header-title-row">
-            <h1 class="chat-name" id="chatTitle">Группа</h1>
+            <h1 class="chat-name" id="chatTitle">Загрузка...</h1>
             <span class="desktop-only" id="chatPresenceDesktop"></span>
           </div>
           <p class="muted desktop-only" id="chatSubtitleDesktop">Загрузка...</p>
@@ -35,7 +35,7 @@
       <div class="composer-wrap">
         <form class="composer" id="messageForm" novalidate>
           {% if photo_messages_enabled and global_file_uploads_enabled %}
-            <input id="photoMessageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+            <input id="photoMessageInput" type="file" accept="image/*" multiple hidden>
             <button class="composer-attach-button" id="photoMessageButton" type="button" aria-label="Прикрепить фотографию" title="Прикрепить фото"><img class="icon-asset" src="/assets/icons/ui/Upload.svg" alt=""></button>
           {% endif %}
           {% if global_stickers_enabled %}
@@ -44,6 +44,7 @@
             </button>
           {% endif %}
           <div class="composer-input-shell">
+            <div class="composer-attachments" id="composerAttachments" hidden></div>
             <textarea class="textarea composer-textarea" id="messageInput" placeholder="Сообщение в группу..." rows="1" required></textarea>
           </div>
           <button class="send-button composer-action-button" type="submit" aria-label="Записать голосовое сообщение" title="Записать голосовое">

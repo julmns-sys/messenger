@@ -2,11 +2,36 @@
   <div class="sidebar-slider">
     <div class="sidebar-panel sidebar-panel-main">
       <div class="sidebar-header">
-        <div>
-          <div class="brand">/Chatik</div>
-          <button class="current-user-badge" id="currentUserBadge" type="button" aria-label="Открыть профиль"></button>
+        <div class="sidebar-brand-block">
+          <button class="icon-button page-back sidebar-server-back" id="sidebarServerBack" type="button" aria-label="Назад к серверам" hidden style="display:none" aria-hidden="true"></button>
+          <div class="sidebar-title-block">
+            <button class="sidebar-server-menu-trigger" id="sidebarServerMenuTrigger" type="button" aria-haspopup="menu" aria-expanded="false" disabled>
+              <span class="brand" id="sidebarBrand">/Chatik</span>
+              <span class="sidebar-server-menu-chevron" aria-hidden="true"></span>
+            </button>
+            <div class="muted sidebar-server-subtitle" id="sidebarServerSubtitle" hidden></div>
+            <div class="server-header-dropdown" id="sidebarServerDropdown" hidden>
+              <button class="server-header-dropdown-item" type="button" data-server-header-action="invite">
+                <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Chat_alt_add.svg" alt="">
+                <span class="menu-item-label">Пригласить на сервер</span>
+              </button>
+              <button class="server-header-dropdown-item" type="button" data-server-header-action="settings">
+                <img class="menu-item-icon icon-asset" src="/assets/icons/app/settings.svg" alt="">
+                <span class="menu-item-label">Настройки сервера</span>
+              </button>
+              <button class="server-header-dropdown-item" type="button" data-server-header-action="create-channel">
+                <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Add_round.svg" alt="">
+                <span class="menu-item-label">Создать канал</span>
+              </button>
+              <button class="server-header-dropdown-item" type="button" data-server-header-action="create-category">
+                <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Folder.svg" alt="">
+                <span class="menu-item-label">Создать категорию</span>
+              </button>
+            </div>
+            <button class="current-user-badge" id="currentUserBadge" type="button" aria-label="Открыть профиль"></button>
+          </div>
         </div>
-        <div class="sidebar-actions">
+        <div class="sidebar-actions" id="sidebarActions">
           {% if sidebar_action_mode == "back" %}
             <a class="icon-button page-back" href="{{ sidebar_back_href }}" aria-label="{{ sidebar_back_label }}"></a>
           {% else %}
@@ -16,11 +41,13 @@
           {% endif %}
         </div>
       </div>
-      <div class="sidebar-search">
-        <input class="search-input" type="text" placeholder="Ваши чаты">
+      <div class="sidebar-main-content" id="sidebarMainContent">
+        <div class="sidebar-search">
+          <input class="search-input" id="sidebarSearchInput" type="text" placeholder="Ваши чаты">
+        </div>
+        <div class="chat-tag-filter-bar" id="chatTagFilters" aria-label="Фильтр по тегам"></div>
+        <div class="chat-list" id="chatList"></div>
       </div>
-      <div class="chat-tag-filter-bar" id="chatTagFilters" aria-label="Фильтр по тегам"></div>
-      <div class="chat-list" id="chatList"></div>
     </div>
 
     <div class="sidebar-panel sidebar-panel-profile" aria-hidden="true">

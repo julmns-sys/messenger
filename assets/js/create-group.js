@@ -229,7 +229,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindLogout();
   fillUserBadge();
   initSidebarProfile();
-  await loadChats();
+  await loadSidebar();
   renderSelectedMembers();
   await loadContacts();
   updateCreateGroupButtonState();

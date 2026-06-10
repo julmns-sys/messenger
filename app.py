@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+
 import re
 import shutil
 import smtplib
 from threading import Lock
 import uuid
+import json
 from email.message import EmailMessage
 from email.utils import formataddr
 from urllib.parse import urlparse
@@ -39,11 +41,13 @@ MESSAGE_URL_PATTERN = re.compile(r"((?:https?://|www\.)[^\s<]+)", flags=re.IGNOR
 BASE_DIR = Path(__file__).resolve().parent
 VOICE_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "voice"
 PHOTO_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "photos"
+MESSAGE_IMAGE_UPLOAD_DIR = BASE_DIR / "assets" / "uploads" / "messages"
 STICKER_LIBRARY_DIR = BASE_DIR / "assets" / "stickers"
 STICKER_UPLOAD_DIR = STICKER_LIBRARY_DIR / "uploads" / "packs"
 DEFAULT_STICKER_MANIFEST_PATH = STICKER_LIBRARY_DIR / "default" / "manifest.json"
 VOICE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PHOTO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MESSAGE_IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 STICKER_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PHOTO_MESSAGES_ENABLED = str(os.getenv("PHOTO_MESSAGES_ENABLED", "1") or "1").strip().lower() not in {"0", "false", "off", "no"}
 VOICE_EXTENSIONS_BY_MIME = {
@@ -66,7 +70,13 @@ STICKER_EXTENSIONS_BY_MIME = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
+MESSAGE_IMAGE_EXTENSIONS_BY_MIME = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 MAX_STICKER_FILE_BYTES = 1 * 1024 * 1024
+MAX_MESSAGE_IMAGE_FILE_BYTES = 5 * 1024 * 1024
 SYSTEM_USERNAME = "chatik"
 SYSTEM_NAME = "Chatik"
 SYSTEM_EMAIL = "chatik@system.local"
@@ -485,6 +495,160 @@ def serialize_message_image(message):
     }
 
 
+def message_has_image_attachments(message):
+    attachments = row_value(message, "_attachments", None)
+    if isinstance(attachments, list) and attachments:
+        return True
+    return bool(row_value(message, "has_attachments", False))
+
+
+def serialize_message_attachments(message):
+    attachments = row_value(message, "_attachments", None)
+    if isinstance(attachments, list) and attachments:
+        return [
+            {
+                "id": int(row_value(attachment, "id", 0) or 0),
+                "url": row_value(attachment, "file_url", "") or row_value(attachment, "url", ""),
+                "file_name": row_value(attachment, "file_name", "") or "",
+                "mime_type": row_value(attachment, "mime_type", "") or "image/jpeg",
+                "size": int(row_value(attachment, "size", 0) or 0),
+                "created_at": format_timestamp(row_value(attachment, "created_at"))
+            }
+            for attachment in attachments
+            if row_value(attachment, "file_url", "") or row_value(attachment, "url", "")
+        ]
+
+    legacy_image = serialize_message_image(message)
+    if not legacy_image:
+        return []
+
+    return [{
+        "id": None,
+        "url": legacy_image["url"],
+        "file_name": "",
+        "mime_type": legacy_image["mime_type"],
+        "size": 0,
+        "created_at": format_timestamp(row_value(message, "created_at"))
+    }]
+
+
+def fetch_message_attachments_map(conn, message_scope, message_ids):
+    normalized_scope = str(message_scope or "").strip().lower()
+    normalized_ids = []
+    seen_ids = set()
+    for raw_message_id in message_ids or []:
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError):
+            continue
+        if message_id <= 0 or message_id in seen_ids:
+            continue
+        seen_ids.add(message_id)
+        normalized_ids.append(message_id)
+
+    if normalized_scope not in {"direct", "group"} or not normalized_ids:
+        return {}
+
+    placeholders = ",".join("%s" for _ in normalized_ids)
+    rows = conn.execute(f"""
+        SELECT id, message_id, file_url, file_name, mime_type, size, created_at
+        FROM message_attachments
+        WHERE message_scope = %s
+          AND message_id IN ({placeholders})
+        ORDER BY id ASC
+    """, [normalized_scope, *normalized_ids]).fetchall()
+
+    attachments_map = {message_id: [] for message_id in normalized_ids}
+    for row in rows:
+        attachments_map.setdefault(int(row["message_id"]), []).append(row)
+    return attachments_map
+
+
+def attach_message_attachments(conn, message_scope, messages):
+    if isinstance(messages, dict):
+        message_list = [messages]
+    else:
+        message_list = [message for message in (messages or []) if message]
+
+    if not message_list:
+        return messages
+
+    attachments_map = fetch_message_attachments_map(conn, message_scope, [row_value(message, "id", 0) for message in message_list])
+    for message in message_list:
+        message["_attachments"] = attachments_map.get(int(row_value(message, "id", 0) or 0), [])
+        message["has_attachments"] = bool(message["_attachments"])
+    return messages
+
+
+def insert_message_attachments(conn, message_scope, message_id, attachments):
+    rows = []
+    normalized_scope = str(message_scope or "").strip().lower()
+    try:
+        normalized_message_id = int(message_id)
+    except (TypeError, ValueError):
+        return
+
+    for attachment in attachments or []:
+        file_url = str(attachment.get("url") or "").strip()
+        if not file_url:
+            continue
+        rows.append((
+            normalized_scope,
+            normalized_message_id,
+            file_url,
+            str(attachment.get("file_name") or "photo")[:255],
+            str(attachment.get("mime_type") or "image/jpeg")[:120],
+            int(attachment.get("size") or 0)
+        ))
+
+    if not rows:
+        return
+
+    conn.executemany("""
+        INSERT INTO message_attachments (
+            message_scope,
+            message_id,
+            file_url,
+            file_name,
+            mime_type,
+            size
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, rows)
+
+
+def fetch_attachment_urls_for_messages(conn, message_scope, message_ids):
+    attachments_map = fetch_message_attachments_map(conn, message_scope, message_ids)
+    urls = []
+    for attachments in attachments_map.values():
+        for attachment in attachments:
+            file_url = str(row_value(attachment, "file_url", "") or "").strip()
+            if file_url:
+                urls.append(file_url)
+    return urls
+
+
+def delete_message_attachments(conn, message_scope, message_ids):
+    normalized_scope = str(message_scope or "").strip().lower()
+    normalized_ids = []
+    for raw_message_id in message_ids or []:
+        try:
+            message_id = int(raw_message_id)
+        except (TypeError, ValueError):
+            continue
+        if message_id > 0:
+            normalized_ids.append(message_id)
+    if normalized_scope not in {"direct", "group"} or not normalized_ids:
+        return
+
+    placeholders = ",".join("%s" for _ in normalized_ids)
+    conn.execute(f"""
+        DELETE FROM message_attachments
+        WHERE message_scope = %s
+          AND message_id IN ({placeholders})
+    """, [normalized_scope, *normalized_ids])
+
+
 def serialize_message_sticker(message):
     sticker_id = row_value(message, "sticker_id")
     sticker_path = row_value(message, "sticker_asset_path", "")
@@ -660,6 +824,8 @@ def get_forwarded_dialog_item_text(message):
         return "Фотография"
     if message_type == "sticker":
         return "Стикер"
+    if message_has_image_attachments(message) and not (row_value(message, "text", "") or "").strip():
+        return "Фотография"
     return row_value(message, "text", "") or ""
 
 
@@ -698,6 +864,8 @@ def build_reply_preview_payload(reply_message):
         return None
 
     reply_message_type = row_value(reply_message, "message_type", "text") or "text"
+    if reply_message_type == "text" and message_has_image_attachments(reply_message):
+        reply_message_type = "photo"
     if reply_message_type == "voice":
         reply_preview_text = "Голосовое сообщение"
     elif reply_message_type == "photo":
@@ -730,6 +898,11 @@ def get_direct_reply_target(conn, chat_id, reply_to_message_id):
             m.id,
             m.text,
             m.message_type,
+            EXISTS (
+                SELECT 1
+                FROM message_attachments ma
+                WHERE ma.message_scope = 'direct' AND ma.message_id = m.id
+            ) AS has_attachments,
             u.name AS sender_name
         FROM messages m
         JOIN users u ON u.id = m.sender_id
@@ -751,6 +924,11 @@ def get_group_reply_target(conn, group_id, reply_to_message_id):
             gm.id,
             gm.text,
             gm.message_type,
+            EXISTS (
+                SELECT 1
+                FROM message_attachments ma
+                WHERE ma.message_scope = 'group' AND ma.message_id = gm.id
+            ) AS has_attachments,
             u.name AS sender_name
         FROM group_messages gm
         JOIN users u ON u.id = gm.sender_id
@@ -889,6 +1067,46 @@ def save_photo_upload(uploaded_file):
     return {
         "url": f"/assets/uploads/photos/{filename}",
         "mime_type": mime_type
+    }
+
+
+def save_message_image_upload(uploaded_file):
+    if not uploaded_file or not uploaded_file.filename:
+        raise ValueError("Файл фотографии не найден")
+
+    mime_type = str(uploaded_file.mimetype or "").split(";", 1)[0].strip().lower()
+    if mime_type not in MESSAGE_IMAGE_EXTENSIONS_BY_MIME:
+        raise ValueError("Поддерживаются только JPG, PNG и WEBP")
+
+    stream = getattr(uploaded_file, "stream", None)
+    if stream is not None:
+        current_position = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        file_size = int(stream.tell() or 0)
+        stream.seek(current_position)
+    else:
+        file_size = 0
+
+    if file_size <= 0:
+        raise ValueError("Файл фотографии пустой")
+    if file_size > MAX_MESSAGE_IMAGE_FILE_BYTES:
+        raise ValueError("Размер изображения не должен превышать 5 MB")
+
+    original_name = Path(str(uploaded_file.filename or "photo")).name or "photo"
+    extension = MESSAGE_IMAGE_EXTENSIONS_BY_MIME[mime_type]
+    filename = f"{uuid.uuid4().hex}{extension}"
+    destination_path = MESSAGE_IMAGE_UPLOAD_DIR / filename
+    try:
+        uploaded_file.save(destination_path)
+    except OSError as error:
+        print(f"[MESSAGE IMAGE UPLOAD] failed to save {destination_path}: {error}", flush=True)
+        raise RuntimeError("Не удалось сохранить изображение") from error
+
+    return {
+        "url": f"/assets/uploads/messages/{filename}",
+        "file_name": original_name[:255],
+        "mime_type": mime_type,
+        "size": file_size
     }
 
 
@@ -1063,6 +1281,17 @@ def iter_photo_file_paths(image_urls):
         yield PHOTO_UPLOAD_DIR / filename
 
 
+def iter_message_image_file_paths(image_urls):
+    for image_url in image_urls or []:
+        value = str(image_url or "").strip()
+        if not value or not value.startswith("/assets/uploads/messages/"):
+            continue
+        filename = Path(value).name
+        if not filename:
+            continue
+        yield MESSAGE_IMAGE_UPLOAD_DIR / filename
+
+
 def iter_sticker_file_paths(sticker_urls):
     for sticker_url in sticker_urls or []:
         value = str(sticker_url or "").strip()
@@ -1085,6 +1314,15 @@ def remove_voice_files(audio_urls):
 
 def remove_photo_files(image_urls):
     for file_path in iter_photo_file_paths(image_urls):
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError:
+            continue
+
+
+def remove_message_image_files(image_urls):
+    for file_path in iter_message_image_file_paths(image_urls):
         try:
             if file_path.exists():
                 file_path.unlink()
@@ -1652,10 +1890,15 @@ def delete_group_with_dependencies(conn, group_id):
         FROM group_messages
         WHERE group_id = %s
     """, (group_id,)).fetchall()
+    group_message_ids = [row["id"] for row in group_message_rows]
+    attachment_urls = fetch_attachment_urls_for_messages(conn, "group", group_message_ids)
     remove_voice_files(row["audio_url"] for row in group_message_rows)
     remove_photo_files(row["image_url"] for row in group_message_rows)
+    remove_message_image_files(attachment_urls)
 
     conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id IN (SELECT id FROM group_messages WHERE group_id = %s)", (group_id,))
+    delete_message_attachments(conn, "group", group_message_ids)
+    conn.execute("DELETE FROM server_channels WHERE group_id = %s", (group_id,))
     conn.execute("DELETE FROM group_read_states WHERE group_id = %s", (group_id,))
     conn.execute("DELETE FROM group_members WHERE group_id = %s", (group_id,))
     conn.execute("DELETE FROM group_invites WHERE group_id = %s", (group_id,))
@@ -1683,12 +1926,15 @@ def delete_user_account(conn, target_user_id):
            )
     """, (target_user_id, target_user_id, target_user_id)).fetchall()
     direct_message_ids = [row["id"] for row in direct_message_rows]
+    direct_attachment_urls = fetch_attachment_urls_for_messages(conn, "direct", direct_message_ids)
     remove_voice_files(row["audio_url"] for row in direct_message_rows)
     remove_photo_files(row["image_url"] for row in direct_message_rows)
+    remove_message_image_files(direct_attachment_urls)
 
     if direct_message_ids:
         placeholders = ",".join("%s" for _ in direct_message_ids)
         conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", direct_message_ids)
+        delete_message_attachments(conn, "direct", direct_message_ids)
 
     conn.execute("""
         DELETE FROM messages
@@ -1708,11 +1954,14 @@ def delete_user_account(conn, target_user_id):
         WHERE sender_id = %s
     """, (target_user_id,)).fetchall()
     group_message_ids = [row["id"] for row in group_message_rows]
+    group_attachment_urls = fetch_attachment_urls_for_messages(conn, "group", group_message_ids)
     remove_voice_files(row["audio_url"] for row in group_message_rows)
     remove_photo_files(row["image_url"] for row in group_message_rows)
+    remove_message_image_files(group_attachment_urls)
     if group_message_ids:
         placeholders = ",".join("%s" for _ in group_message_ids)
         conn.execute(f"DELETE FROM hidden_group_messages WHERE group_message_id IN ({placeholders})", group_message_ids)
+        delete_message_attachments(conn, "group", group_message_ids)
     conn.execute("DELETE FROM group_messages WHERE sender_id = %s", (target_user_id,))
     conn.execute("DELETE FROM hidden_group_messages WHERE user_id = %s", (target_user_id,))
     conn.execute("DELETE FROM group_read_states WHERE user_id = %s", (target_user_id,))
@@ -2323,6 +2572,349 @@ def request_wants_json():
     return "application/json" in accept and "text/html" not in accept
 
 
+def normalize_server_title(value, fallback="Новый сервер"):
+    title = str(value or "").strip()
+    return title[:80] if title else fallback
+
+
+def normalize_category_title(value, fallback="Новая категория"):
+    title = str(value or "").strip()
+    return title[:80] if title else fallback
+
+
+def normalize_channel_title(value, fallback="new-channel"):
+    title = re.sub(r"\s+", "-", str(value or "").strip().lstrip("#"))
+    title = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_-]+", "-", title).strip("-_").lower()
+    if not title:
+        return fallback
+    return title[:80]
+
+
+def generate_server_invite_code(conn):
+    code = secrets.token_urlsafe(9)
+    while conn.execute("SELECT 1 FROM servers WHERE invite_code = %s LIMIT 1", (code,)).fetchone():
+        code = secrets.token_urlsafe(9)
+    return code
+
+
+def get_server_channel_record(conn, group_id):
+    return conn.execute("""
+        SELECT
+            sc.server_id,
+            sc.category_id,
+            sc.group_id,
+            sc.position,
+            s.title AS server_title,
+            s.description AS server_description,
+            COALESCE(c.title, c.name) AS category_title
+        FROM server_channels sc
+        JOIN servers s ON s.id = sc.server_id
+        JOIN server_categories c ON c.id = sc.category_id
+        WHERE sc.group_id = %s
+        LIMIT 1
+    """, (group_id,)).fetchone()
+
+
+def get_server_member(conn, server_id, user_id):
+    if not user_id:
+        return None
+    return conn.execute("""
+        SELECT user_id, is_admin
+        FROM server_members
+        WHERE server_id = %s AND user_id = %s
+        LIMIT 1
+    """, (server_id, user_id)).fetchone()
+
+
+def can_access_server(conn, user_id, server_id):
+    return get_server_member(conn, server_id, user_id) is not None
+
+
+def can_manage_server(conn, user_id, server_id):
+    if not user_id:
+        return False
+    server = conn.execute("""
+        SELECT owner_id
+        FROM servers
+        WHERE id = %s
+        LIMIT 1
+    """, (server_id,)).fetchone()
+    if not server:
+        return False
+    if int(server["owner_id"]) == int(user_id):
+        return True
+    member = get_server_member(conn, server_id, user_id)
+    return bool(member and member["is_admin"])
+
+
+def get_server_member_ids(conn, server_id):
+    rows = conn.execute("""
+        SELECT user_id
+        FROM server_members
+        WHERE server_id = %s
+    """, (server_id,)).fetchall()
+    return [int(row["user_id"]) for row in rows]
+
+
+def get_server_category(conn, server_id, category_id):
+    return conn.execute("""
+        SELECT id, server_id, COALESCE(title, name) AS title, position
+        FROM server_categories
+        WHERE server_id = %s AND id = %s
+        LIMIT 1
+    """, (server_id, category_id)).fetchone()
+
+
+def get_server_channel(conn, server_id, group_id):
+    return conn.execute("""
+        SELECT
+            sc.id,
+            sc.server_id,
+            sc.category_id,
+            sc.group_id,
+            COALESCE(sc.title, sc.name, g.title) AS title,
+            sc.position
+        FROM server_channels sc
+        JOIN `groups` g ON g.id = sc.group_id
+        WHERE sc.server_id = %s AND sc.group_id = %s
+        LIMIT 1
+    """, (server_id, group_id)).fetchone()
+
+
+def emit_server_structure_updated_for_users(user_ids, server_id):
+    payload = {
+        "server_id": int(server_id)
+    }
+    for user_id in {int(user_id) for user_id in user_ids if user_id}:
+        socketio.emit("server_structure_updated", payload, room=get_user_room(user_id))
+
+
+def emit_server_structure_updated(conn, server_id):
+    emit_server_structure_updated_for_users(get_server_member_ids(conn, server_id), server_id)
+
+
+def get_first_server_channel_id(conn, server_id, user_id):
+    row = conn.execute("""
+        SELECT sc.group_id
+        FROM server_channels sc
+        JOIN group_members gm ON gm.group_id = sc.group_id
+        WHERE sc.server_id = %s AND gm.user_id = %s
+        ORDER BY sc.position, sc.id
+        LIMIT 1
+    """, (server_id, user_id)).fetchone()
+    return row["group_id"] if row else None
+
+
+def create_server_channel_group(conn, server_id, category_id, creator_user_id, title, description=None):
+    normalized_title = normalize_channel_title(title)
+    next_position_row = conn.execute("""
+        SELECT COALESCE(MAX(position), -1) + 1 AS next_position
+        FROM server_channels
+        WHERE server_id = %s AND category_id = %s
+    """, (server_id, category_id)).fetchone()
+    next_position = int(next_position_row["next_position"] or 0)
+
+    conn.execute("""
+        INSERT INTO `groups` (title, description, owner_id)
+        VALUES (%s, %s, %s)
+    """, (normalized_title, description, creator_user_id))
+    group_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
+
+    server_members = conn.execute("""
+        SELECT user_id, is_admin
+        FROM server_members
+        WHERE server_id = %s
+    """, (server_id,)).fetchall()
+    member_rows = [
+        (group_id, int(member["user_id"]), 1 if int(member["user_id"]) == int(creator_user_id) or bool(member["is_admin"]) else 0)
+        for member in server_members
+    ]
+    if member_rows:
+        conn.executemany("""
+            INSERT OR IGNORE INTO group_members (group_id, user_id, is_admin)
+            VALUES (%s, %s, %s)
+        """, member_rows)
+        for _, member_user_id, _ in member_rows:
+            initialize_group_read_state(conn, group_id, member_user_id)
+
+    conn.execute("""
+        INSERT INTO server_channels (server_id, category_id, group_id, title, name, slug, position, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (server_id, category_id, group_id, normalized_title, normalized_title, normalized_title, next_position, creator_user_id))
+    return group_id
+
+
+def create_server_with_defaults(conn, owner_id, title, description=""):
+    normalized_title = normalize_server_title(title)
+    invite_code = generate_server_invite_code(conn)
+    conn.execute("""
+        INSERT INTO servers (title, description, owner_id, invite_code)
+        VALUES (%s, %s, %s, %s)
+    """, (normalized_title, str(description or "").strip() or None, owner_id, invite_code))
+    server_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
+    conn.execute("""
+        INSERT INTO server_members (server_id, user_id, is_admin)
+        VALUES (%s, %s, 1)
+    """, (server_id, owner_id))
+    conn.execute("""
+        INSERT INTO server_categories (server_id, title, name, position, created_by)
+        VALUES (%s, %s, %s, 0, %s)
+    """, (server_id, "Общий", "Общий", owner_id))
+    category_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
+    group_id = create_server_channel_group(conn, server_id, category_id, owner_id, "general")
+    return {
+        "server_id": server_id,
+        "category_id": category_id,
+        "group_id": group_id
+    }
+
+
+def build_server_response(conn, server_id, viewer_user_id):
+    server = conn.execute("""
+        SELECT s.id, s.title, s.description, s.owner_id, s.created_at
+        FROM servers s
+        JOIN server_members sm ON sm.server_id = s.id
+        WHERE s.id = %s AND sm.user_id = %s
+        LIMIT 1
+    """, (server_id, viewer_user_id)).fetchone()
+    if not server:
+        return None
+
+    categories = conn.execute("""
+        SELECT id, COALESCE(title, name) AS title, position
+        FROM server_categories
+        WHERE server_id = %s
+        ORDER BY position, id
+    """, (server_id,)).fetchall()
+    channel_rows = conn.execute("""
+        SELECT
+            sc.id,
+            sc.category_id,
+            sc.group_id,
+            sc.position,
+            COALESCE(sc.title, sc.name, g.title) AS title,
+            (
+                SELECT gm.text
+                FROM group_messages gm
+                WHERE gm.group_id = sc.group_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS last_message_text,
+            (
+                SELECT gm.message_type
+                FROM group_messages gm
+                WHERE gm.group_id = sc.group_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS last_message_type,
+            (
+                SELECT gm.created_at
+                FROM group_messages gm
+                WHERE gm.group_id = sc.group_id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS updated_at,
+            (
+                SELECT COUNT(*)
+                FROM group_messages gm
+                WHERE gm.group_id = sc.group_id
+                  AND gm.message_type != 'system'
+                  AND gm.sender_id != %s
+                  AND gm.id > COALESCE((
+                      SELECT grs.last_read_message_id
+                      FROM group_read_states grs
+                      WHERE grs.group_id = sc.group_id AND grs.user_id = %s
+                  ), 0)
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+            ) AS unread_count
+        FROM server_channels sc
+        JOIN `groups` g ON g.id = sc.group_id
+        JOIN group_members gmbr ON gmbr.group_id = sc.group_id
+        WHERE sc.server_id = %s AND gmbr.user_id = %s
+        ORDER BY sc.position, sc.id
+    """, (
+        viewer_user_id,
+        viewer_user_id,
+        viewer_user_id,
+        viewer_user_id,
+        viewer_user_id,
+        viewer_user_id,
+        server_id,
+        viewer_user_id
+    )).fetchall()
+
+    channels_by_category = {}
+    total_unread = 0
+    latest_updated_at = server["created_at"]
+    latest_preview = None
+    default_channel_id = None
+    for channel in channel_rows:
+        if default_channel_id is None:
+            default_channel_id = channel["group_id"]
+        unread_count = int(channel["unread_count"] or 0)
+        total_unread += unread_count
+        channel_updated_at = channel["updated_at"] or server["created_at"]
+        if channel_updated_at and (latest_updated_at is None or channel_updated_at > latest_updated_at):
+            latest_updated_at = channel_updated_at
+            latest_preview = {
+                "text": channel["last_message_text"],
+                "message_type": channel["last_message_type"] or "text"
+            } if channel["last_message_text"] is not None or channel["last_message_type"] is not None else None
+        channels_by_category.setdefault(channel["category_id"], []).append({
+            "id": channel["group_id"],
+            "server_channel_id": channel["id"],
+            "title": channel["title"],
+            "position": int(channel["position"] or 0),
+            "unread_count": unread_count,
+            "updated_at": format_timestamp(channel["updated_at"]),
+            "last_message": {
+                "text": channel["last_message_text"],
+                "message_type": channel["last_message_type"] or "text"
+            } if channel["last_message_text"] is not None or channel["last_message_type"] is not None else None
+        })
+
+    return {
+        "id": server["id"],
+        "title": server["title"],
+        "description": server["description"],
+        "started_at": format_timestamp(server["created_at"]),
+        "owner_id": server["owner_id"],
+        "can_manage_server": can_manage_server(conn, viewer_user_id, server_id),
+        "default_channel_id": default_channel_id,
+        "unread_count": total_unread,
+        "updated_at": format_timestamp(latest_updated_at),
+        "last_message": latest_preview,
+        "categories": [
+            {
+                "id": category["id"],
+                "title": category["title"],
+                "position": int(category["position"] or 0),
+                "channels": channels_by_category.get(category["id"], [])
+            }
+            for category in categories
+        ]
+    }
+
+
 def build_group_response(conn, group_id, viewer_user_id, include_messages=False, limit=None):
     group = conn.execute("""
         SELECT id, title, description, owner_id, created_at
@@ -2409,6 +3001,21 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
     payload["invite"] = serialize_group_invite(
         ensure_active_group_invite(conn, group_id, viewer_user_id or group["owner_id"])
     ) if can_manage_invite else None
+
+    server_channel = get_server_channel_record(conn, group_id)
+    if server_channel:
+        payload["server"] = {
+            "id": server_channel["server_id"],
+            "title": server_channel["server_title"],
+            "description": server_channel["server_description"],
+            "category_id": server_channel["category_id"],
+            "category_title": server_channel["category_title"]
+        }
+        payload["can_edit_group"] = False
+        payload["can_add_members"] = False
+        payload["can_manage_admins"] = False
+        payload["can_manage_invite"] = False
+        payload["invite"] = None
 
     if include_messages:
         messages, has_more_messages = fetch_group_messages_page(conn, group_id, viewer_user_id, limit or parse_limit_arg())
@@ -2585,6 +3192,7 @@ def serialize_direct_message(message):
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "image": serialize_message_image(message),
+        "attachments": serialize_message_attachments(message),
         "sticker": serialize_message_sticker(message),
         "created_at": format_timestamp(message["created_at"]),
         "is_read": bool(message["read_at"]),
@@ -2604,6 +3212,7 @@ def serialize_group_message(message):
         "link_preview": serialize_message_link_preview(message),
         "audio": serialize_message_audio(message),
         "image": serialize_message_image(message),
+        "attachments": serialize_message_attachments(message),
         "sticker": serialize_message_sticker(message),
         "message_type": message["message_type"] or "text",
         "created_at": format_timestamp(message["created_at"]),
@@ -2718,6 +3327,7 @@ def get_direct_message_for_chat(conn, chat_id, message_id):
     """, (message_id, chat_id)).fetchone()
     if ensure_message_preview_data(conn, "messages", message):
         conn.commit()
+    attach_message_attachments(conn, "direct", message)
     return message
 
 
@@ -2756,6 +3366,7 @@ def get_group_message_for_group(conn, group_id, message_id):
     """, (message_id, group_id)).fetchone()
     if ensure_message_preview_data(conn, "group_messages", message):
         conn.commit()
+    attach_message_attachments(conn, "group", message)
     return message
 
 
@@ -2813,6 +3424,28 @@ def parse_message_ids_payload():
     return message_ids, None
 
 
+def parse_message_create_payload():
+    content_type = str(request.content_type or "").split(";", 1)[0].strip().lower()
+    if request.files or content_type == "multipart/form-data":
+        text = str(request.form.get("text", "") or "").strip()
+        reply_to_id = request.form.get("reply_to_id")
+        images = request.files.getlist("images[]") or request.files.getlist("images")
+        return {
+            "text": text,
+            "reply_to_id": reply_to_id,
+            "images": [image for image in images if image and image.filename],
+            "is_multipart": True
+        }
+
+    data = request.get_json(silent=True) or {}
+    return {
+        "text": str(data.get("text", "") or "").strip(),
+        "reply_to_id": data.get("reply_to_id"),
+        "images": [],
+        "is_multipart": False
+    }
+
+
 def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
     params = [chat_id, user_id]
     before_clause = ""
@@ -2866,6 +3499,7 @@ def fetch_direct_messages_page(conn, chat_id, user_id, limit, before_id=None):
     page_rows = rows[:limit]
     page_rows = list(reversed(page_rows))
     ensure_message_preview_data_many(conn, "messages", page_rows)
+    attach_message_attachments(conn, "direct", page_rows)
     return page_rows, has_more
 
 
@@ -2921,6 +3555,7 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
     page_rows = rows[:limit]
     page_rows = list(reversed(page_rows))
     ensure_message_preview_data_many(conn, "group_messages", page_rows)
+    attach_message_attachments(conn, "group", page_rows)
     return page_rows, has_more
 
 
@@ -2966,7 +3601,9 @@ def search_direct_messages(conn, chat_id, user_id, query, limit):
         ORDER BY m.id DESC
         LIMIT %s
     """, (chat_id, pattern, user_id, limit)).fetchall()
-    return ensure_message_preview_data_many(conn, "messages", rows)
+    rows = ensure_message_preview_data_many(conn, "messages", rows)
+    attach_message_attachments(conn, "direct", rows)
+    return rows
 
 
 def search_group_messages(conn, group_id, user_id, query, limit):
@@ -3010,7 +3647,9 @@ def search_group_messages(conn, group_id, user_id, query, limit):
         ORDER BY gm.id DESC
         LIMIT %s
     """, (group_id, pattern, user_id, limit)).fetchall()
-    return ensure_message_preview_data_many(conn, "group_messages", rows)
+    rows = ensure_message_preview_data_many(conn, "group_messages", rows)
+    attach_message_attachments(conn, "group", rows)
+    return rows
 
 
 def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
@@ -3166,6 +3805,7 @@ def fetch_direct_message_context(conn, chat_id, user_id, message_id, limit):
     if target_touched:
         conn.commit()
     messages = list(reversed(before_rows)) + [target] + list(after_rows)
+    attach_message_attachments(conn, "direct", messages)
     return messages, has_more_before, has_more_after
 
 
@@ -3319,6 +3959,7 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
     if target_touched:
         conn.commit()
     messages = list(reversed(before_rows)) + [target] + list(after_rows)
+    attach_message_attachments(conn, "group", messages)
     return messages, has_more_before, has_more_after
 
 
@@ -3497,6 +4138,7 @@ def fetch_direct_messages_by_ids(conn, chat_id, message_ids):
           AND m.id IN ({placeholders})
         ORDER BY m.id ASC
     """, [chat_id, *message_ids]).fetchall()
+    attach_message_attachments(conn, "direct", rows)
     return rows or []
 
 
@@ -3519,6 +4161,7 @@ def fetch_group_messages_by_ids(conn, group_id, message_ids):
           AND gm.id IN ({placeholders})
         ORDER BY gm.id ASC
     """, [group_id, *message_ids]).fetchall()
+    attach_message_attachments(conn, "group", rows)
     return rows or []
 
 
@@ -3862,6 +4505,34 @@ def group_chat_page(group_id):
     return render_template(
         "group_chat.html",
         title="Group Chat | /Chatik",
+        body_class="page-shell thread-page",
+        data_chat_type="group",
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
+
+
+@app.get("/server/<int:server_id>")
+def server_page(server_id):
+    return render_template(
+        "group_chat.html",
+        title="Server | /Chatik",
+        body_class="page-shell thread-page",
+        data_chat_type="group",
+        sidebar_action_mode="search",
+        sidebar_back_href=None,
+        sidebar_back_label=None,
+        sidebar_back_icon=None,
+    )
+
+
+@app.get("/server/<int:server_id>/channel/<int:group_id>")
+def server_channel_page(server_id, group_id):
+    return render_template(
+        "group_chat.html",
+        title="Server Channel | /Chatik",
         body_class="page-shell thread-page",
         data_chat_type="group",
         sidebar_action_mode="search",
@@ -5900,7 +6571,100 @@ def get_chats():
         FROM groups g
         JOIN group_members gmbr ON gmbr.group_id = g.id
         WHERE gmbr.user_id = %s
+          AND NOT EXISTS (
+              SELECT 1
+              FROM server_channels sc
+              WHERE sc.group_id = g.id
+          )
     """, (user_id, user_id, user_id, user_id, user_id, user_id, user_id)).fetchall()
+    server_rows = conn.execute("""
+        SELECT
+            s.id,
+            s.title,
+            s.created_at,
+            (
+                SELECT gm.text
+                FROM server_channels sc
+                JOIN group_messages gm ON gm.group_id = sc.group_id
+                WHERE sc.server_id = s.id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS last_message_text,
+            (
+                SELECT gm.message_type
+                FROM server_channels sc
+                JOIN group_messages gm ON gm.group_id = sc.group_id
+                WHERE sc.server_id = s.id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS last_message_type,
+            (
+                SELECT gm.created_at
+                FROM server_channels sc
+                JOIN group_messages gm ON gm.group_id = sc.group_id
+                WHERE sc.server_id = s.id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hidden_group_messages hgm
+                      WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                  )
+                ORDER BY gm.created_at DESC, gm.id DESC
+                LIMIT 1
+            ) AS updated_at,
+            (
+                SELECT SUM(
+                    CASE
+                        WHEN gm.message_type != 'system'
+                         AND gm.sender_id != %s
+                         AND gm.id > COALESCE((
+                             SELECT grs.last_read_message_id
+                             FROM group_read_states grs
+                             WHERE grs.group_id = sc.group_id AND grs.user_id = %s
+                         ), 0)
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM hidden_group_messages hgm
+                             WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                         )
+                        THEN 1
+                        ELSE 0
+                    END
+                )
+                FROM server_channels sc
+                JOIN group_messages gm ON gm.group_id = sc.group_id
+                WHERE sc.server_id = s.id
+            ) AS unread_count,
+            (
+                SELECT sc.group_id
+                FROM server_channels sc
+                JOIN group_members gmbr ON gmbr.group_id = sc.group_id
+                WHERE sc.server_id = s.id AND gmbr.user_id = %s
+                ORDER BY sc.position, sc.id
+                LIMIT 1
+            ) AS default_channel_id
+        FROM servers s
+        JOIN server_members sm ON sm.server_id = s.id
+        WHERE sm.user_id = %s
+    """, (
+        user_id,
+        user_id,
+        user_id,
+        user_id,
+        user_id,
+        user_id,
+        user_id,
+        user_id
+    )).fetchall()
     conn.close()
 
     chats = [
@@ -5943,6 +6707,23 @@ def get_chats():
         }
         for group in group_chats
     ])
+    chats.extend([
+        {
+            "id": server["id"],
+            "type": "server",
+            "username": None,
+            "title": server["title"],
+            "default_channel_id": server["default_channel_id"],
+            "last_message": {
+                "text": server["last_message_text"],
+                "message_type": server["last_message_type"] or "text"
+            } if server["last_message_text"] is not None or server["last_message_type"] is not None else None,
+            "updated_at": format_timestamp(server["updated_at"] or server["created_at"]),
+            "unread_count": int(server["unread_count"] or 0)
+        }
+        for server in server_rows
+        if server["default_channel_id"]
+    ])
 
     chats.sort(
         key=lambda chat: (
@@ -5954,6 +6735,414 @@ def get_chats():
     )
 
     return jsonify(chats)
+
+
+@app.get("/servers")
+def get_servers():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        server_rows = conn.execute("""
+            SELECT
+                s.id,
+                s.title,
+                s.description,
+                s.created_at,
+                (
+                    SELECT gm.text
+                    FROM server_channels sc
+                    JOIN group_messages gm ON gm.group_id = sc.group_id
+                    WHERE sc.server_id = s.id
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM hidden_group_messages hgm
+                          WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                      )
+                    ORDER BY gm.created_at DESC, gm.id DESC
+                    LIMIT 1
+                ) AS last_message_text,
+                (
+                    SELECT gm.message_type
+                    FROM server_channels sc
+                    JOIN group_messages gm ON gm.group_id = sc.group_id
+                    WHERE sc.server_id = s.id
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM hidden_group_messages hgm
+                          WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                      )
+                    ORDER BY gm.created_at DESC, gm.id DESC
+                    LIMIT 1
+                ) AS last_message_type,
+                (
+                    SELECT gm.created_at
+                    FROM server_channels sc
+                    JOIN group_messages gm ON gm.group_id = sc.group_id
+                    WHERE sc.server_id = s.id
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM hidden_group_messages hgm
+                          WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                      )
+                    ORDER BY gm.created_at DESC, gm.id DESC
+                    LIMIT 1
+                ) AS updated_at,
+                (
+                    SELECT SUM(
+                        CASE
+                            WHEN gm.message_type != 'system'
+                             AND gm.sender_id != %s
+                             AND gm.id > COALESCE((
+                                 SELECT grs.last_read_message_id
+                                 FROM group_read_states grs
+                                 WHERE grs.group_id = sc.group_id AND grs.user_id = %s
+                             ), 0)
+                             AND NOT EXISTS (
+                                 SELECT 1
+                                 FROM hidden_group_messages hgm
+                                 WHERE hgm.group_message_id = gm.id AND hgm.user_id = %s
+                             )
+                            THEN 1
+                            ELSE 0
+                        END
+                    )
+                    FROM server_channels sc
+                    JOIN group_messages gm ON gm.group_id = sc.group_id
+                    WHERE sc.server_id = s.id
+                ) AS unread_count,
+                (
+                    SELECT sc.group_id
+                    FROM server_channels sc
+                    JOIN group_members gmbr ON gmbr.group_id = sc.group_id
+                    WHERE sc.server_id = s.id AND gmbr.user_id = %s
+                    ORDER BY sc.position, sc.id
+                    LIMIT 1
+                ) AS default_channel_id
+            FROM servers s
+            JOIN server_members sm ON sm.server_id = s.id
+            WHERE sm.user_id = %s
+            ORDER BY COALESCE(updated_at, s.created_at) DESC, s.id DESC
+        """, (
+            user_id,
+            user_id,
+            user_id,
+            user_id,
+            user_id,
+            user_id,
+            user_id,
+            user_id
+        )).fetchall()
+
+        return jsonify([
+            {
+                "id": server["id"],
+                "type": "server",
+                "title": server["title"],
+                "description": server["description"],
+                "default_channel_id": server["default_channel_id"],
+                "last_message": {
+                    "text": server["last_message_text"],
+                    "message_type": server["last_message_type"] or "text"
+                } if server["last_message_text"] is not None or server["last_message_type"] is not None else None,
+                "started_at": format_timestamp(server["created_at"]),
+                "updated_at": format_timestamp(server["updated_at"] or server["created_at"]),
+                "unread_count": int(server["unread_count"] or 0)
+            }
+            for server in server_rows
+        ])
+    finally:
+        conn.close()
+
+
+@app.get("/servers/<int:server_id>")
+def get_server(server_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        payload = build_server_response(conn, server_id, user_id)
+        if not payload:
+            return jsonify({"message": "Сервер не найден"}), 404
+        return jsonify(payload)
+    finally:
+        conn.close()
+
+
+@app.post("/servers")
+def create_server():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    try:
+        require_permission_to_create_groups(getattr(g, "current_user", None) or {})
+    except PermissionError as error:
+        return jsonify({"message": str(error)}), 403
+
+    data = request.json or {}
+    title = normalize_server_title(data.get("title"), fallback="")
+    description = str(data.get("description") or "").strip()
+    if not title:
+        return jsonify({"message": "Название сервера обязательно"}), 400
+
+    conn = get_db()
+    try:
+        created = create_server_with_defaults(conn, user_id, title, description)
+        conn.commit()
+        payload = build_server_response(conn, created["server_id"], user_id)
+        return jsonify({
+            "server": payload,
+            "server_id": created["server_id"],
+            "category_id": created["category_id"],
+            "group_id": created["group_id"]
+        }), 201
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.post("/servers/<int:server_id>/categories")
+def create_server_category(server_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server(conn, user_id, server_id):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        data = request.json or {}
+        title = normalize_category_title(data.get("title"), fallback="")
+        if not title:
+            return jsonify({"message": "Название категории обязательно"}), 400
+        next_position_row = conn.execute("""
+            SELECT COALESCE(MAX(position), -1) + 1 AS next_position
+            FROM server_categories
+            WHERE server_id = %s
+        """, (server_id,)).fetchone()
+        next_position = int(next_position_row["next_position"] or 0)
+        conn.execute("""
+            INSERT INTO server_categories (server_id, title, name, position, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (server_id, title, title, next_position, user_id))
+        category_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
+        conn.commit()
+        emit_server_structure_updated(conn, server_id)
+        return jsonify({
+            "id": category_id,
+            "server_id": server_id,
+            "title": title,
+            "position": next_position
+        }), 201
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.post("/servers/<int:server_id>/channels")
+@app.post("/servers/<int:server_id>/rooms")
+def create_server_channel(server_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server(conn, user_id, server_id):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        data = request.json or {}
+        try:
+            category_id = int(data.get("category_id"))
+        except (TypeError, ValueError):
+            return jsonify({"message": "Некорректная категория"}), 400
+        category = conn.execute("""
+            SELECT id
+            FROM server_categories
+            WHERE id = %s AND server_id = %s
+            LIMIT 1
+        """, (category_id, server_id)).fetchone()
+        if not category:
+            return jsonify({"message": "Категория не найдена"}), 404
+        title = normalize_channel_title(data.get("title"), fallback="")
+        if not title:
+            return jsonify({"message": "Название канала обязательно"}), 400
+        group_id = create_server_channel_group(conn, server_id, category_id, user_id, title)
+        conn.commit()
+        emit_server_structure_updated(conn, server_id)
+        emit_chat_list_updated_for_users(get_server_member_ids(conn, server_id), "server", server_id)
+        return jsonify({
+            "id": group_id,
+            "group_id": group_id,
+            "server_id": server_id,
+            "category_id": category_id,
+            "title": title
+        }), 201
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.patch("/servers/<int:server_id>/categories/<int:category_id>")
+def update_server_category(server_id, category_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server(conn, user_id, server_id):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        category = get_server_category(conn, server_id, category_id)
+        if not category:
+            return jsonify({"message": "Категория не найдена"}), 404
+        data = request.json or {}
+        title = normalize_category_title(data.get("title"), fallback="")
+        if not title:
+            return jsonify({"message": "Название категории обязательно"}), 400
+        conn.execute("""
+            UPDATE server_categories
+            SET title = %s, name = %s
+            WHERE id = %s AND server_id = %s
+        """, (title, title, category_id, server_id))
+        conn.commit()
+        emit_server_structure_updated(conn, server_id)
+        return jsonify({
+            "id": category_id,
+            "server_id": server_id,
+            "title": title
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.delete("/servers/<int:server_id>/categories/<int:category_id>")
+def delete_server_category(server_id, category_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server(conn, user_id, server_id):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        category = get_server_category(conn, server_id, category_id)
+        if not category:
+            return jsonify({"message": "Категория не найдена"}), 404
+        channel_rows = conn.execute("""
+            SELECT group_id
+            FROM server_channels
+            WHERE server_id = %s AND category_id = %s
+            ORDER BY position, id
+        """, (server_id, category_id)).fetchall()
+        for channel in channel_rows:
+            delete_group_with_dependencies(conn, channel["group_id"])
+        conn.execute("""
+            DELETE FROM server_categories
+            WHERE id = %s AND server_id = %s
+        """, (category_id, server_id))
+        conn.commit()
+        emit_server_structure_updated(conn, server_id)
+        emit_chat_list_updated_for_users(get_server_member_ids(conn, server_id), "server", server_id)
+        return jsonify({
+            "ok": True,
+            "server_id": server_id,
+            "category_id": category_id,
+            "deleted_channel_ids": [int(row["group_id"]) for row in channel_rows]
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.patch("/servers/<int:server_id>/channels/<int:group_id>")
+@app.patch("/servers/<int:server_id>/rooms/<int:group_id>")
+def update_server_channel(server_id, group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server(conn, user_id, server_id):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        channel = get_server_channel(conn, server_id, group_id)
+        if not channel:
+            return jsonify({"message": "Канал не найден"}), 404
+        data = request.json or {}
+        title = normalize_channel_title(data.get("title"), fallback="")
+        if not title:
+            return jsonify({"message": "Название канала обязательно"}), 400
+        conn.execute("""
+            UPDATE server_channels
+            SET title = %s, name = %s, slug = %s
+            WHERE server_id = %s AND group_id = %s
+        """, (title, title, title, server_id, group_id))
+        conn.execute("""
+            UPDATE `groups`
+            SET title = %s
+            WHERE id = %s
+        """, (title, group_id))
+        conn.commit()
+        emit_group_updated(group_id)
+        emit_server_structure_updated(conn, server_id)
+        emit_chat_list_updated_for_users(get_server_member_ids(conn, server_id), "server", server_id)
+        return jsonify({
+            "id": group_id,
+            "group_id": group_id,
+            "server_id": server_id,
+            "title": title
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.delete("/servers/<int:server_id>/channels/<int:group_id>")
+@app.delete("/servers/<int:server_id>/rooms/<int:group_id>")
+def delete_server_channel(server_id, group_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server(conn, user_id, server_id):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        channel = get_server_channel(conn, server_id, group_id)
+        if not channel:
+            return jsonify({"message": "Канал не найден"}), 404
+        delete_group_with_dependencies(conn, group_id)
+        conn.commit()
+        emit_server_structure_updated(conn, server_id)
+        emit_chat_list_updated_for_users(get_server_member_ids(conn, server_id), "server", server_id)
+        return jsonify({
+            "ok": True,
+            "server_id": server_id,
+            "group_id": group_id
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @app.post("/chats")
@@ -6216,12 +7405,23 @@ def create_chat_message(chat_id):
     except PermissionError as error:
         return jsonify({"message": str(error)}), 403
 
-    data = request.json or {}
-    text = data.get("text", "").strip()
-    reply_to_id = data.get("reply_to_id")
+    payload = parse_message_create_payload()
+    text = payload["text"]
+    reply_to_id = payload["reply_to_id"]
+    images = payload["images"]
 
-    if not text:
-        return jsonify({"message": "Текст сообщения обязателен"}), 400
+    if not text and not images:
+        return jsonify({"message": "Текст сообщения или фотография обязательны"}), 400
+
+    attachments = []
+    if images:
+        try:
+            current_user = getattr(g, "current_user", None) or {}
+            ensure_global_file_uploads_enabled()
+            ensure_photo_messages_enabled()
+            require_permission_to_upload_files(current_user)
+        except PermissionError as error:
+            return jsonify({"message": str(error)}), 403
 
     conn = get_db()
     chat = can_access_direct_chat(conn, user_id, chat_id)
@@ -6243,6 +7443,15 @@ def create_chat_message(chat_id):
         if not reply_to_message:
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+    if images:
+        try:
+            attachments = [save_message_image_upload(image) for image in images]
+        except ValueError as error:
+            conn.close()
+            return jsonify({"message": str(error)}), 400
+        except RuntimeError as error:
+            conn.close()
+            return jsonify({"message": str(error)}), 500
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
     message = create_direct_message_record(
         conn,
@@ -6252,6 +7461,9 @@ def create_chat_message(chat_id):
         "text",
         reply_to_message=reply_to_message
     )
+    if attachments:
+        insert_message_attachments(conn, "direct", message["id"], attachments)
+        message = get_direct_message_for_chat(conn, chat_id, message["id"])
     conn.commit()
     member_ids = get_direct_chat_member_ids(conn, chat_id)
     message_data = serialize_direct_message(message)
@@ -6597,10 +7809,12 @@ def delete_direct_chat(chat_id):
         ]
         voice_urls = [row["audio_url"] for row in message_rows]
         image_urls = [row["image_url"] for row in message_rows]
+        attachment_urls = fetch_attachment_urls_for_messages(conn, "direct", message_ids)
 
         if message_ids:
             placeholders = ",".join("%s" for _ in message_ids)
             conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
+            delete_message_attachments(conn, "direct", message_ids)
 
         conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
         conn.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
@@ -6609,6 +7823,7 @@ def delete_direct_chat(chat_id):
         conn.close()
         remove_voice_files(voice_urls)
         remove_photo_files(image_urls)
+        remove_message_image_files(attachment_urls)
 
         socketio.emit("chat_deleted", {
             "chat_id": chat_id,
@@ -6746,12 +7961,15 @@ def delete_chat_message(chat_id, message_id):
 
         voice_url = message.get("audio_url")
         image_url = message.get("image_url")
+        attachment_urls = fetch_attachment_urls_for_messages(conn, "direct", [message_id])
         conn.execute("DELETE FROM hidden_messages WHERE message_id = %s", (message_id,))
+        delete_message_attachments(conn, "direct", [message_id])
         conn.execute("DELETE FROM messages WHERE id = %s AND chat_id = %s", (message_id, chat_id))
         conn.commit()
         conn.close()
         remove_voice_files([voice_url])
         remove_photo_files([image_url])
+        remove_message_image_files(attachment_urls)
 
         socketio.emit("message_deleted", {
             "chat_id": chat_id,
@@ -6810,12 +8028,15 @@ def bulk_delete_chat_messages(chat_id):
 
         voice_urls = [row["audio_url"] for row in message_rows]
         image_urls = [row["image_url"] for row in message_rows]
+        attachment_urls = fetch_attachment_urls_for_messages(conn, "direct", message_ids)
         conn.execute(f"DELETE FROM hidden_messages WHERE message_id IN ({placeholders})", message_ids)
+        delete_message_attachments(conn, "direct", message_ids)
         conn.execute(f"DELETE FROM messages WHERE chat_id = %s AND id IN ({placeholders})", [chat_id, *message_ids])
         conn.commit()
         conn.close()
         remove_voice_files(voice_urls)
         remove_photo_files(image_urls)
+        remove_message_image_files(attachment_urls)
 
         for message_id in message_ids:
             socketio.emit("message_deleted", {
@@ -7314,6 +8535,10 @@ def delete_group(group_id):
         conn.close()
         return jsonify({"message": "Группа не найдена"}), 404
 
+    if get_server_channel_record(conn, group_id):
+        conn.close()
+        return jsonify({"message": "Канал сервера нельзя удалять как обычную группу"}), 400
+
     if group["owner_id"] != user_id:
         conn.close()
         return jsonify({"message": "Удалить группу может только создатель"}), 403
@@ -7342,6 +8567,7 @@ def delete_group(group_id):
             WHERE group_id = %s
         """, (group_id,)).fetchall()
     ]
+    attachment_urls = fetch_attachment_urls_for_messages(conn, "group", group_message_ids)
 
     if group_message_ids:
         placeholders = ",".join("%s" for _ in group_message_ids)
@@ -7351,6 +8577,7 @@ def delete_group(group_id):
         """, group_message_ids)
 
     conn.execute("DELETE FROM group_messages WHERE group_id = %s", (group_id,))
+    delete_message_attachments(conn, "group", group_message_ids)
     conn.execute("DELETE FROM group_read_states WHERE group_id = %s", (group_id,))
     conn.execute("DELETE FROM group_members WHERE group_id = %s", (group_id,))
     conn.execute("DELETE FROM group_invites WHERE group_id = %s", (group_id,))
@@ -7359,6 +8586,7 @@ def delete_group(group_id):
     conn.close()
     remove_voice_files(voice_urls)
     remove_photo_files(image_urls)
+    remove_message_image_files(attachment_urls)
 
     return jsonify({
         "ok": True,
@@ -7740,17 +8968,23 @@ def create_group_message(group_id):
         conn.close()
         return jsonify({"message": "Группа не найдена"}), 404
 
-    data = request.json or {}
-    text = data.get("text", "").strip()
-    message_type = str(data.get("message_type", "text") or "text").strip().lower()
-    reply_to_id = data.get("reply_to_id")
+    payload = parse_message_create_payload()
+    text = payload["text"]
+    reply_to_id = payload["reply_to_id"]
+    images = payload["images"]
 
-    if not text:
+    if not text and not images:
         conn.close()
-        return jsonify({"message": "Текст сообщения обязателен"}), 400
-    if message_type != "text":
-        conn.close()
-        return jsonify({"message": "Нельзя отправлять этот тип сообщения вручную"}), 403
+        return jsonify({"message": "Текст сообщения или фотография обязательны"}), 400
+    if images:
+        try:
+            current_user = getattr(g, "current_user", None) or {}
+            ensure_global_file_uploads_enabled()
+            ensure_photo_messages_enabled()
+            require_permission_to_upload_files(current_user)
+        except PermissionError as error:
+            conn.close()
+            return jsonify({"message": str(error)}), 403
 
     reply_to_message = None
     if reply_to_id is not None:
@@ -7758,8 +8992,21 @@ def create_group_message(group_id):
         if not reply_to_message:
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
+    attachments = []
+    if images:
+        try:
+            attachments = [save_message_image_upload(image) for image in images]
+        except ValueError as error:
+            conn.close()
+            return jsonify({"message": str(error)}), 400
+        except RuntimeError as error:
+            conn.close()
+            return jsonify({"message": str(error)}), 500
 
     message = create_group_message_record(conn, group_id, user_id, text, "text", reply_to_message=reply_to_message)
+    if attachments:
+        insert_message_attachments(conn, "group", message["id"], attachments)
+        message = get_group_message_for_group(conn, group_id, message["id"])
     conn.commit()
     conn.close()
 
@@ -8131,12 +9378,15 @@ def delete_group_message(group_id, message_id):
 
         voice_url = message.get("audio_url")
         image_url = message.get("image_url")
+        attachment_urls = fetch_attachment_urls_for_messages(conn, "group", [message_id])
         conn.execute("DELETE FROM hidden_group_messages WHERE group_message_id = %s", (message_id,))
+        delete_message_attachments(conn, "group", [message_id])
         conn.execute("DELETE FROM group_messages WHERE id = %s AND group_id = %s", (message_id, group_id))
         conn.commit()
         conn.close()
         remove_voice_files([voice_url])
         remove_photo_files([image_url])
+        remove_message_image_files(attachment_urls)
 
         socketio.emit("message_deleted", {
             "group_id": group_id,
@@ -8200,12 +9450,15 @@ def bulk_delete_group_messages(group_id):
 
         voice_urls = [row["audio_url"] for row in message_rows]
         image_urls = [row["image_url"] for row in message_rows]
+        attachment_urls = fetch_attachment_urls_for_messages(conn, "group", message_ids)
         conn.execute(f"DELETE FROM hidden_group_messages WHERE group_message_id IN ({placeholders})", message_ids)
+        delete_message_attachments(conn, "group", message_ids)
         conn.execute(f"DELETE FROM group_messages WHERE group_id = %s AND id IN ({placeholders})", [group_id, *message_ids])
         conn.commit()
         conn.close()
         remove_voice_files(voice_urls)
         remove_photo_files(image_urls)
+        remove_message_image_files(attachment_urls)
 
         for message_id in message_ids:
             socketio.emit("message_deleted", {
@@ -8223,6 +9476,8 @@ def bulk_delete_group_messages(group_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True, "deleted_ids": message_ids, "scope": scope})
+
+
 
 
 if __name__ == "__main__":
