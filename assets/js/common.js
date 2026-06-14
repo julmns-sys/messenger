@@ -32,11 +32,177 @@ let activeChatTagFilter = "all";
 const pendingDeletedChatKeys = new Set();
 let userRelationConfirmModal = null;
 let serverStructureModal = null;
+let serverStructureEditorState = null;
 let serverSidebarActionMenu = null;
 let sidebarServerHeaderMenuHideTimer = null;
 let serverSettingsModal = null;
 let activeServerSettingsSection = "profile";
+let serverSettingsRolesEditorState = null;
+let serverInviteModal = null;
+let serverInviteModalState = null;
 let sidebarSwipeTransition = Promise.resolve();
+const SERVER_INVITE_EXPIRATION_OPTIONS = [
+  { id: "30m", label: "30 минут" },
+  { id: "1h", label: "1 час" },
+  { id: "24h", label: "24 часа" },
+  { id: "7d", label: "7 дней" },
+  { id: "never", label: "Без срока" }
+];
+const SERVER_INVITE_MAX_USES_OPTIONS = [
+  { id: "1", label: "1 раз" },
+  { id: "5", label: "5 раз" },
+  { id: "10", label: "10 раз" },
+  { id: "0", label: "Без лимита" }
+];
+const SERVER_ROLE_COLOR_PRESETS = [
+  "#EF4444",
+  "#F97316",
+  "#F59E0B",
+  "#22C55E",
+  "#3B82F6",
+  "#8B5CF6",
+  "#EC4899",
+  "#94A3B8"
+];
+const SERVER_ROLE_PERMISSION_GROUPS = [
+  {
+    id: "general",
+    title: "Общие права",
+    items: [
+      { id: "view_server", label: "Просматривать сервер", description: "Позволяет видеть сервер и его структуру." },
+      { id: "manage_server", label: "Управлять сервером", description: "Даёт доступ к базовым настройкам сервера." },
+      { id: "manage_roles", label: "Управлять ролями", description: "Позволяет создавать, изменять и удалять роли ниже своей роли." },
+      { id: "manage_channels", label: "Управлять каналами", description: "Позволяет редактировать и удалять каналы сервера." },
+      { id: "view_audit_log", label: "Просматривать журнал аудита", description: "Открывает историю административных действий." }
+    ]
+  },
+  {
+    id: "members",
+    title: "Участники",
+    items: [
+      { id: "invite_members", label: "Приглашать участников", description: "Разрешает создавать и отправлять приглашения." },
+      { id: "kick_members", label: "Исключать участников", description: "Позволяет удалять участников с сервера." },
+      { id: "ban_members", label: "Банить участников", description: "Позволяет полностью закрывать доступ к серверу." },
+      { id: "manage_nicknames", label: "Управлять никами", description: "Разрешает менять ники другим участникам." },
+      { id: "change_nickname", label: "Изменять свой ник", description: "Разрешает участнику менять собственный ник." }
+    ]
+  },
+  {
+    id: "messages",
+    title: "Сообщения",
+    items: [
+      { id: "read_messages", label: "Читать сообщения", description: "Позволяет просматривать сообщения в текстовых каналах." },
+      { id: "send_messages", label: "Отправлять сообщения", description: "Разрешает писать сообщения в текстовых каналах." },
+      { id: "delete_messages", label: "Удалять сообщения", description: "Позволяет удалять чужие сообщения." },
+      { id: "pin_messages", label: "Закреплять сообщения", description: "Позволяет закреплять важные сообщения." },
+      { id: "embed_links", label: "Отправлять ссылки", description: "Разрешает публиковать ссылки и предпросмотры." },
+      { id: "attach_files", label: "Прикреплять файлы", description: "Позволяет загружать изображения и документы." },
+      { id: "mention_everyone", label: "Упоминать @everyone", description: "Разрешает массовые упоминания для участников сервера." },
+      { id: "manage_messages", label: "Управлять сообщениями", description: "Даёт расширенный контроль над текстовыми каналами." }
+    ]
+  },
+  {
+    id: "voice",
+    title: "Голосовые каналы",
+    items: [
+      { id: "connect_voice", label: "Подключаться", description: "Разрешает входить в голосовые каналы." },
+      { id: "speak_voice", label: "Говорить", description: "Позволяет использовать микрофон в голосовых каналах." },
+      { id: "mute_members", label: "Отключать микрофон участникам", description: "Даёт право временно заглушать участников." },
+      { id: "deafen_members", label: "Отключать звук участникам", description: "Позволяет приглушать звук для участников." },
+      { id: "move_members", label: "Перемещать участников", description: "Позволяет переносить участников между каналами." }
+    ]
+  },
+  {
+    id: "administration",
+    title: "Администрирование",
+    items: [
+      { id: "administrator", label: "Администратор", description: "Даёт полный доступ ко всем настройкам сервера." }
+    ]
+  }
+];
+const SERVER_ROLE_DEFAULT_PERMISSIONS = {
+  view_server: true,
+  manage_server: false,
+  manage_roles: false,
+  manage_channels: false,
+  view_audit_log: false,
+  invite_members: true,
+  kick_members: false,
+  ban_members: false,
+  manage_nicknames: false,
+  change_nickname: true,
+  read_messages: true,
+  send_messages: true,
+  delete_messages: false,
+  pin_messages: false,
+  embed_links: true,
+  attach_files: true,
+  mention_everyone: false,
+  manage_messages: false,
+  connect_voice: true,
+  speak_voice: true,
+  mute_members: false,
+  deafen_members: false,
+  move_members: false,
+  administrator: false,
+  display_separately: false,
+  mentionable: false
+};
+const SERVER_CHANNEL_TYPE_OPTIONS = [
+  { id: "text", label: "Текстовый канал" },
+  { id: "voice", label: "Голосовой канал" },
+  { id: "announcements", label: "Канал объявлений" },
+  { id: "private", label: "Приватный канал" }
+];
+const SERVER_CHANNEL_ACCESS_OPTIONS = {
+  view: [
+    { id: "everyone", label: "Все участники" },
+    { id: "selected_roles", label: "Только выбранные роли" },
+    { id: "admins", label: "Только администраторы" },
+    { id: "owner", label: "Только владелец" }
+  ],
+  write: [
+    { id: "everyone", label: "Все участники" },
+    { id: "selected_roles", label: "Только выбранные роли" },
+    { id: "moderators_admins", label: "Только модераторы и администраторы" },
+    { id: "nobody", label: "Никто, только чтение" }
+  ],
+  files: [
+    { id: "everyone", label: "Все участники" },
+    { id: "selected_roles", label: "Только выбранные роли" },
+    { id: "moderators_admins", label: "Только модераторы и администраторы" },
+    { id: "nobody", label: "Запрещено" }
+  ],
+  links: [
+    { id: "everyone", label: "Все участники" },
+    { id: "selected_roles", label: "Только выбранные роли" },
+    { id: "moderators_admins", label: "Только модераторы и администраторы" },
+    { id: "nobody", label: "Запрещено" }
+  ],
+  everyone_mentions: [
+    { id: "everyone", label: "Все участники" },
+    { id: "moderators_admins", label: "Только модераторы и администраторы" },
+    { id: "admins", label: "Только администраторы" },
+    { id: "nobody", label: "Запрещено" }
+  ]
+};
+const SERVER_CHANNEL_ROLE_PERMISSION_DEFINITIONS = [
+  { id: "view_channel", label: "Видеть канал" },
+  { id: "read_messages", label: "Читать сообщения" },
+  { id: "send_messages", label: "Отправлять сообщения" },
+  { id: "send_files", label: "Отправлять файлы" },
+  { id: "send_links", label: "Отправлять ссылки" },
+  { id: "manage_messages", label: "Управлять сообщениями" },
+  { id: "manage_channel", label: "Управлять каналом" }
+];
+const SERVER_CHANNEL_SLOWMODE_OPTIONS = [
+  { id: "off", label: "Выключен" },
+  { id: "5s", label: "5 секунд" },
+  { id: "30s", label: "30 секунд" },
+  { id: "1m", label: "1 минута" },
+  { id: "5m", label: "5 минут" },
+  { id: "15m", label: "15 минут" }
+];
 const defaultAppSettings = {
   theme: "light",
   accentColor: "#3390ec",
@@ -1296,7 +1462,7 @@ function toggleUserProfileActionMenu(card) {
 
 function renderUserProfilePanel(user = {}, options = {}) {
   syncUserRelationStateFromProfile(user);
-  const resolvedUserId = String(user?.id || user?.user_id || "");
+  const resolvedUserId = String(user?.user_id || user?.id || "");
   const displayName = getUserProfileDisplayName(user);
   const originalName = getUserProfileOriginalName(user);
   const bio = user?.bio && String(user.bio).trim() ? String(user.bio).trim() : "";
@@ -2279,12 +2445,7 @@ function buildServerStructureModal() {
         </button>
       </div>
       <form class="server-structure-form" id="serverStructureForm">
-        <label class="label" for="serverStructureName">Название</label>
-        <input class="search-input" id="serverStructureName" type="text" maxlength="80" required>
-        <div class="server-structure-description-wrap" id="serverStructureDescriptionWrap" hidden>
-          <label class="label" for="serverStructureDescription">Описание</label>
-          <textarea class="thread-group-edit-textarea" id="serverStructureDescription" rows="4" placeholder="Коротко о сервере"></textarea>
-        </div>
+        <div id="serverStructureBody"></div>
         <div class="status" id="serverStructureStatus"></div>
         <div class="server-structure-actions">
           <button class="button button-secondary" type="button" data-server-structure-close="true">Отмена</button>
@@ -2296,9 +2457,529 @@ function buildServerStructureModal() {
   document.body.appendChild(modal);
   serverStructureModal = modal;
 
+  function getServerStructureChannelRoles() {
+    const roles = sortServerRoles(Array.isArray(chatState.activeServer?.roles) ? chatState.activeServer.roles : []);
+    return roles.map((role) => ({
+      key: role.is_system ? String(role.name || "") : `role:${role.id}`,
+      id: role.id,
+      name: String(role.name || "role"),
+      color: role.color || "#94A3B8",
+      isSystem: Boolean(role.is_system),
+      isOwner: String(role.name || "").toLowerCase() === "owner",
+      isAdmin: String(role.name || "").toLowerCase() === "admin",
+      isMember: String(role.name || "").toLowerCase() === "member"
+    }));
+  }
+
+  function createServerStructureChannelRoleDefaults(type = "text") {
+    const roles = getServerStructureChannelRoles();
+    const isPrivate = type === "private";
+    const isAnnouncements = type === "announcements";
+    return roles.reduce((acc, role) => {
+      if (role.isOwner) {
+        acc[role.key] = Object.fromEntries(SERVER_CHANNEL_ROLE_PERMISSION_DEFINITIONS.map((permission) => [permission.id, true]));
+        return acc;
+      }
+      if (role.isAdmin) {
+        acc[role.key] = {
+          view_channel: true,
+          read_messages: true,
+          send_messages: type !== "voice",
+          send_files: type !== "voice",
+          send_links: type !== "voice",
+          manage_messages: true,
+          manage_channel: true
+        };
+        return acc;
+      }
+      const base = {
+        view_channel: !isPrivate,
+        read_messages: !isPrivate,
+        send_messages: !isPrivate && !isAnnouncements && type !== "voice",
+        send_files: !isPrivate && type === "text",
+        send_links: !isPrivate && type === "text",
+        manage_messages: false,
+        manage_channel: false
+      };
+      acc[role.key] = base;
+      return acc;
+    }, {});
+  }
+
+  function createServerStructureChannelAccess(type = "text") {
+    const isPrivate = type === "private";
+    const isAnnouncements = type === "announcements";
+    return {
+      view: isPrivate ? "selected_roles" : "everyone",
+      write: isAnnouncements ? "moderators_admins" : (isPrivate ? "selected_roles" : "everyone"),
+      files: isAnnouncements ? "moderators_admins" : (isPrivate ? "selected_roles" : "everyone"),
+      links: isAnnouncements ? "moderators_admins" : (isPrivate ? "selected_roles" : "everyone"),
+      everyone_mentions: isPrivate ? "admins" : "moderators_admins",
+      selected_role_ids: isPrivate ? ["owner", "admin"] : []
+    };
+  }
+
+  function createServerStructureChannelRestrictions(type = "text") {
+    return {
+      slowmode: "off",
+      block_links: false,
+      block_files: false,
+      read_only: type === "announcements",
+      block_everyone_mentions: false,
+      block_new_members: false
+    };
+  }
+
+  function normalizeServerStructureChannelState(channel = null) {
+    const type = ["text", "voice", "announcements", "private"].includes(String(channel?.type || ""))
+      ? String(channel.type)
+      : "text";
+    const roles = getServerStructureChannelRoles();
+    const defaultRolePermissions = createServerStructureChannelRoleDefaults(type);
+    const inputRolePermissions = channel?.role_permissions && typeof channel.role_permissions === "object"
+      ? channel.role_permissions
+      : {};
+    const rolePermissions = {};
+    roles.forEach((role) => {
+      const current = inputRolePermissions[role.key] && typeof inputRolePermissions[role.key] === "object"
+        ? inputRolePermissions[role.key]
+        : {};
+      rolePermissions[role.key] = SERVER_CHANNEL_ROLE_PERMISSION_DEFINITIONS.reduce((acc, permission) => {
+        acc[permission.id] = role.isOwner
+          ? true
+          : Boolean(current[permission.id] ?? defaultRolePermissions[role.key]?.[permission.id]);
+        return acc;
+      }, {});
+    });
+    return {
+      title: String(channel?.title || ""),
+      description: String(channel?.description || ""),
+      type,
+      access: {
+        ...createServerStructureChannelAccess(type),
+        ...((channel?.access && typeof channel.access === "object") ? channel.access : {})
+      },
+      rolePermissions,
+      rulesEnabled: Array.isArray(channel?.rules) ? channel.rules.length > 0 : true,
+      rules: Array.isArray(channel?.rules) && channel.rules.length
+        ? channel.rules.map((rule) => String(rule || ""))
+        : ["Общайтесь по теме канала.", "Не публикуйте спам и вредоносные ссылки."],
+      newRule: "",
+      restrictions: {
+        ...createServerStructureChannelRestrictions(type),
+        ...((channel?.restrictions && typeof channel.restrictions === "object") ? channel.restrictions : {})
+      },
+      expandedRoleKey: roles[0]?.key || null
+    };
+  }
+
+  function findActiveServerChannel(groupId) {
+    const categories = Array.isArray(chatState.activeServer?.categories) ? chatState.activeServer.categories : [];
+    for (const category of categories) {
+      const channels = Array.isArray(category?.channels) ? category.channels : [];
+      const match = channels.find((channel) => String(channel.id) === String(groupId));
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  function getServerStructureAccessLabel(groupId, optionId) {
+    return SERVER_CHANNEL_ACCESS_OPTIONS[groupId]?.find((item) => item.id === optionId)?.label || optionId;
+  }
+
+  function buildServerStructureChannelPreview(state) {
+    const selectedRoles = getServerStructureChannelRoles()
+      .filter((role) => (state.access.selected_role_ids || []).includes(role.key))
+      .map((role) => role.name);
+    const parts = [];
+    if (state.type === "private") {
+      parts.push(`Приватный канал. Доступ есть у ролей: ${selectedRoles.length ? selectedRoles.join(", ") : "owner, admin"}.`);
+    } else {
+      parts.push(`Канал виден: ${getServerStructureAccessLabel("view", state.access.view).toLowerCase()}.`);
+    }
+    parts.push(`Писать могут: ${getServerStructureAccessLabel("write", state.access.write).toLowerCase()}.`);
+    if (state.restrictions.block_files || state.access.files === "nobody") {
+      parts.push("Файлы запрещены.");
+    }
+    if (state.restrictions.slowmode && state.restrictions.slowmode !== "off") {
+      parts.push(`Медленный режим: ${SERVER_CHANNEL_SLOWMODE_OPTIONS.find((item) => item.id === state.restrictions.slowmode)?.label || state.restrictions.slowmode}.`);
+    }
+    return parts.join(" ");
+  }
+
+  function renderServerStructureChoiceChips(groupId, currentValue) {
+    return `
+      <div class="server-structure-choice-list">
+        ${SERVER_CHANNEL_ACCESS_OPTIONS[groupId].map((item) => `
+          <button
+            class="server-settings-choice-chip ${currentValue === item.id ? "is-active" : ""}"
+            type="button"
+            data-channel-access-field="${escapeHtml(groupId)}"
+            data-channel-access-value="${escapeHtml(item.id)}"
+          >${escapeHtml(item.label)}</button>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderServerStructureChannelEditor() {
+    const state = serverStructureEditorState || normalizeServerStructureChannelState();
+    const roles = getServerStructureChannelRoles();
+    const selectedRolesVisible = state.type === "private" || state.access.view === "selected_roles" || state.access.write === "selected_roles" || state.access.files === "selected_roles" || state.access.links === "selected_roles";
+    return `
+      <div class="server-channel-editor">
+        <section class="server-channel-editor-section">
+          <div class="server-channel-editor-head">
+            <h4>Основное</h4>
+            <p>Название, описание и тип канала.</p>
+          </div>
+          <label class="server-settings-field">
+            <span class="label">Название канала</span>
+            <input class="search-input" id="serverStructureName" type="text" maxlength="80" placeholder="Название канала" value="${escapeHtml(state.title)}" required>
+          </label>
+          <label class="server-settings-field">
+            <span class="label">Описание канала</span>
+            <textarea class="thread-group-edit-textarea server-structure-textarea" id="serverStructureDescription" rows="3" placeholder="Кратко опишите, для чего нужен этот канал">${escapeHtml(state.description)}</textarea>
+          </label>
+          <div class="server-structure-type-grid">
+            ${SERVER_CHANNEL_TYPE_OPTIONS.map((option) => `
+              <button
+                class="server-structure-type-card ${state.type === option.id ? "is-active" : ""}"
+                type="button"
+                data-channel-type="${escapeHtml(option.id)}"
+              >${escapeHtml(option.label)}</button>
+            `).join("")}
+          </div>
+          ${state.type === "private" ? `
+            <div class="server-settings-role-notice is-muted">
+              <strong>Приватный канал видят только выбранные роли и участники с правом управления сервером.</strong>
+            </div>
+          ` : ""}
+        </section>
+        <section class="server-channel-editor-section">
+          <div class="server-channel-editor-head">
+            <h4>Доступ к каналу</h4>
+            <p>Кто видит канал, пишет сообщения и использует вложения.</p>
+          </div>
+          <div class="server-channel-access-grid">
+            <div class="server-structure-choice-group">
+              <span class="label">Кто может видеть канал</span>
+              ${renderServerStructureChoiceChips("view", state.access.view)}
+            </div>
+            <div class="server-structure-choice-group">
+              <span class="label">Кто может писать в канал</span>
+              ${renderServerStructureChoiceChips("write", state.access.write)}
+            </div>
+            <div class="server-structure-choice-group">
+              <span class="label">Кто может отправлять файлы</span>
+              ${renderServerStructureChoiceChips("files", state.access.files)}
+            </div>
+            <div class="server-structure-choice-group">
+              <span class="label">Кто может отправлять ссылки</span>
+              ${renderServerStructureChoiceChips("links", state.access.links)}
+            </div>
+            <div class="server-structure-choice-group">
+              <span class="label">Кто может упоминать @everyone</span>
+              ${renderServerStructureChoiceChips("everyone_mentions", state.access.everyone_mentions)}
+            </div>
+          </div>
+          ${selectedRolesVisible ? `
+            <div class="server-channel-role-select-box">
+              <span class="label">Роли с доступом</span>
+              <div class="server-channel-role-chip-row">
+                ${roles.map((role) => `
+                  <button
+                    class="server-channel-role-chip ${(state.access.selected_role_ids || []).includes(role.key) ? "is-active" : ""}"
+                    type="button"
+                    data-channel-selected-role="${escapeHtml(role.key)}"
+                    ${role.isOwner ? "disabled" : ""}
+                  >
+                    <span class="server-channel-role-chip-dot" style="background:${escapeHtml(role.color)}"></span>
+                    <span>${escapeHtml(role.name)}</span>
+                  </button>
+                `).join("")}
+              </div>
+            </div>
+          ` : ""}
+        </section>
+        <section class="server-channel-editor-section">
+          <div class="server-channel-editor-head">
+            <h4>Роли</h4>
+            <p>Права ролей именно в этом канале.</p>
+          </div>
+          <div class="server-channel-role-editor-list">
+            ${roles.map((role) => `
+              <section class="server-channel-role-card ${state.expandedRoleKey === role.key ? "is-open" : ""}">
+                <button class="server-channel-role-card-head" type="button" data-channel-role-expand="${escapeHtml(role.key)}">
+                  <span class="server-channel-role-card-copy">
+                    <span class="server-channel-role-chip-dot" style="background:${escapeHtml(role.color)}"></span>
+                    <strong>${escapeHtml(role.name)}</strong>
+                  </span>
+                  <span class="server-channel-role-card-action">${state.expandedRoleKey === role.key ? "Скрыть" : "Настроить"}</span>
+                </button>
+                ${state.expandedRoleKey === role.key ? `
+                  <div class="server-channel-role-card-body">
+                    ${SERVER_CHANNEL_ROLE_PERMISSION_DEFINITIONS.map((permission) => `
+                      <label class="server-settings-role-toggle-row">
+                        <span class="server-settings-role-toggle-copy">
+                          <strong>${escapeHtml(permission.label)}</strong>
+                        </span>
+                        <span class="settings-switch">
+                          <input
+                            type="checkbox"
+                            data-channel-role-key="${escapeHtml(role.key)}"
+                            data-channel-role-permission="${escapeHtml(permission.id)}"
+                            ${state.rolePermissions?.[role.key]?.[permission.id] ? "checked" : ""}
+                            ${role.isOwner ? "disabled" : ""}
+                          >
+                          <span class="settings-switch-ui"></span>
+                        </span>
+                      </label>
+                    `).join("")}
+                  </div>
+                ` : ""}
+              </section>
+            `).join("")}
+          </div>
+        </section>
+        <section class="server-channel-editor-section">
+          <div class="server-channel-editor-head">
+            <h4>Правила канала</h4>
+            <p>Локальные правила, которые действуют только в этом канале.</p>
+          </div>
+          <label class="server-settings-role-toggle-row">
+            <span class="server-settings-role-toggle-copy">
+              <strong>Включить правила канала</strong>
+              <span>Показывать отдельный список правил для этого канала.</span>
+            </span>
+            <span class="settings-switch">
+              <input type="checkbox" data-channel-rules-enabled="true" ${state.rulesEnabled ? "checked" : ""}>
+              <span class="settings-switch-ui"></span>
+            </span>
+          </label>
+          ${state.rulesEnabled ? `
+            <div class="server-channel-rule-compose">
+              <input class="search-input" id="serverStructureRuleInput" type="text" placeholder="Добавьте новое правило" value="${escapeHtml(state.newRule || "")}">
+              <button class="button button-secondary" type="button" data-channel-add-rule="true">Добавить правило</button>
+            </div>
+            <div class="server-channel-rule-list">
+              ${state.rules.map((rule, index) => `
+                <div class="server-channel-rule-item">
+                  <input class="search-input" type="text" value="${escapeHtml(rule)}" data-channel-rule-index="${escapeHtml(String(index))}">
+                  <button class="button button-secondary" type="button" data-channel-delete-rule="${escapeHtml(String(index))}">Удалить</button>
+                </div>
+              `).join("")}
+            </div>
+          ` : ""}
+        </section>
+        <section class="server-channel-editor-section">
+          <div class="server-channel-editor-head">
+            <h4>Ограничения</h4>
+            <p>Медленный режим, запреты и режим только чтения.</p>
+          </div>
+          <label class="server-settings-field">
+            <span class="label">Медленный режим</span>
+            <select class="search-input" id="serverStructureSlowmode">
+              ${SERVER_CHANNEL_SLOWMODE_OPTIONS.map((option) => `
+                <option value="${escapeHtml(option.id)}" ${state.restrictions.slowmode === option.id ? "selected" : ""}>${escapeHtml(option.label)}</option>
+              `).join("")}
+            </select>
+          </label>
+          <div class="server-settings-role-switch-list">
+            ${[
+              ["block_links", "Запрет ссылок"],
+              ["block_files", "Запрет файлов"],
+              ["read_only", "Только чтение"],
+              ["block_everyone_mentions", "Запрет упоминания @everyone"],
+              ["block_new_members", "Запрет сообщений от новых участников"]
+            ].map(([key, label]) => `
+              <label class="server-settings-role-toggle-row">
+                <span class="server-settings-role-toggle-copy">
+                  <strong>${escapeHtml(label)}</strong>
+                </span>
+                <span class="settings-switch">
+                  <input type="checkbox" data-channel-restriction="${escapeHtml(key)}" ${state.restrictions[key] ? "checked" : ""}>
+                  <span class="settings-switch-ui"></span>
+                </span>
+              </label>
+            `).join("")}
+          </div>
+        </section>
+        <section class="server-channel-editor-section">
+          <div class="server-channel-editor-head">
+            <h4>Предпросмотр доступа</h4>
+            <p>${escapeHtml(buildServerStructureChannelPreview(state))}</p>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  function renderServerStructureSimpleForm(mode, options = {}) {
+    const descriptionVisible = mode === "server";
+    return `
+      <label class="label" for="serverStructureName">Название</label>
+      <input class="search-input" id="serverStructureName" type="text" maxlength="80" value="${escapeHtml(options.initialTitle || "")}" required>
+      <div class="server-structure-description-wrap" ${descriptionVisible ? "" : "hidden"}>
+        <label class="label" for="serverStructureDescription">Описание</label>
+        <textarea class="thread-group-edit-textarea" id="serverStructureDescription" rows="4" placeholder="Коротко о сервере">${escapeHtml(options.initialDescription || "")}</textarea>
+      </div>
+    `;
+  }
+
+  function renderServerStructureModalBody(options = {}) {
+    const mode = serverStructureModal?.dataset?.mode || "";
+    const bodyNode = serverStructureModal?.querySelector("#serverStructureBody");
+    if (!bodyNode) {
+      return;
+    }
+    bodyNode.innerHTML = mode === "channel" || mode === "channel-rename"
+      ? renderServerStructureChannelEditor()
+      : renderServerStructureSimpleForm(mode, options);
+  }
+
+  modal._renderBody = renderServerStructureModalBody;
+  modal._findChannel = findActiveServerChannel;
+  modal._normalizeChannelState = normalizeServerStructureChannelState;
+
   modal.addEventListener("click", (event) => {
     if (event.target.closest("[data-server-structure-close='true']")) {
       closeServerStructureModal();
+      return;
+    }
+    if (serverStructureModal?.hidden) {
+      return;
+    }
+    if ((modal.dataset.mode === "channel" || modal.dataset.mode === "channel-rename") && serverStructureEditorState) {
+      const typeButton = event.target.closest("[data-channel-type]");
+      if (typeButton) {
+        serverStructureEditorState = normalizeServerStructureChannelState({
+          ...serverStructureEditorState,
+          type: String(typeButton.dataset.channelType || "text"),
+          access: createServerStructureChannelAccess(String(typeButton.dataset.channelType || "text")),
+          role_permissions: createServerStructureChannelRoleDefaults(String(typeButton.dataset.channelType || "text")),
+          rules: serverStructureEditorState.rules,
+          restrictions: {
+            ...createServerStructureChannelRestrictions(String(typeButton.dataset.channelType || "text")),
+            ...(serverStructureEditorState.restrictions || {})
+          }
+        });
+        if (serverStructureEditorState.type === "private") {
+          serverStructureEditorState.access.selected_role_ids = ["owner", "admin"];
+          if (serverStructureEditorState.rolePermissions.member) {
+            serverStructureEditorState.rolePermissions.member.view_channel = false;
+            serverStructureEditorState.rolePermissions.member.read_messages = false;
+          }
+        }
+        renderServerStructureModalBody();
+        return;
+      }
+      const accessButton = event.target.closest("[data-channel-access-field]");
+      if (accessButton) {
+        const field = String(accessButton.dataset.channelAccessField || "");
+        const value = String(accessButton.dataset.channelAccessValue || "");
+        serverStructureEditorState.access[field] = value;
+        renderServerStructureModalBody();
+        return;
+      }
+      const selectedRoleButton = event.target.closest("[data-channel-selected-role]");
+      if (selectedRoleButton) {
+        const roleKey = String(selectedRoleButton.dataset.channelSelectedRole || "");
+        const activeRoles = new Set(serverStructureEditorState.access.selected_role_ids || []);
+        if (activeRoles.has(roleKey)) {
+          activeRoles.delete(roleKey);
+        } else {
+          activeRoles.add(roleKey);
+        }
+        activeRoles.add("owner");
+        if (serverStructureEditorState.type === "private") {
+          activeRoles.add("admin");
+        }
+        serverStructureEditorState.access.selected_role_ids = [...activeRoles];
+        renderServerStructureModalBody();
+        return;
+      }
+      const expandRoleButton = event.target.closest("[data-channel-role-expand]");
+      if (expandRoleButton) {
+        const roleKey = String(expandRoleButton.dataset.channelRoleExpand || "");
+        serverStructureEditorState.expandedRoleKey = serverStructureEditorState.expandedRoleKey === roleKey ? null : roleKey;
+        renderServerStructureModalBody();
+        return;
+      }
+      const addRuleButton = event.target.closest("[data-channel-add-rule='true']");
+      if (addRuleButton) {
+        const nextRule = String(serverStructureEditorState.newRule || "").trim();
+        if (nextRule) {
+          serverStructureEditorState.rules.push(nextRule);
+          serverStructureEditorState.newRule = "";
+          renderServerStructureModalBody();
+        }
+        return;
+      }
+      const deleteRuleButton = event.target.closest("[data-channel-delete-rule]");
+      if (deleteRuleButton) {
+        const index = Number(deleteRuleButton.dataset.channelDeleteRule || -1);
+        if (index >= 0) {
+          serverStructureEditorState.rules.splice(index, 1);
+          renderServerStructureModalBody();
+        }
+      }
+    }
+  });
+
+  modal.addEventListener("input", (event) => {
+    if ((modal.dataset.mode !== "channel" && modal.dataset.mode !== "channel-rename") || !serverStructureEditorState) {
+      return;
+    }
+    if (event.target.id === "serverStructureName") {
+      serverStructureEditorState.title = String(event.target.value || "");
+      return;
+    }
+    if (event.target.id === "serverStructureDescription") {
+      serverStructureEditorState.description = String(event.target.value || "");
+      return;
+    }
+    if (event.target.id === "serverStructureRuleInput") {
+      serverStructureEditorState.newRule = String(event.target.value || "");
+      return;
+    }
+    const ruleIndex = event.target.dataset?.channelRuleIndex;
+    if (ruleIndex !== undefined) {
+      serverStructureEditorState.rules[Number(ruleIndex)] = String(event.target.value || "");
+    }
+  });
+
+  modal.addEventListener("change", (event) => {
+    if ((modal.dataset.mode !== "channel" && modal.dataset.mode !== "channel-rename") || !serverStructureEditorState) {
+      return;
+    }
+    const permissionRoleKey = event.target.dataset?.channelRoleKey;
+    const permissionKey = event.target.dataset?.channelRolePermission;
+    if (permissionRoleKey && permissionKey) {
+      if (serverStructureEditorState.rolePermissions?.[permissionRoleKey]) {
+        serverStructureEditorState.rolePermissions[permissionRoleKey][permissionKey] = Boolean(event.target.checked);
+      }
+      return;
+    }
+    const restrictionKey = event.target.dataset?.channelRestriction;
+    if (restrictionKey) {
+      serverStructureEditorState.restrictions[restrictionKey] = Boolean(event.target.checked);
+      if (restrictionKey === "read_only" && event.target.checked) {
+        serverStructureEditorState.access.write = "nobody";
+      }
+      renderServerStructureModalBody();
+      return;
+    }
+    if (event.target.dataset?.channelRulesEnabled) {
+      serverStructureEditorState.rulesEnabled = Boolean(event.target.checked);
+      renderServerStructureModalBody();
+      return;
+    }
+    if (event.target.id === "serverStructureSlowmode") {
+      serverStructureEditorState.restrictions.slowmode = String(event.target.value || "off");
+      renderServerStructureModalBody();
     }
   });
 
@@ -2383,6 +3064,12 @@ function buildServerStructureModal() {
           method: "POST",
           body: JSON.stringify({
             title,
+            description,
+            type: serverStructureEditorState?.type || "text",
+            access: serverStructureEditorState?.access || {},
+            role_permissions: serverStructureEditorState?.rolePermissions || {},
+            rules: serverStructureEditorState?.rulesEnabled ? (serverStructureEditorState?.rules || []) : [],
+            restrictions: serverStructureEditorState?.restrictions || {},
             category_id: Number(categoryId)
           })
         });
@@ -2399,7 +3086,15 @@ function buildServerStructureModal() {
         const groupId = modal.dataset.groupId;
         const data = await apiFetch(`/servers/${encodeURIComponent(serverId)}/channels/${encodeURIComponent(groupId)}`, {
           method: "PATCH",
-          body: JSON.stringify({ title })
+          body: JSON.stringify({
+            title,
+            description,
+            type: serverStructureEditorState?.type || "text",
+            access: serverStructureEditorState?.access || {},
+            role_permissions: serverStructureEditorState?.rolePermissions || {},
+            rules: serverStructureEditorState?.rulesEnabled ? (serverStructureEditorState?.rules || []) : [],
+            restrictions: serverStructureEditorState?.restrictions || {},
+          })
         });
         closeServerStructureModal();
         const nextGroupId = data?.group_id || groupId;
@@ -2435,23 +3130,32 @@ function closeServerStructureModal() {
   if (!serverStructureModal) {
     return;
   }
-  serverStructureModal.hidden = true;
+  serverStructureEditorState = null;
+  serverStructureModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (serverStructureModal && !serverStructureModal.classList.contains("visible")) {
+      serverStructureModal.hidden = true;
+    }
+  }, 180);
 }
 
 function openServerStructureModal(mode, options = {}) {
   const modal = buildServerStructureModal();
   const titleNode = modal.querySelector("#serverStructureTitle");
-  const nameInput = modal.querySelector("#serverStructureName");
-  const descriptionWrap = modal.querySelector("#serverStructureDescriptionWrap");
-  const descriptionInput = modal.querySelector("#serverStructureDescription");
   const statusNode = modal.querySelector("#serverStructureStatus");
   const submitButton = modal.querySelector("#serverStructureSubmit");
+  const initialChannel = (mode === "channel-rename" && !options.channel && options.groupId)
+    ? modal._findChannel?.(options.groupId)
+    : options.channel || null;
 
   modal.dataset.mode = mode;
   modal.dataset.serverId = options.serverId ? String(options.serverId) : "";
   modal.dataset.categoryId = options.categoryId ? String(options.categoryId) : "";
   modal.dataset.groupId = options.groupId ? String(options.groupId) : "";
   modal.hidden = false;
+  requestAnimationFrame(() => {
+    modal.classList.add("visible");
+  });
 
   if (titleNode) {
     titleNode.textContent = mode === "server"
@@ -2459,36 +3163,50 @@ function openServerStructureModal(mode, options = {}) {
       : mode === "category-rename"
         ? "Переименовать категорию"
         : mode === "channel-rename"
-          ? "Переименовать канал"
+          ? "Настройки канала"
       : mode === "category"
         ? "Создать категорию"
         : "Создать канал";
   }
   if (submitButton) {
-    submitButton.textContent = mode === "category-rename" || mode === "channel-rename" ? "Сохранить" : "Создать";
+    submitButton.textContent = mode === "channel"
+      ? "Создать канал"
+      : mode === "category-rename" || mode === "channel-rename"
+        ? "Сохранить"
+        : "Создать";
     submitButton.disabled = false;
   }
   if (statusNode) {
     statusNode.textContent = "";
     statusNode.className = "status";
   }
+  if (mode === "channel" || mode === "channel-rename") {
+    serverStructureEditorState = modal._normalizeChannelState?.(initialChannel) || null;
+    modal._renderBody?.(options);
+    const nameInput = modal.querySelector("#serverStructureName");
+    nameInput?.focus();
+    return;
+  }
+  serverStructureEditorState = null;
+  modal._renderBody?.({
+    initialTitle: options.initialTitle || "",
+    initialDescription: options.initialDescription || ""
+  });
+  const nameInput = modal.querySelector("#serverStructureName");
+  const descriptionInput = modal.querySelector("#serverStructureDescription");
   if (nameInput) {
-    nameInput.value = options.initialTitle || "";
     nameInput.placeholder = mode === "server"
       ? "Например, Product Team"
       : mode === "category-rename"
         ? "Например, Разработка"
         : mode === "channel-rename"
           ? "Например, general"
-      : mode === "category"
-        ? "Например, Разработка"
-        : "Например, general";
-  }
-  if (descriptionWrap) {
-    descriptionWrap.hidden = mode !== "server";
+          : mode === "category"
+            ? "Например, Разработка"
+            : "Например, general";
   }
   if (descriptionInput) {
-    descriptionInput.value = "";
+    descriptionInput.value = options.initialDescription || "";
   }
   nameInput?.focus();
 }
@@ -2503,7 +3221,346 @@ function getServerSettingsSections() {
   ];
 }
 
+function createServerInviteModalState(server = {}) {
+  return {
+    serverId: String(server?.id || ""),
+    tab: "friends",
+    friendQuery: "",
+    contacts: [],
+    contactsLoading: true,
+    invitedFriendIds: new Set(),
+    sentInviteKeys: new Set(),
+    isCreating: false,
+    isSending: false,
+    status: "",
+    statusType: "",
+    generatedInvite: null,
+    generatedInviteSettingsKey: "",
+    settings: {
+      expires_in: "24h",
+      max_uses: "0",
+      one_time: false,
+      only_friends: false,
+      require_approval: false
+    }
+  };
+}
+
+function getServerInviteSettingsKey(settings = {}) {
+  return JSON.stringify({
+    expires_in: String(settings.expires_in || "24h"),
+    max_uses: String(settings.max_uses || "0"),
+    one_time: Boolean(settings.one_time),
+    only_friends: Boolean(settings.only_friends),
+    require_approval: Boolean(settings.require_approval)
+  });
+}
+
+function getFilteredServerInviteFriends() {
+  const query = String(serverInviteModalState?.friendQuery || "").trim().toLowerCase();
+  const contacts = Array.isArray(serverInviteModalState?.contacts) ? serverInviteModalState.contacts : [];
+  if (!query) {
+    return contacts;
+  }
+  return contacts.filter((friend) => (
+    String(friend.contact_alias || friend.name || friend.username || "").toLowerCase().includes(query)
+    || String(friend.name || friend.username || "").toLowerCase().includes(query)
+    || String(friend.username || "").toLowerCase().includes(query)
+  ));
+}
+
+function normalizeServerInviteContact(contact = {}) {
+  const id = Number(contact?.id || 0);
+  if (!id) {
+    return null;
+  }
+  const title = String(contact?.contact_alias || contact?.name || contact?.username || "Контакт").trim();
+  return {
+    id,
+    name: String(contact?.name || "").trim(),
+    username: String(contact?.username || "").trim(),
+    contact_alias: String(contact?.contact_alias || "").trim(),
+    avatar_label: initials(title || "Контакт"),
+    chat_id: contact?.chat_id ? Number(contact.chat_id) : null,
+    is_contact: Boolean(contact?.is_contact ?? true)
+  };
+}
+
+function renderServerInviteFriendsList(state = serverInviteModalState || {}) {
+  const friends = getFilteredServerInviteFriends();
+  if (state.contactsLoading && !friends.length) {
+    return `
+      <div class="server-settings-placeholder">
+        <strong>Загружаем контакты...</strong>
+        <span>Подготавливаем список ваших друзей и контактов.</span>
+      </div>
+    `;
+  }
+  if (!friends.length) {
+    return `
+      <div class="server-settings-placeholder">
+        <strong>Контакты не найдены.</strong>
+        <span>В реальном списке контактов пока нет пользователей для приглашения на этот сервер.</span>
+      </div>
+    `;
+  }
+  return friends.map((friend) => {
+    const invited = state.invitedFriendIds?.has(friend.id);
+    const title = String(friend.contact_alias || friend.name || friend.username || "Контакт");
+    return `
+      <div class="server-invite-friend-row">
+        <div class="avatar small server-invite-friend-avatar">${escapeHtml(friend.avatar_label || initials(title))}</div>
+        <div class="server-invite-friend-copy">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${friend.username ? `@${escapeHtml(friend.username)}` : "Контакт"}</span>
+        </div>
+        <button class="button ${invited ? "button-secondary" : ""}" type="button" data-server-invite-friend="${escapeHtml(friend.id)}" ${invited ? "disabled" : ""}>
+          ${invited ? "Приглашён" : "Пригласить"}
+        </button>
+      </div>
+    `;
+  }).join("");
+}
+
+function updateServerInviteFriendsView() {
+  const friendsNode = serverInviteModal?.querySelector(".server-invite-friend-list");
+  if (friendsNode) {
+    friendsNode.innerHTML = renderServerInviteFriendsList(serverInviteModalState || {});
+  }
+}
+
+async function loadServerInviteContacts() {
+  if (!serverInviteModalState || !chatState.activeServer?.id) {
+    return;
+  }
+  serverInviteModalState.contactsLoading = true;
+  serverInviteModalState.contacts = [];
+  serverInviteModalState.status = "";
+  serverInviteModalState.statusType = "";
+  const contentNode = serverInviteModal?.querySelector("[data-server-invite-content]");
+  if (contentNode) {
+    contentNode.innerHTML = renderServerInviteModalBody(chatState.activeServer || {});
+  }
+  try {
+    const data = await apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/invite-contacts`, { timeoutMs: 5000 });
+    if (!serverInviteModalState) {
+      return;
+    }
+    const apiContacts = (Array.isArray(data) ? data : data.items || [])
+      .map((contact) => normalizeServerInviteContact(contact))
+      .filter(Boolean);
+    serverInviteModalState.contacts = apiContacts;
+    serverInviteModalState.contactsLoading = false;
+    updateServerInviteFriendsView();
+  } catch (error) {
+    if (!serverInviteModalState) {
+      return;
+    }
+    serverInviteModalState.contacts = [];
+    serverInviteModalState.contactsLoading = false;
+    serverInviteModalState.status = error.message || "Не удалось загрузить контакты";
+    serverInviteModalState.statusType = "error";
+    updateServerInviteFriendsView();
+  }
+  if (contentNode) {
+    contentNode.innerHTML = renderServerInviteModalBody(chatState.activeServer || {});
+  }
+}
+
+async function ensureServerInviteLinkForModal() {
+  if (!chatState.activeServer?.id || !serverInviteModalState) {
+    throw new Error("Сервер недоступен");
+  }
+  const settingsKey = getServerInviteSettingsKey(serverInviteModalState.settings || {});
+  if (
+    serverInviteModalState.generatedInvite?.url
+    && serverInviteModalState.generatedInviteSettingsKey === settingsKey
+  ) {
+    return serverInviteModalState.generatedInvite;
+  }
+  const payload = await apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/invites`, {
+    method: "POST",
+    body: JSON.stringify(serverInviteModalState.settings)
+  });
+  serverInviteModalState.generatedInvite = payload?.invite || null;
+  serverInviteModalState.generatedInviteSettingsKey = settingsKey;
+  await refreshActiveServerInvites(chatState.activeServer.id);
+  return serverInviteModalState.generatedInvite;
+}
+
+async function inviteContactToServer(contact = {}) {
+  if (!contact?.id) {
+    throw new Error("Контакт не найден");
+  }
+  const invite = await ensureServerInviteLinkForModal();
+  if (!invite?.url) {
+    throw new Error("Не удалось создать ссылку приглашения");
+  }
+  let chatId = Number(contact.chat_id || 0);
+  if (!chatId) {
+    const chatPayload = await apiFetch("/chats", {
+      method: "POST",
+      body: JSON.stringify({ user_id: Number(contact.id) })
+    });
+    chatId = Number(chatPayload?.id || 0);
+  }
+  if (!chatId) {
+    throw new Error("Не удалось открыть чат с контактом");
+  }
+  const dedupeKey = `${chatId}::${invite.url}`;
+  if (serverInviteModalState?.sentInviteKeys?.has(dedupeKey)) {
+    throw new Error("Эта ссылка уже отправлена в этот чат");
+  }
+  await apiFetch(`/chats/${encodeURIComponent(chatId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ text: invite.url })
+  });
+  serverInviteModalState?.sentInviteKeys?.add(dedupeKey);
+  return { invite, chatId };
+}
+
+async function refreshActiveServerInvites(serverId) {
+  const [serverPayload, sidebarPayload] = await Promise.all([
+    apiFetch(`/servers/${encodeURIComponent(serverId)}`),
+    loadSidebar("chatList", { showLoading: false })
+  ]);
+  chatState.activeServer = serverPayload;
+  return sidebarPayload;
+}
+
+async function sendServerInviteToCurrentChat(inviteUrl) {
+  const route = getCurrentRouteInfo();
+  const text = String(inviteUrl || "").trim();
+  if (!text) {
+    throw new Error("Сначала создайте ссылку приглашения");
+  }
+  if (route.chatType === "group" && route.chatId) {
+    await apiFetch(`/groups/${encodeURIComponent(route.chatId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text })
+    });
+    return;
+  }
+  if (route.chatType === "direct" && route.chatId) {
+    await apiFetch(`/chats/${encodeURIComponent(route.chatId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text })
+    });
+    return;
+  }
+  throw new Error("Откройте чат или канал, куда нужно отправить приглашение");
+}
+
+function renderServerInviteModalBody(server = {}) {
+  const state = serverInviteModalState || createServerInviteModalState(server);
+  const activeInvites = Array.isArray(chatState.activeServer?.active_invites) ? chatState.activeServer.active_invites : [];
+  const friends = getFilteredServerInviteFriends();
+  const statusClass = state.statusType ? `status ${state.statusType}` : "status";
+  return `
+    <div class="server-invite-modal-layout">
+      <header class="server-invite-modal-head">
+        <div>
+          <h2>Пригласить друзей на сервер</h2>
+          <p>Отправьте приглашение другу или создайте ссылку для входа на сервер.</p>
+        </div>
+      </header>
+      <div class="server-invite-tab-row">
+        <button class="server-settings-choice-chip ${state.tab === "friends" ? "is-active" : ""}" type="button" data-server-invite-tab="friends">Друзья</button>
+        <button class="server-settings-choice-chip ${state.tab === "link" ? "is-active" : ""}" type="button" data-server-invite-tab="link">Ссылка</button>
+      </div>
+      ${state.tab === "friends" ? `
+        <section class="server-settings-section-card">
+          <label class="server-settings-field">
+            <span class="label">Поиск по друзьям</span>
+            <input class="search-input" id="serverInviteFriendSearch" type="text" placeholder="Начните вводить имя" value="${escapeHtml(state.friendQuery || "")}">
+          </label>
+          <div class="server-invite-friend-list">
+            ${renderServerInviteFriendsList(state)}
+          </div>
+        </section>
+      ` : `
+        <section class="server-settings-section-card">
+          <div class="server-settings-role-form-grid">
+            <label class="server-settings-field">
+              <span class="label">Срок действия</span>
+              <select class="search-input" id="serverInviteExpiresIn">
+                ${SERVER_INVITE_EXPIRATION_OPTIONS.map((option) => `
+                  <option value="${escapeHtml(option.id)}" ${state.settings.expires_in === option.id ? "selected" : ""}>${escapeHtml(option.label)}</option>
+                `).join("")}
+              </select>
+            </label>
+            <label class="server-settings-field">
+              <span class="label">Лимит использований</span>
+              <select class="search-input" id="serverInviteMaxUses">
+                ${SERVER_INVITE_MAX_USES_OPTIONS.map((option) => `
+                  <option value="${escapeHtml(option.id)}" ${state.settings.max_uses === option.id ? "selected" : ""}>${escapeHtml(option.label)}</option>
+                `).join("")}
+              </select>
+            </label>
+          </div>
+          <div class="server-settings-role-switch-list">
+            ${[
+              ["one_time", "Сделать ссылку одноразовой"],
+              ["only_friends", "Только для друзей"],
+              ["require_approval", "Требовать подтверждение администратора"]
+            ].map(([key, label]) => `
+              <label class="server-settings-role-toggle-row">
+                <span class="server-settings-role-toggle-copy">
+                  <strong>${escapeHtml(label)}</strong>
+                </span>
+                <span class="settings-switch">
+                  <input type="checkbox" data-server-invite-setting-toggle="${escapeHtml(key)}" ${state.settings[key] ? "checked" : ""}>
+                  <span class="settings-switch-ui"></span>
+                </span>
+              </label>
+            `).join("")}
+          </div>
+          <div class="server-settings-actions">
+            <button class="button" type="button" data-server-invite-create="true" ${state.isCreating ? "disabled" : ""}>${state.isCreating ? "Создаём..." : "Создать ссылку"}</button>
+          </div>
+          ${state.generatedInvite?.url ? `
+            <div class="server-invite-link-output">
+              <label class="server-settings-field">
+                <span class="label">Готовая ссылка</span>
+                <input class="search-input" type="text" readonly value="${escapeHtml(state.generatedInvite.url)}">
+              </label>
+              <div class="server-settings-actions">
+                <button class="button button-secondary" type="button" data-server-invite-copy="true">Скопировать</button>
+                <button class="button" type="button" data-server-invite-send="true" ${state.isSending ? "disabled" : ""}>${state.isSending ? "Отправляем..." : "Отправить в чат"}</button>
+              </div>
+            </div>
+          ` : ""}
+        </section>
+      `}
+      <section class="server-settings-section-card">
+        <header class="server-settings-content-head">
+          <div>
+            <h3>Активные приглашения</h3>
+            <p>Список действующих ссылок для сервера ${escapeHtml(server?.title || "Сервер")}.</p>
+          </div>
+        </header>
+        <div class="server-invite-active-list">
+          ${activeInvites.length ? activeInvites.map((invite) => `
+            <div class="server-invite-active-row">
+              <div class="server-invite-active-copy">
+                <strong>${escapeHtml(invite.code || "")}</strong>
+                <span>${escapeHtml(`${invite.uses || 0}${invite.max_uses ? `/${invite.max_uses}` : ""} использований`)} · ${escapeHtml(invite.expires_at ? `до ${formatTimestamp(invite.expires_at)}` : "без срока")}</span>
+              </div>
+              <div class="server-invite-active-actions">
+                <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(invite.url || "")}">Скопировать</button>
+                <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(invite.code || "")}">Отозвать</button>
+              </div>
+            </div>
+          `).join("") : `<div class="server-settings-placeholder"><strong>Активных приглашений пока нет.</strong><span>Создайте первую ссылку в соседней вкладке.</span></div>`}
+        </div>
+      </section>
+      <div class="${statusClass}" id="serverInviteStatus">${escapeHtml(state.status || "")}</div>
+    </div>
+  `;
+}
+
 function renderServerSettingsProfileSection(server = {}) {
+  const canLeaveServer = !isCurrentUserServerOwner(server);
   return `
     <section class="server-settings-section-card">
       <header class="server-settings-content-head">
@@ -2531,11 +3588,27 @@ function renderServerSettingsProfileSection(server = {}) {
         </label>
         <div class="server-settings-actions">
           <button class="button" type="button" data-server-settings-save-profile="true">Сохранить изменения</button>
+          ${canLeaveServer ? `<button class="button button-danger" type="button" data-server-settings-leave-server="true">Выйти с сервера</button>` : ""}
         </div>
         <div class="status" id="serverSettingsProfileStatus"></div>
       </div>
     </section>
   `;
+}
+
+function isCurrentUserServerOwner(server = {}) {
+  const currentUser = getCurrentUser() || {};
+  const ownerId = String(server?.owner_id || "").trim();
+  const currentUserId = String(currentUser.id || "").trim();
+  const explicitOwnerFlag = server?.is_owner;
+
+  if (explicitOwnerFlag === true || explicitOwnerFlag === 1 || explicitOwnerFlag === "1") {
+    return true;
+  }
+  if (explicitOwnerFlag === false || explicitOwnerFlag === 0 || explicitOwnerFlag === "0") {
+    return false;
+  }
+  return Boolean(ownerId && currentUserId && ownerId === currentUserId);
 }
 
 function renderServerSettingsMembersSection(server = {}) {
@@ -2565,19 +3638,394 @@ function renderServerSettingsMembersSection(server = {}) {
   `;
 }
 
-function renderServerSettingsRolesSection() {
+function getServerRoleSystemRank(role = {}) {
+  const normalizedName = String(role?.name || "").trim().toLowerCase();
+  if (normalizedName === "owner") return 0;
+  if (normalizedName === "admin") return 1;
+  if (normalizedName === "member") return 2;
+  return 3;
+}
+
+function sortServerRoles(roles = []) {
+  return [...roles].sort((left, right) => {
+    const leftRank = getServerRoleSystemRank(left);
+    const rightRank = getServerRoleSystemRank(right);
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    if (leftRank < 3) {
+      return (right.position || 0) - (left.position || 0);
+    }
+    const positionDiff = (right.position || 0) - (left.position || 0);
+    if (positionDiff !== 0) {
+      return positionDiff;
+    }
+    return String(left.name || "").localeCompare(String(right.name || ""), "ru");
+  });
+}
+
+function normalizeServerRoleColor(value) {
+  const normalizedValue = String(value || "").trim().toUpperCase();
+  return /^#[0-9A-F]{6}$/.test(normalizedValue) ? normalizedValue : "#94A3B8";
+}
+
+function normalizeServerRolePermissions(role = {}) {
+  const nextPermissions = { ...SERVER_ROLE_DEFAULT_PERMISSIONS };
+  const rawPermissions = role?.permissions && typeof role.permissions === "object"
+    ? role.permissions
+    : {};
+  Object.keys(nextPermissions).forEach((key) => {
+    if (key in rawPermissions) {
+      nextPermissions[key] = Boolean(rawPermissions[key]);
+    }
+  });
+  if (String(role?.name || "").trim().toLowerCase() === "owner") {
+    Object.keys(nextPermissions).forEach((key) => {
+      nextPermissions[key] = true;
+    });
+  }
+  if (nextPermissions.administrator) {
+    Object.keys(nextPermissions).forEach((key) => {
+      nextPermissions[key] = true;
+    });
+  }
+  return nextPermissions;
+}
+
+function cloneServerRole(role = {}) {
+  const normalizedName = String(role?.name || "").trim() || "Новая роль";
+  const normalizedColor = normalizeServerRoleColor(role?.color);
+  return {
+    ...role,
+    name: normalizedName,
+    nameInput: String(role?.nameInput ?? normalizedName),
+    color: normalizedColor,
+    colorInput: String(role?.colorInput ?? normalizedColor),
+    permissions: normalizeServerRolePermissions(role),
+    is_system: Boolean(role?.is_system)
+  };
+}
+
+function createServerSettingsRolesState(server = {}) {
+  const roles = sortServerRoles(Array.isArray(server?.roles) ? server.roles : []).map(cloneServerRole);
+  return {
+    serverId: String(server?.id || ""),
+    selectedRoleId: roles[0]?.id ? String(roles[0].id) : null,
+    roles,
+    status: "",
+    statusType: "",
+    isSaving: false
+  };
+}
+
+function ensureServerSettingsRolesState(server = {}) {
+  const serverId = String(server?.id || "");
+  if (!serverSettingsRolesEditorState || serverSettingsRolesEditorState.serverId !== serverId) {
+    serverSettingsRolesEditorState = createServerSettingsRolesState(server);
+  }
+  return serverSettingsRolesEditorState;
+}
+
+function getSelectedServerSettingsRole() {
+  const state = serverSettingsRolesEditorState;
+  if (!state?.selectedRoleId) {
+    return null;
+  }
+  return state.roles.find((role) => String(role.id) === String(state.selectedRoleId)) || null;
+}
+
+function isOwnerServerRole(role = {}) {
+  return String(role?.name || "").trim().toLowerCase() === "owner";
+}
+
+function isSystemServerRole(role = {}) {
+  return Boolean(role?.is_system);
+}
+
+function canRenameServerRole(role = {}) {
+  return !isSystemServerRole(role);
+}
+
+function canDeleteServerRole(role = {}) {
+  return !isSystemServerRole(role);
+}
+
+function canMoveServerRole(role = {}) {
+  return !isSystemServerRole(role);
+}
+
+function canEditServerRoleColor(role = {}) {
+  return !isOwnerServerRole(role);
+}
+
+function getServerRoleListDescription(role = {}) {
+  if (isOwnerServerRole(role)) {
+    return "Владелец сервера";
+  }
+  return isSystemServerRole(role) ? "Системная роль" : "Пользовательская роль";
+}
+
+function getServerRoleDisplayName(role = {}) {
+  return String(role?.name || "").trim() || "Новая роль";
+}
+
+function setServerSettingsRolesStatus(message = "", type = "", options = {}) {
+  if (!serverSettingsRolesEditorState) {
+    return;
+  }
+  serverSettingsRolesEditorState.status = message;
+  serverSettingsRolesEditorState.statusType = type;
+  if (options.isSaving !== undefined) {
+    serverSettingsRolesEditorState.isSaving = Boolean(options.isSaving);
+  }
+}
+
+function syncActiveServerRolesFromState() {
+  if (!chatState.activeServer || !serverSettingsRolesEditorState) {
+    return;
+  }
+  chatState.activeServer = {
+    ...(chatState.activeServer || {}),
+    roles: sortServerRoles(serverSettingsRolesEditorState.roles).map((role) => ({
+      id: role.id,
+      server_id: role.server_id,
+      name: role.name,
+      color: role.color,
+      position: role.position,
+      is_system: role.is_system,
+      permissions: { ...(role.permissions || {}) },
+      created_by: role.created_by,
+      created_at: role.created_at
+    }))
+  };
+}
+
+function rerenderServerSettingsRolesSection(options = {}) {
+  if (!serverSettingsModal || activeServerSettingsSection !== "roles") {
+    return;
+  }
+  const preserveFocus = options.preserveFocus !== false;
+  const activeElement = document.activeElement;
+  const restoreSelector = activeElement?.dataset?.roleField
+    ? `[data-role-field="${activeElement.dataset.roleField}"]`
+    : null;
+  const selectionStart = typeof activeElement?.selectionStart === "number" ? activeElement.selectionStart : null;
+  const selectionEnd = typeof activeElement?.selectionEnd === "number" ? activeElement.selectionEnd : null;
+  renderServerSettingsModal(chatState.activeServer || {});
+  if (!preserveFocus || !restoreSelector) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const nextField = serverSettingsModal?.querySelector(restoreSelector);
+    if (!nextField || typeof nextField.focus !== "function") {
+      return;
+    }
+    nextField.focus();
+    if (selectionStart !== null && selectionEnd !== null && typeof nextField.setSelectionRange === "function") {
+      nextField.setSelectionRange(selectionStart, selectionEnd);
+    }
+  });
+}
+
+function renderServerSettingsRolesSection(server = {}) {
+  const state = ensureServerSettingsRolesState(server);
+  const roles = sortServerRoles(state.roles);
+  const selectedRole = getSelectedServerSettingsRole();
+  const statusClass = state.statusType ? `status ${state.statusType}` : "status";
+
   return `
-    <section class="server-settings-section-card">
-      <header class="server-settings-content-head">
+    <section class="server-settings-section-card server-settings-roles-card">
+      <header class="server-settings-content-head server-settings-roles-head">
         <div>
           <h2>Роли</h2>
-          <p>Управляйте ролями и правами внутри сервера.</p>
+          <p>Создавайте роли, настраивайте права и управляйте доступом участников сервера.</p>
         </div>
-        <button class="button button-secondary server-settings-disabled-button" type="button" disabled>Создать роль</button>
+        <button class="button button-secondary" type="button" data-server-settings-create-role="true" ${state.isSaving ? "disabled" : ""}>Создать роль</button>
       </header>
-      <div class="server-settings-placeholder">
-        <strong>Здесь будут роли сервера.</strong>
-        <span>Структура секции готова, подключение серверной логики ролей можно сделать следующим шагом.</span>
+      <div class="${statusClass}" id="serverSettingsRolesStatus">${escapeHtml(state.status || "")}</div>
+      <div class="server-settings-roles-layout">
+        <aside class="server-settings-roles-sidebar">
+          <div class="server-settings-roles-list">
+            ${roles.map((role, index) => {
+              const roleId = String(role.id || "");
+              const selected = String(state.selectedRoleId || "") === roleId;
+              const moveUpDisabled = !canMoveServerRole(role) || roles.slice(0, index).every((item) => isSystemServerRole(item));
+              const moveDownDisabled = !canMoveServerRole(role) || roles.slice(index + 1).every((item) => isSystemServerRole(item));
+              return `
+                <div class="server-settings-role-list-item ${selected ? "is-active" : ""}">
+                  <button
+                    class="server-settings-role-list-select"
+                    type="button"
+                    data-server-role-select="${escapeHtml(roleId)}"
+                  >
+                  <span class="server-settings-role-list-marker" style="background:${escapeHtml(role.color || "#94A3B8")}"></span>
+                  <span class="server-settings-role-list-copy">
+                    <span class="server-settings-role-list-title-row">
+                      <strong>${escapeHtml(getServerRoleDisplayName(role))}</strong>
+                      ${role.is_system ? `<span class="server-settings-role-badge">Системная роль</span>` : ""}
+                    </span>
+                    <span>${escapeHtml(getServerRoleListDescription(role))}</span>
+                  </span>
+                  </button>
+                  <span class="server-settings-role-list-controls">
+                    ${canMoveServerRole(role) ? `
+                      <span class="server-settings-role-order-buttons">
+                        <button class="server-settings-role-order-button ${moveUpDisabled ? "is-disabled" : ""}" type="button" data-server-role-move="up" data-server-role-id="${escapeHtml(roleId)}" ${moveUpDisabled || state.isSaving ? "disabled" : ""}>↑</button>
+                        <button class="server-settings-role-order-button ${moveDownDisabled ? "is-disabled" : ""}" type="button" data-server-role-move="down" data-server-role-id="${escapeHtml(roleId)}" ${moveDownDisabled || state.isSaving ? "disabled" : ""}>↓</button>
+                      </span>
+                    ` : ""}
+                  </span>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </aside>
+        <div class="server-settings-role-editor">
+          ${selectedRole ? `
+            <div class="server-settings-role-editor-scroll">
+              <section class="server-settings-role-panel">
+                <div class="server-settings-role-panel-head">
+                  <div>
+                    <h3>${escapeHtml(getServerRoleDisplayName(selectedRole))}</h3>
+                    <p>Основные параметры роли, её отображение и базовый вид.</p>
+                  </div>
+                  ${selectedRole.is_system ? `<span class="server-settings-role-badge">Системная роль</span>` : ""}
+                </div>
+                ${isOwnerServerRole(selectedRole) ? `
+                  <div class="server-settings-role-notice">
+                    <strong>Роль владельца имеет все права и не может быть изменена.</strong>
+                  </div>
+                ` : isSystemServerRole(selectedRole) ? `
+                  <div class="server-settings-role-notice is-muted">
+                    <strong>Название системной роли закреплено, но права и отображение можно настраивать.</strong>
+                  </div>
+                ` : ""}
+                <div class="server-settings-role-form-grid">
+                  <label class="server-settings-field">
+                    <span class="label">Название роли</span>
+                    <input
+                      class="search-input"
+                      type="text"
+                      maxlength="80"
+                      value="${escapeHtml(selectedRole.nameInput || getServerRoleDisplayName(selectedRole))}"
+                      data-role-field="name"
+                      ${canRenameServerRole(selectedRole) ? "" : "disabled"}
+                    >
+                  </label>
+                  <div class="server-settings-role-color-card">
+                    <label class="server-settings-field">
+                      <span class="label">Цвет роли</span>
+                      <div class="server-settings-role-color-input-row">
+                        <span class="server-settings-role-live-swatch" style="background:${escapeHtml(selectedRole.color || "#94A3B8")}"></span>
+                        <input
+                          class="search-input server-settings-role-color-input"
+                          type="text"
+                          maxlength="7"
+                          value="${escapeHtml(selectedRole.colorInput || selectedRole.color || "#94A3B8")}"
+                          data-role-field="color"
+                          ${canEditServerRoleColor(selectedRole) ? "" : "disabled"}
+                        >
+                      </div>
+                    </label>
+                    <div class="server-settings-role-color-presets">
+                      ${SERVER_ROLE_COLOR_PRESETS.map((color) => `
+                        <button
+                          class="server-settings-role-color-preset ${String(selectedRole.color || "").toUpperCase() === color ? "is-active" : ""}"
+                          type="button"
+                          data-server-role-color-preset="${escapeHtml(color)}"
+                          aria-label="Выбрать цвет ${escapeHtml(color)}"
+                          style="background:${escapeHtml(color)}"
+                          ${canEditServerRoleColor(selectedRole) ? "" : "disabled"}
+                        ></button>
+                      `).join("")}
+                    </div>
+                  </div>
+                </div>
+                <div class="server-settings-role-preview-card">
+                  <span class="server-settings-role-preview-label">Предпросмотр</span>
+                  <div class="server-settings-role-preview-pill" style="--role-accent:${escapeHtml(selectedRole.color || "#94A3B8")}">
+                    <span class="server-settings-role-preview-dot"></span>
+                    <span>${escapeHtml(getServerRoleDisplayName(selectedRole))}</span>
+                  </div>
+                </div>
+                <div class="server-settings-role-switch-list">
+                  <label class="server-settings-role-toggle-row">
+                    <span class="server-settings-role-toggle-copy">
+                      <strong>Отображать участников с этой ролью отдельно</strong>
+                      <span>Выводит участников с ролью в отдельной группе.</span>
+                    </span>
+                    <span class="settings-switch">
+                      <input type="checkbox" data-role-field="display_separately" ${selectedRole.permissions?.display_separately ? "checked" : ""} ${isOwnerServerRole(selectedRole) ? "disabled" : ""}>
+                      <span class="settings-switch-ui"></span>
+                    </span>
+                  </label>
+                  <label class="server-settings-role-toggle-row">
+                    <span class="server-settings-role-toggle-copy">
+                      <strong>Разрешить упоминать эту роль</strong>
+                      <span>Разрешает участникам упоминать роль в сообщениях.</span>
+                    </span>
+                    <span class="settings-switch">
+                      <input type="checkbox" data-role-field="mentionable" ${selectedRole.permissions?.mentionable ? "checked" : ""} ${isOwnerServerRole(selectedRole) ? "disabled" : ""}>
+                      <span class="settings-switch-ui"></span>
+                    </span>
+                  </label>
+                </div>
+              </section>
+              <section class="server-settings-role-panel">
+                <div class="server-settings-role-panel-head">
+                  <div>
+                    <h3>Права</h3>
+                    <p>Разрешения сгруппированы по областям, как в редакторе ролей Discord.</p>
+                  </div>
+                </div>
+                ${selectedRole.permissions?.administrator ? `
+                  <div class="server-settings-role-warning">
+                    <strong>Это право даёт полный доступ ко всем настройкам сервера.</strong>
+                  </div>
+                ` : ""}
+                <div class="server-settings-role-permission-groups">
+                  ${SERVER_ROLE_PERMISSION_GROUPS.map((group) => `
+                    <section class="server-settings-role-permission-group">
+                      <header>
+                        <h4>${escapeHtml(group.title)}</h4>
+                      </header>
+                      <div class="server-settings-role-permission-list">
+                        ${group.items.map((permission) => `
+                          <label class="server-settings-role-toggle-row">
+                            <span class="server-settings-role-toggle-copy">
+                              <strong>${escapeHtml(permission.label)}</strong>
+                              <span>${escapeHtml(permission.description)}</span>
+                            </span>
+                            <span class="settings-switch">
+                              <input
+                                type="checkbox"
+                                data-role-permission-toggle="${escapeHtml(permission.id)}"
+                                ${selectedRole.permissions?.[permission.id] ? "checked" : ""}
+                                ${isOwnerServerRole(selectedRole) ? "disabled" : ""}
+                              >
+                              <span class="settings-switch-ui"></span>
+                            </span>
+                          </label>
+                        `).join("")}
+                      </div>
+                    </section>
+                  `).join("")}
+                </div>
+              </section>
+              <div class="server-settings-role-editor-actions">
+                ${canDeleteServerRole(selectedRole) ? `
+                  <button class="button button-danger" type="button" data-server-settings-delete-role="${escapeHtml(String(selectedRole.id || ""))}" ${state.isSaving ? "disabled" : ""}>Удалить роль</button>
+                ` : `<span class="server-settings-role-system-hint">Системные роли удалить нельзя.</span>`}
+                <button class="button" type="button" data-server-settings-save-role="${escapeHtml(String(selectedRole.id || ""))}" ${isOwnerServerRole(selectedRole) || state.isSaving ? "disabled" : ""}>Сохранить изменения</button>
+              </div>
+            </div>
+          ` : `
+            <div class="server-settings-placeholder server-settings-role-empty-state">
+              <strong>Выберите роль для редактирования.</strong>
+              <span>Слева доступен список ролей сервера и порядок их приоритета.</span>
+            </div>
+          `}
+        </div>
       </div>
     </section>
   `;
@@ -2601,6 +4049,8 @@ function renderServerSettingsBansSection() {
 }
 
 function renderServerSettingsAccessSection(server = {}) {
+  const activeInvites = Array.isArray(server?.active_invites) ? server.active_invites : [];
+  const canInviteMembers = Boolean(server?.can_invite_members);
   return `
     <section class="server-settings-section-card">
       <header class="server-settings-content-head">
@@ -2608,6 +4058,7 @@ function renderServerSettingsAccessSection(server = {}) {
           <h2>Доступ</h2>
           <p>Как пользователи могут попасть на сервер и какие правила действуют.</p>
         </div>
+        <button class="button" type="button" data-server-open-invite-modal="true" ${canInviteMembers ? "" : "disabled"}>Пригласить друзей</button>
       </header>
       <div class="server-settings-access-grid">
         <div class="server-settings-choice-group">
@@ -2651,6 +4102,33 @@ function renderServerSettingsAccessSection(server = {}) {
             <div class="server-settings-rule-item">2. Не публикуйте спам и вредоносные ссылки.</div>
           </div>
         </div>
+        <section class="server-settings-section-card server-settings-invite-list-card">
+          <header class="server-settings-content-head">
+            <div>
+              <h3>Активные приглашения</h3>
+              <p>Управляйте ссылками доступа к серверу.</p>
+            </div>
+          </header>
+          <div class="server-invite-active-list">
+            ${activeInvites.length ? activeInvites.map((invite) => `
+              <div class="server-invite-active-row">
+                <div class="server-invite-active-copy">
+                  <strong>${escapeHtml(invite.code || "")}</strong>
+                  <span>${escapeHtml(`${invite.uses || 0}${invite.max_uses ? `/${invite.max_uses}` : ""} использований`)} · ${escapeHtml(invite.expires_at ? `до ${formatTimestamp(invite.expires_at)}` : "без срока")}</span>
+                </div>
+                <div class="server-invite-active-actions">
+                  <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(invite.url || "")}">Скопировать</button>
+                  <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(invite.code || "")}" ${canInviteMembers ? "" : "disabled"}>Отозвать</button>
+                </div>
+              </div>
+            `).join("") : `
+              <div class="server-settings-placeholder">
+                <strong>Активных приглашений нет.</strong>
+                <span>${canInviteMembers ? "Создайте первую ссылку для входа на сервер." : "У вас нет права управлять приглашениями."}</span>
+              </div>
+            `}
+          </div>
+        </section>
       </div>
     </section>
   `;
@@ -2721,11 +4199,385 @@ function openServerSettingsModal(section = "profile") {
   }
   buildServerSettingsModal();
   activeServerSettingsSection = section;
+  if (section === "roles") {
+    serverSettingsRolesEditorState = createServerSettingsRolesState(chatState.activeServer);
+  }
   renderServerSettingsModal(chatState.activeServer);
   serverSettingsModal.hidden = false;
   requestAnimationFrame(() => {
     serverSettingsModal?.classList.add("visible");
   });
+}
+
+function closeServerInviteModal() {
+  if (!serverInviteModal) {
+    return;
+  }
+  serverInviteModal.classList.remove("visible");
+  window.setTimeout(() => {
+    if (serverInviteModal && !serverInviteModal.classList.contains("visible")) {
+      serverInviteModal.hidden = true;
+    }
+  }, 180);
+}
+
+async function openServerInviteModal() {
+  return openServerInviteModalForServer(null);
+}
+
+async function resolveActiveServerContext(preferredServerId = null) {
+  const route = getCurrentRouteInfo();
+  const resolvedServerId = preferredServerId || chatState.activeServer?.id || route.serverId;
+  if (!resolvedServerId) {
+    throw new Error("Сначала откройте сервер");
+  }
+
+  let server = chatState.activeServer;
+  const shouldRefreshServer =
+    !server
+    || String(server.id || "") !== String(resolvedServerId)
+    || server.can_invite_members === undefined;
+
+  if (shouldRefreshServer) {
+    server = await apiFetch(`/servers/${encodeURIComponent(resolvedServerId)}`);
+    chatState.activeServer = server;
+  }
+
+  if (!server?.id) {
+    throw new Error("Сервер недоступен");
+  }
+
+  if (chatState.sidebarView === "server-detail") {
+    setSidebarMode("server-detail", server);
+  }
+
+  return server;
+}
+
+function showServerInviteModal(server) {
+  buildServerInviteModal();
+  serverInviteModalState = createServerInviteModalState(server);
+  const contentNode = serverInviteModal?.querySelector("[data-server-invite-content]");
+  if (contentNode) {
+    contentNode.innerHTML = renderServerInviteModalBody(server);
+  }
+  void loadServerInviteContacts();
+  serverInviteModal.hidden = false;
+  requestAnimationFrame(() => {
+    serverInviteModal?.classList.add("visible");
+  });
+}
+
+async function openServerInviteModalForServer(preferredServerId = null) {
+  try {
+    const server = await resolveActiveServerContext(preferredServerId);
+    if (!server.can_invite_members) {
+      showAppToast("У вас нет права создавать приглашения", { type: "error" });
+      return;
+    }
+    showServerInviteModal(server);
+  } catch (error) {
+    showAppToast(error.message || "Не удалось открыть приглашение", { type: "error" });
+  }
+}
+
+async function handleSidebarServerHeaderAction(action, options = {}) {
+  const normalizedAction = String(action || "").trim();
+  const route = getCurrentRouteInfo();
+  const serverId = options.serverId || chatState.activeServer?.id || route.serverId;
+
+  if (!normalizedAction) {
+    return;
+  }
+  if (!serverId) {
+    showAppToast("Сначала откройте сервер", { type: "error" });
+    return;
+  }
+
+  if (normalizedAction === "invite") {
+    await openServerInviteModalForServer(serverId);
+    return;
+  }
+
+  if (normalizedAction === "settings") {
+    openServerSettingsModal("profile");
+    return;
+  }
+
+  if (normalizedAction === "leave") {
+    await leaveServerById(serverId, {
+      origin: "header-menu"
+    });
+    return;
+  }
+
+  if (normalizedAction === "create-category") {
+    openServerStructureModal("category", {
+      serverId
+    });
+    return;
+  }
+
+  if (normalizedAction === "create-channel") {
+    const server = await resolveActiveServerContext(serverId);
+    const firstCategoryId = Array.isArray(server?.categories) ? server.categories[0]?.id : null;
+    if (!firstCategoryId) {
+      showAppToast("Сначала создайте категорию", { type: "error", duration: 1900 });
+      return;
+    }
+    openServerStructureModal("channel", {
+      serverId,
+      categoryId: firstCategoryId
+    });
+  }
+}
+
+function buildServerInviteModal() {
+  if (serverInviteModal) {
+    return serverInviteModal;
+  }
+
+  const modal = document.createElement("div");
+  modal.className = "server-settings-modal server-invite-modal-shell";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="server-settings-backdrop" data-server-invite-close="true"></div>
+    <div class="server-settings-dialog server-invite-dialog" role="dialog" aria-modal="true" aria-labelledby="serverInviteHeading">
+      <section class="server-settings-content-wrap server-invite-content-wrap">
+        <h1 class="server-settings-shell-title" id="serverInviteHeading">Приглашение на сервер</h1>
+        <button class="server-settings-close" type="button" data-server-invite-close="true" aria-label="Закрыть окно приглашения">
+          <span class="server-settings-close-icon">×</span>
+          <span class="server-settings-close-copy">ESC</span>
+        </button>
+        <div class="server-settings-content" data-server-invite-content></div>
+      </section>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  serverInviteModal = modal;
+
+  const rerender = () => {
+    const contentNode = serverInviteModal?.querySelector("[data-server-invite-content]");
+    if (contentNode) {
+      contentNode.innerHTML = renderServerInviteModalBody(chatState.activeServer || {});
+    }
+  };
+
+  modal.addEventListener("click", (event) => {
+    if (event.target.closest("[data-server-invite-close='true']")) {
+      closeServerInviteModal();
+      return;
+    }
+    const tabButton = event.target.closest("[data-server-invite-tab]");
+    if (tabButton && serverInviteModalState) {
+      serverInviteModalState.tab = String(tabButton.dataset.serverInviteTab || "friends");
+      rerender();
+      return;
+    }
+    const friendButton = event.target.closest("[data-server-invite-friend]");
+    if (friendButton && serverInviteModalState) {
+      const contactId = String(friendButton.dataset.serverInviteFriend || "");
+      const contact = (serverInviteModalState.contacts || []).find((item) => String(item.id) === contactId);
+      friendButton.disabled = true;
+      friendButton.textContent = "Отправляем...";
+      inviteContactToServer(contact).then(() => {
+        serverInviteModalState.invitedFriendIds.add(contactId);
+        serverInviteModalState.status = `Приглашение отправлено контакту ${contact?.contact_alias || contact?.name || contact?.username || ""}`.trim();
+        serverInviteModalState.statusType = "success";
+        rerender();
+      }).catch((error) => {
+        friendButton.disabled = false;
+        friendButton.textContent = "Пригласить";
+        serverInviteModalState.status = error.message || "Не удалось отправить приглашение";
+        serverInviteModalState.statusType = "error";
+        rerender();
+      });
+      return;
+    }
+    const createButton = event.target.closest("[data-server-invite-create='true']");
+    if (createButton && chatState.activeServer?.id && serverInviteModalState) {
+      serverInviteModalState.isCreating = true;
+      serverInviteModalState.status = "Создаём ссылку...";
+      serverInviteModalState.statusType = "";
+      rerender();
+      ensureServerInviteLinkForModal().then(async (invite) => {
+        serverInviteModalState.generatedInvite = invite || null;
+        serverInviteModalState.isCreating = false;
+        serverInviteModalState.status = "Ссылка создана";
+        serverInviteModalState.statusType = "success";
+        rerender();
+        if (activeServerSettingsSection === "access" && !serverSettingsModal?.hidden) {
+          renderServerSettingsModal(chatState.activeServer || {});
+        }
+      }).catch((error) => {
+        serverInviteModalState.isCreating = false;
+        serverInviteModalState.status = error.message || "Не удалось создать ссылку";
+        serverInviteModalState.statusType = "error";
+        rerender();
+      });
+      return;
+    }
+    const copyButton = event.target.closest("[data-server-invite-copy='true'], [data-server-invite-copy-value]");
+    if (copyButton) {
+      const value = String(copyButton.dataset.serverInviteCopyValue || serverInviteModalState?.generatedInvite?.url || "").trim();
+      if (!value) {
+        showAppToast("Ссылка ещё не создана", { type: "error" });
+        return;
+      }
+      navigator.clipboard.writeText(value).then(() => {
+        if (serverInviteModalState) {
+          serverInviteModalState.status = "Ссылка скопирована";
+          serverInviteModalState.statusType = "success";
+          rerender();
+        }
+      }).catch(() => {
+        showAppToast("Не удалось скопировать ссылку", { type: "error" });
+      });
+      return;
+    }
+    const sendButton = event.target.closest("[data-server-invite-send='true']");
+    if (sendButton && serverInviteModalState?.generatedInvite?.url) {
+      serverInviteModalState.isSending = true;
+      serverInviteModalState.status = "Отправляем ссылку...";
+      serverInviteModalState.statusType = "";
+      rerender();
+      sendServerInviteToCurrentChat(serverInviteModalState.generatedInvite.url).then(() => {
+        serverInviteModalState.isSending = false;
+        serverInviteModalState.status = "Приглашение отправлено в чат";
+        serverInviteModalState.statusType = "success";
+        rerender();
+      }).catch((error) => {
+        serverInviteModalState.isSending = false;
+        serverInviteModalState.status = error.message || "Не удалось отправить приглашение";
+        serverInviteModalState.statusType = "error";
+        rerender();
+      });
+      return;
+    }
+    const revokeButton = event.target.closest("[data-server-invite-revoke]");
+    if (revokeButton && chatState.activeServer?.id) {
+      const code = String(revokeButton.dataset.serverInviteRevoke || "");
+      apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/invites/${encodeURIComponent(code)}`, {
+        method: "DELETE"
+      }).then(async () => {
+        await refreshActiveServerInvites(chatState.activeServer.id);
+        if (serverInviteModalState) {
+          serverInviteModalState.status = "Приглашение отозвано";
+          serverInviteModalState.statusType = "success";
+        }
+        rerender();
+        if (activeServerSettingsSection === "access" && !serverSettingsModal?.hidden) {
+          renderServerSettingsModal(chatState.activeServer || {});
+        }
+      }).catch((error) => {
+        if (serverInviteModalState) {
+          serverInviteModalState.status = error.message || "Не удалось отозвать приглашение";
+          serverInviteModalState.statusType = "error";
+          rerender();
+        }
+      });
+    }
+  });
+
+  modal.addEventListener("input", (event) => {
+    if (!serverInviteModalState) {
+      return;
+    }
+    if (event.target.id === "serverInviteFriendSearch") {
+      serverInviteModalState.friendQuery = String(event.target.value || "");
+      updateServerInviteFriendsView();
+    }
+  });
+
+  modal.addEventListener("change", (event) => {
+    if (!serverInviteModalState) {
+      return;
+    }
+    let settingsChanged = false;
+    if (event.target.id === "serverInviteExpiresIn") {
+      serverInviteModalState.settings.expires_in = String(event.target.value || "24h");
+      settingsChanged = true;
+    }
+    if (event.target.id === "serverInviteMaxUses") {
+      serverInviteModalState.settings.max_uses = String(event.target.value || "0");
+      settingsChanged = true;
+    }
+    const toggleKey = event.target.dataset?.serverInviteSettingToggle;
+    if (toggleKey) {
+      serverInviteModalState.settings[toggleKey] = Boolean(event.target.checked);
+      settingsChanged = true;
+    }
+    if (settingsChanged) {
+      serverInviteModalState.generatedInvite = null;
+      serverInviteModalState.generatedInviteSettingsKey = "";
+      serverInviteModalState.status = "";
+      serverInviteModalState.statusType = "";
+      rerender();
+    }
+  });
+
+  return modal;
+}
+
+async function leaveServerById(serverId, options = {}) {
+  const normalizedServerId = String(serverId || "").trim();
+  if (!normalizedServerId) {
+    showAppToast("Сначала откройте сервер", { type: "error" });
+    return false;
+  }
+
+  const activeServer = chatState.activeServer && String(chatState.activeServer.id || "") === normalizedServerId
+    ? chatState.activeServer
+    : await resolveActiveServerContext(normalizedServerId);
+  const serverTitle = activeServer?.title || "Сервер";
+  const confirmed = await openUserRelationConfirmModal({
+    title: "Выйти с сервера?",
+    body: `Вы покинете сервер «${serverTitle}». Чтобы вернуться, потребуется новое приглашение.`,
+    confirmText: "Выйти",
+    danger: true
+  });
+  if (!confirmed) {
+    return false;
+  }
+
+  const statusNode = options.statusNode || null;
+  const triggerButton = options.triggerButton || null;
+  if (triggerButton) {
+    triggerButton.disabled = true;
+  }
+  if (statusNode) {
+    statusNode.textContent = "Выходим с сервера...";
+    statusNode.className = "status";
+  }
+
+  try {
+    await apiFetch(`/servers/${encodeURIComponent(normalizedServerId)}/leave`, {
+      method: "DELETE"
+    });
+    closeServerSettingsModal();
+    closeSidebarServerHeaderMenu();
+    chatState.activeServer = null;
+    writeSelectedServerId(null);
+    writeStoredSidebarView("chats");
+    await loadSidebar("chatList", { showLoading: false });
+    const route = getCurrentRouteInfo();
+    if (String(route.serverId || "") === normalizedServerId) {
+      window.location.href = getChatsRoute();
+      return true;
+    }
+    showAppToast("Вы вышли с сервера");
+    return true;
+  } catch (error) {
+    if (triggerButton) {
+      triggerButton.disabled = false;
+    }
+    if (statusNode) {
+      statusNode.textContent = error.message || "Не удалось выйти с сервера";
+      statusNode.className = "status error";
+      return false;
+    }
+    throw error;
+  }
 }
 
 function buildServerSettingsModal() {
@@ -2765,7 +4617,16 @@ function buildServerSettingsModal() {
     const navButton = event.target.closest("[data-server-settings-section]");
     if (navButton) {
       activeServerSettingsSection = String(navButton.dataset.serverSettingsSection || "profile");
+      if (activeServerSettingsSection === "roles") {
+        serverSettingsRolesEditorState = createServerSettingsRolesState(chatState.activeServer || {});
+      }
       renderServerSettingsModal(chatState.activeServer || {});
+      return;
+    }
+
+    const openInviteButton = event.target.closest("[data-server-open-invite-modal='true']");
+    if (openInviteButton) {
+      openServerInviteModal();
       return;
     }
 
@@ -2797,7 +4658,267 @@ function buildServerSettingsModal() {
         statusNode.className = "status success";
       }
       showAppToast("Профиль сервера обновлён локально");
+      return;
     }
+
+    const leaveServerButton = event.target.closest("[data-server-settings-leave-server='true']");
+    if (leaveServerButton && chatState.activeServer?.id) {
+      void leaveServerById(chatState.activeServer.id, {
+        statusNode: modal.querySelector("#serverSettingsProfileStatus"),
+        triggerButton: leaveServerButton,
+        origin: "server-settings"
+      });
+      return;
+    }
+
+    const createRoleButton = event.target.closest("[data-server-settings-create-role='true']");
+    if (createRoleButton && chatState.activeServer?.id) {
+      ensureServerSettingsRolesState(chatState.activeServer);
+      setServerSettingsRolesStatus("Создаём роль...", "", { isSaving: true });
+      rerenderServerSettingsRolesSection({ preserveFocus: false });
+      apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/roles`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: "Новая роль",
+          color: "#94A3B8",
+          permissions: { ...SERVER_ROLE_DEFAULT_PERMISSIONS }
+        }),
+      }).then((data) => {
+        const newRole = data?.role;
+        if (!newRole) {
+          throw new Error("Не удалось создать роль");
+        }
+        serverSettingsRolesEditorState.roles = sortServerRoles([
+          ...serverSettingsRolesEditorState.roles,
+          cloneServerRole(newRole)
+        ]);
+        serverSettingsRolesEditorState.selectedRoleId = String(newRole.id);
+        setServerSettingsRolesStatus("Роль создана", "success", { isSaving: false });
+        syncActiveServerRolesFromState();
+        rerenderServerSettingsRolesSection({ preserveFocus: false });
+      }).catch((error) => {
+        setServerSettingsRolesStatus(error.message || "Не удалось создать роль", "error", { isSaving: false });
+        rerenderServerSettingsRolesSection({ preserveFocus: false });
+      });
+      return;
+    }
+
+    const selectRoleButton = event.target.closest("[data-server-role-select]");
+    if (selectRoleButton) {
+      ensureServerSettingsRolesState(chatState.activeServer || {});
+      serverSettingsRolesEditorState.selectedRoleId = String(selectRoleButton.dataset.serverRoleSelect || "");
+      rerenderServerSettingsRolesSection({ preserveFocus: false });
+      return;
+    }
+
+    const colorPresetButton = event.target.closest("[data-server-role-color-preset]");
+    if (colorPresetButton) {
+      const selectedRole = getSelectedServerSettingsRole();
+      if (!selectedRole || !canEditServerRoleColor(selectedRole)) {
+        return;
+      }
+      selectedRole.color = normalizeServerRoleColor(colorPresetButton.dataset.serverRoleColorPreset || "#94A3B8");
+      selectedRole.colorInput = selectedRole.color;
+      rerenderServerSettingsRolesSection();
+      return;
+    }
+
+    const moveRoleButton = event.target.closest("[data-server-role-move]");
+    if (moveRoleButton && chatState.activeServer?.id) {
+      ensureServerSettingsRolesState(chatState.activeServer);
+      const roleId = String(moveRoleButton.dataset.serverRoleId || "");
+      const direction = String(moveRoleButton.dataset.serverRoleMove || "");
+      const orderedRoles = sortServerRoles(serverSettingsRolesEditorState.roles);
+      const userRoles = orderedRoles.filter((role) => !role.is_system);
+      const currentIndex = userRoles.findIndex((role) => String(role.id) === roleId);
+      if (currentIndex === -1) {
+        return;
+      }
+      const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+      if (targetIndex < 0 || targetIndex >= userRoles.length) {
+        return;
+      }
+      const nextUserRoles = [...userRoles];
+      [nextUserRoles[currentIndex], nextUserRoles[targetIndex]] = [nextUserRoles[targetIndex], nextUserRoles[currentIndex]];
+      nextUserRoles.forEach((role, index) => {
+        role.position = 90 - (index * 10);
+      });
+      setServerSettingsRolesStatus("Обновляем порядок ролей...", "", { isSaving: true });
+      rerenderServerSettingsRolesSection({ preserveFocus: false });
+      Promise.all(nextUserRoles.map((role) => apiFetch(
+        `/servers/${encodeURIComponent(chatState.activeServer.id)}/roles/${encodeURIComponent(role.id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ position: role.position })
+        }
+      ))).then((responses) => {
+        const updatedRoles = responses
+          .map((response) => cloneServerRole(response?.role))
+          .filter(Boolean);
+        const updatedRoleMap = new Map(updatedRoles.map((role) => [String(role.id), role]));
+        serverSettingsRolesEditorState.roles = sortServerRoles(serverSettingsRolesEditorState.roles.map((role) => (
+          updatedRoleMap.get(String(role.id)) || role
+        )));
+        setServerSettingsRolesStatus("Порядок ролей обновлён", "success", { isSaving: false });
+        syncActiveServerRolesFromState();
+        rerenderServerSettingsRolesSection({ preserveFocus: false });
+      }).catch((error) => {
+        setServerSettingsRolesStatus(error.message || "Не удалось изменить порядок ролей", "error", { isSaving: false });
+        rerenderServerSettingsRolesSection({ preserveFocus: false });
+      });
+      return;
+    }
+
+    const deleteRoleButton = event.target.closest("[data-server-settings-delete-role]");
+    if (deleteRoleButton && chatState.activeServer?.id) {
+      const roleId = String(deleteRoleButton.dataset.serverSettingsDeleteRole || "");
+      const role = ensureServerSettingsRolesState(chatState.activeServer).roles.find((item) => String(item.id) === roleId);
+      if (!role || !canDeleteServerRole(role)) {
+        return;
+      }
+      openUserRelationConfirmModal({
+        title: "Удалить роль?",
+        body: `Роль «${getServerRoleDisplayName(role)}» будет удалена без возможности восстановления.`,
+        confirmText: "Удалить роль",
+        danger: true
+      }).then((confirmed) => {
+        if (!confirmed) {
+          return;
+        }
+        setServerSettingsRolesStatus("Удаляем роль...", "", { isSaving: true });
+        rerenderServerSettingsRolesSection({ preserveFocus: false });
+        apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/roles/${encodeURIComponent(roleId)}`, {
+          method: "DELETE",
+        }).then(() => {
+          const currentRoles = sortServerRoles(serverSettingsRolesEditorState.roles);
+          const removedIndex = currentRoles.findIndex((item) => String(item.id) === roleId);
+          serverSettingsRolesEditorState.roles = currentRoles.filter((item) => String(item.id) !== roleId);
+          const fallbackRole = serverSettingsRolesEditorState.roles[removedIndex] || serverSettingsRolesEditorState.roles[removedIndex - 1] || serverSettingsRolesEditorState.roles[0] || null;
+          serverSettingsRolesEditorState.selectedRoleId = fallbackRole ? String(fallbackRole.id) : null;
+          setServerSettingsRolesStatus("Роль удалена", "success", { isSaving: false });
+          syncActiveServerRolesFromState();
+          rerenderServerSettingsRolesSection({ preserveFocus: false });
+        }).catch((error) => {
+          setServerSettingsRolesStatus(error.message || "Не удалось удалить роль", "error", { isSaving: false });
+          rerenderServerSettingsRolesSection({ preserveFocus: false });
+        });
+      });
+      return;
+    }
+
+    const saveRoleButton = event.target.closest("[data-server-settings-save-role]");
+    if (saveRoleButton && chatState.activeServer?.id) {
+      const selectedRole = getSelectedServerSettingsRole();
+      if (!selectedRole || isOwnerServerRole(selectedRole)) {
+        return;
+      }
+      setServerSettingsRolesStatus("Сохраняем роль...", "", { isSaving: true });
+      rerenderServerSettingsRolesSection({ preserveFocus: false });
+      apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/roles/${encodeURIComponent(selectedRole.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: getServerRoleDisplayName(selectedRole),
+          color: selectedRole.color,
+          permissions: normalizeServerRolePermissions(selectedRole)
+        }),
+      }).then((data) => {
+        const updatedRole = data?.role;
+        if (!updatedRole) {
+          throw new Error("Не удалось обновить роль");
+        }
+        serverSettingsRolesEditorState.roles = sortServerRoles(serverSettingsRolesEditorState.roles.map((role) => (
+          String(role.id) === String(updatedRole.id) ? cloneServerRole(updatedRole) : role
+        )));
+        serverSettingsRolesEditorState.selectedRoleId = String(updatedRole.id);
+        setServerSettingsRolesStatus("Роль обновлена", "success", { isSaving: false });
+        syncActiveServerRolesFromState();
+        rerenderServerSettingsRolesSection({ preserveFocus: false });
+      }).catch((error) => {
+        setServerSettingsRolesStatus(error.message || "Не удалось обновить роль", "error", { isSaving: false });
+        rerenderServerSettingsRolesSection({ preserveFocus: false });
+      });
+      return;
+    }
+
+    const orderButton = event.target.closest("[data-server-role-move]");
+    if (orderButton) {
+      event.preventDefault();
+      return;
+    }
+  });
+
+  modal.addEventListener("input", (event) => {
+    if (activeServerSettingsSection !== "roles") {
+      return;
+    }
+    const selectedRole = getSelectedServerSettingsRole();
+    if (!selectedRole) {
+      return;
+    }
+    const fieldName = event.target?.dataset?.roleField;
+    if (fieldName === "name") {
+      const nextNameInput = String(event.target.value || "").slice(0, 80);
+      selectedRole.nameInput = nextNameInput;
+      selectedRole.name = String(nextNameInput || "").trim() || "Новая роль";
+      rerenderServerSettingsRolesSection();
+      return;
+    }
+    if (fieldName === "color") {
+      selectedRole.colorInput = String(event.target.value || "").toUpperCase().slice(0, 7);
+      if (/^#[0-9A-F]{6}$/.test(selectedRole.colorInput)) {
+        selectedRole.color = normalizeServerRoleColor(selectedRole.colorInput);
+      }
+      rerenderServerSettingsRolesSection();
+    }
+  });
+
+  modal.addEventListener("change", (event) => {
+    if (activeServerSettingsSection !== "roles") {
+      return;
+    }
+    const selectedRole = getSelectedServerSettingsRole();
+    if (!selectedRole) {
+      return;
+    }
+    const fieldName = event.target?.dataset?.roleField;
+    if (fieldName === "color") {
+      selectedRole.colorInput = /^#[0-9A-F]{6}$/.test(String(selectedRole.colorInput || ""))
+        ? selectedRole.colorInput
+        : selectedRole.color;
+      rerenderServerSettingsRolesSection({ preserveFocus: false });
+      return;
+    }
+    if (fieldName === "display_separately" || fieldName === "mentionable") {
+      selectedRole.permissions[fieldName] = Boolean(event.target.checked);
+      rerenderServerSettingsRolesSection({ preserveFocus: false });
+      return;
+    }
+    const permissionKey = event.target?.dataset?.rolePermissionToggle;
+    if (!permissionKey) {
+      return;
+    }
+    const isEnabled = Boolean(event.target.checked);
+    if (permissionKey === "administrator") {
+      Object.keys(selectedRole.permissions).forEach((key) => {
+        selectedRole.permissions[key] = isEnabled;
+      });
+      rerenderServerSettingsRolesSection({ preserveFocus: false });
+      return;
+    }
+    selectedRole.permissions[permissionKey] = isEnabled;
+    if (!isEnabled && selectedRole.permissions.administrator) {
+      selectedRole.permissions.administrator = false;
+    }
+    if (isEnabled) {
+      const everyPermissionEnabled = SERVER_ROLE_PERMISSION_GROUPS
+        .flatMap((group) => group.items.map((item) => item.id))
+        .filter((permissionId) => permissionId !== "administrator")
+        .every((permissionId) => selectedRole.permissions[permissionId]);
+      if (everyPermissionEnabled) {
+        selectedRole.permissions.administrator = true;
+      }
+    }
+    rerenderServerSettingsRolesSection({ preserveFocus: false });
   });
 
   document.addEventListener("keydown", (event) => {
@@ -2869,9 +4990,22 @@ function openSidebarServerHeaderMenu() {
   }
 
   const canManageServer = Boolean(chatState.activeServer?.can_manage_server);
+  const canInviteMembers = Boolean(chatState.activeServer?.can_invite_members);
+  const isServerOwner = isCurrentUserServerOwner(chatState.activeServer || {});
   menu.querySelectorAll("[data-server-header-action]").forEach((button) => {
     const action = String(button.dataset.serverHeaderAction || "");
-    const shouldDisable = !canManageServer && action !== "invite";
+    button.hidden = false;
+    button.style.display = "";
+    let shouldDisable = false;
+    if (action === "invite") {
+      shouldDisable = !canInviteMembers;
+    } else if (action === "leave") {
+      button.hidden = isServerOwner;
+      button.style.display = isServerOwner ? "none" : "";
+      shouldDisable = false;
+    } else {
+      shouldDisable = !canManageServer;
+    }
     button.disabled = shouldDisable;
   });
 
@@ -2909,7 +5043,7 @@ function bindSidebarServerHeaderMenu() {
     closeSidebarServerHeaderMenu();
   });
 
-  menu.addEventListener("click", (event) => {
+  menu.addEventListener("click", async (event) => {
     const actionButton = event.target.closest("[data-server-header-action]");
     if (!actionButton || actionButton.disabled) {
       return;
@@ -2918,41 +5052,19 @@ function bindSidebarServerHeaderMenu() {
     event.preventDefault();
     event.stopPropagation();
     const action = String(actionButton.dataset.serverHeaderAction || "");
-    const activeServer = chatState.activeServer;
-    const serverId = activeServer?.id;
+    const route = getCurrentRouteInfo();
+    const serverId = chatState.activeServer?.id || route.serverId;
     closeSidebarServerHeaderMenu();
 
     if (!serverId) {
+      showAppToast("Сначала откройте сервер", { type: "error" });
       return;
     }
 
-    if (action === "invite") {
-      showAppToast("Приглашения на сервер будут доступны в следующем обновлении");
-      return;
-    }
-
-    if (action === "settings") {
-      openServerSettingsModal("profile");
-      return;
-    }
-
-    if (action === "create-category") {
-      openServerStructureModal("category", {
-        serverId
-      });
-      return;
-    }
-
-    if (action === "create-channel") {
-      const firstCategoryId = Array.isArray(activeServer?.categories) ? activeServer.categories[0]?.id : null;
-      if (!firstCategoryId) {
-        showAppToast("Сначала создайте категорию", { type: "error", duration: 1900 });
-        return;
-      }
-      openServerStructureModal("channel", {
-        serverId,
-        categoryId: firstCategoryId
-      });
+    try {
+      await handleSidebarServerHeaderAction(action, { serverId });
+    } catch (error) {
+      showAppToast(error.message || "Не удалось выполнить действие", { type: "error" });
     }
   });
 
@@ -2963,6 +5075,10 @@ function bindSidebarServerHeaderMenu() {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && serverInviteModal && !serverInviteModal.hidden) {
+      closeServerInviteModal();
+      return;
+    }
     if (event.key === "Escape" && !menu.hidden) {
       closeSidebarServerHeaderMenu();
     }
@@ -3852,6 +5968,14 @@ function getServerSidebarPreviewText(lastMessage) {
   return getChatListPreviewText(lastMessage);
 }
 
+function getServerChannelIconPath(channel = {}) {
+  const channelType = String(channel?.type || "text");
+  if (channelType === "voice") return "/assets/icons/ui/Mic.svg";
+  if (channelType === "announcements") return "/assets/icons/ui/notifications_on.svg";
+  if (channelType === "private") return "/assets/icons/ui/Lable_fill.svg";
+  return "/assets/icons/ui/comment.svg";
+}
+
 function getServerSidebarQuery() {
   return document.querySelector(".sidebar-search .search-input")?.value.trim().toLowerCase() || "";
 }
@@ -4014,6 +6138,7 @@ function renderServerSidebar(list, server) {
               ${(Array.isArray(category.channels) ? category.channels : []).map((channel) => {
                 const unreadCount = Math.max(0, Number(channel?.unread_count || 0));
                 const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
+                const previewText = channel?.description || getServerSidebarPreviewText(channel.last_message);
                 return `
                   <div
                     class="server-channel-row ${String(channel?.id || "") === currentGroupId ? "active" : ""}"
@@ -4028,11 +6153,11 @@ function renderServerSidebar(list, server) {
                       data-chat-type="group"
                     >
                       <span class="server-channel-icon" aria-hidden="true">
-                        <img class="icon-asset" src="/assets/icons/ui/comment.svg" alt="">
+                        <img class="icon-asset" src="${getServerChannelIconPath(channel)}" alt="">
                       </span>
                       <span class="server-channel-copy">
                         <strong class="server-channel-name">${escapeHtml(channel.title || "channel")}</strong>
-                        <span class="server-channel-preview">${escapeHtml(getServerSidebarPreviewText(channel.last_message))}</span>
+                        <span class="server-channel-preview">${escapeHtml(previewText || "Канал сервера")}</span>
                       </span>
                       ${unreadCount > 0 ? `<span class="chat-unread-badge">${escapeHtml(unreadLabel)}</span>` : ""}
                     </a>
@@ -4077,7 +6202,21 @@ async function loadServerDetail(serverId, listId = "chatList", options = {}) {
     return server;
   } catch (error) {
     chatState.activeServer = null;
-    list.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    const route = getCurrentRouteInfo();
+    const errorMessage = String(error?.message || "");
+    const isMissingServer = errorMessage === "Сервер не найден";
+    if (isMissingServer) {
+      writeSelectedServerId(null);
+      writeStoredSidebarView("chats");
+      setSidebarMode("chats");
+      if (route.serverId) {
+        window.location.replace(getChatsRoute());
+        return null;
+      }
+      await loadChats(listId, { showLoading: false, renderList: true });
+      return null;
+    }
+    list.innerHTML = `<div class="empty-state">${escapeHtml(errorMessage)}</div>`;
     return null;
   }
 }
@@ -4117,18 +6256,8 @@ async function loadSidebar(listId = "chatList", options = {}) {
   const route = getCurrentRouteInfo();
   const preferredView = readStoredSidebarView();
   if (route.serverId) {
-    if (preferredView === "servers") {
-      await loadChats(listId, {
-        showLoading: false,
-        renderList: false
-      });
-      return loadServers(listId, options);
-    }
-    if (preferredView === "chats") {
-      chatState.activeServer = null;
-      setSidebarMode("chats");
-      return loadChats(listId, options);
-    }
+    writeSelectedServerId(route.serverId);
+    writeStoredSidebarView("server-detail");
     await loadChats(listId, {
       showLoading: false,
       renderList: false
@@ -5257,3 +7386,27 @@ function renderChats(list, chats) {
 
   restoreChatListScroll(list, previousScrollTop);
 }
+(function () {
+  function syncServerChatModeClass() {
+    const serverSearchField = Array.from(document.querySelectorAll("input, textarea")).find((node) => {
+      const placeholder = (node.getAttribute("placeholder") || "").trim();
+      return placeholder.startsWith("Каналы в ");
+    });
+
+    document.body.classList.toggle("server-chat-mode", Boolean(serverSearchField));
+  }
+
+  function startServerChatModeSync() {
+    if (!document.body) {
+      return;
+    }
+    syncServerChatModeClass();
+    window.setInterval(syncServerChatModeClass, 800);
+  }
+
+  if (document.body) {
+    startServerChatModeSync();
+  } else {
+    window.addEventListener("DOMContentLoaded", startServerChatModeSync, { once: true });
+  }
+})();

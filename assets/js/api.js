@@ -100,6 +100,10 @@ function getInviteRoute(token) {
   return `/invite/${encodeURIComponent(String(token))}`;
 }
 
+function getServerInviteRoute(code) {
+  return `/server-invite/${encodeURIComponent(String(code))}`;
+}
+
 function getCurrentRouteInfo() {
   const pathname = window.location.pathname || "/";
   const normalizedPath = pathname.replace(/\/+$/, "") || "/";
@@ -157,6 +161,8 @@ function getCurrentRouteInfo() {
     page = "server";
   } else if (segments[0] === "invite" && segments[1]) {
     page = "invite";
+  } else if (segments[0] === "server-invite" && segments[1]) {
+    page = "server-invite";
   }
 
   return {
@@ -456,6 +462,24 @@ function formatDate(value) {
   });
 }
 
+function formatTimestamp(value) {
+  const date = parseUtcDate(value);
+  if (!date) return "";
+
+  const datePart = date.toLocaleDateString("ru-RU", {
+    timeZone: getUserTimeZone(),
+    day: "numeric",
+    month: "short"
+  });
+  const timePart = formatTime(value);
+  return timePart ? `${datePart}, ${timePart}` : datePart;
+}
+
+// Backward-compatible alias for historical typo usages in UI code.
+function formatTImestamp(value) {
+  return formatTimestamp(value);
+}
+
 function formatChatDateDivider(value) {
   const date = parseUtcDate(value);
   const parts = getLocalDateParts(value);
@@ -490,7 +514,7 @@ function formatChatDateDivider(value) {
 }
 
 function escapeHtml(value = "") {
-  return value
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")

@@ -3,8 +3,11 @@ const BOTTOM_THRESHOLD = 24;
 const PAGE_SIZE = 30;
 const TOP_LOAD_THRESHOLD = 80;
 const URL_PATTERN = /((?:https?:\/\/|www\.)[^\s<]+)/gi;
+const SERVER_INVITE_URL_PATTERN = /https?:\/\/[^\s<]+\/server-invite\/([A-Za-z0-9_-]+)/i;
 const linkPreviewCache = new Map();
 const linkPreviewRequests = new Map();
+const serverInvitePreviewCache = new Map();
+const serverInvitePreviewRequests = new Map();
 
 function areLinkPreviewsEnabled() {
   return !document.body.classList.contains("settings-link-previews-off");
@@ -63,6 +66,73 @@ function extractFirstUrl(text = "") {
     return "";
   }
   return normalizeExternalUrl(match[0]);
+}
+
+function extractServerInviteCode(text = "") {
+  const match = String(text || "").match(SERVER_INVITE_URL_PATTERN);
+  return match?.[1] ? String(match[1]) : "";
+}
+
+function renderServerInvitePlaceholder(code = "", url = "") {
+  if (!code || !url) {
+    return "";
+  }
+  return `
+    <div class="message-server-invite is-loading" data-message-server-invite="${escapeHtml(code)}" data-server-invite-url="${escapeHtml(url)}">
+      <span class="message-server-invite-label">Приглашение на сервер</span>
+      <strong class="message-server-invite-title">Загружаем сервер...</strong>
+      <span class="message-server-invite-meta">Подготавливаем карточку приглашения</span>
+      <button class="button" type="button" disabled>Загрузка...</button>
+    </div>
+  `;
+}
+
+function renderServerInviteCard(invite = {}, fallbackUrl = "") {
+  const code = String(invite?.code || "");
+  const serverId = invite?.server_id != null ? String(invite.server_id) : "";
+  const defaultChannelId = invite?.default_channel_id != null ? String(invite.default_channel_id) : "";
+  const title = String(invite?.server_name || "Сервер");
+  const membersCount = Number(invite?.members_count || 0);
+  const onlineCount = Number(invite?.online_count || 0);
+  const isExpired = Boolean(invite?.is_expired || invite?.revoked || invite?.is_exhausted);
+  const alreadyMember = Boolean(invite?.already_member);
+  const canJoin = !isExpired && !alreadyMember;
+  const actionLabel = alreadyMember ? "Открыть сервер" : (isExpired ? "Приглашение недоступно" : "Присоединиться");
+  const actionAttrs = alreadyMember
+    ? `data-server-invite-open="${escapeHtml(serverId)}" data-server-invite-channel="${escapeHtml(defaultChannelId)}"`
+    : (canJoin ? `data-server-invite-join="${escapeHtml(code)}"` : "disabled");
+  return `
+    <div class="message-server-invite" data-message-server-invite="${escapeHtml(code)}" data-server-invite-url="${escapeHtml(fallbackUrl || invite?.url || "")}">
+      <span class="message-server-invite-label">Приглашение на сервер</span>
+      <strong class="message-server-invite-title">${escapeHtml(title)}</strong>
+      <span class="message-server-invite-meta">${escapeHtml(`${membersCount} участников · ${onlineCount} онлайн`)}</span>
+      <button class="button" type="button" ${actionAttrs}>${escapeHtml(actionLabel)}</button>
+    </div>
+  `;
+}
+
+function fetchServerInvitePreview(code = "") {
+  if (!code) {
+    return Promise.reject(new Error("invite code is required"));
+  }
+  if (serverInvitePreviewCache.has(code)) {
+    return Promise.resolve(serverInvitePreviewCache.get(code));
+  }
+  if (serverInvitePreviewRequests.has(code)) {
+    return serverInvitePreviewRequests.get(code);
+  }
+  const request = apiFetch(`/server-invite/${encodeURIComponent(code)}`)
+    .then((payload) => {
+      serverInvitePreviewCache.set(code, payload);
+      serverInvitePreviewRequests.delete(code);
+      return payload;
+    })
+    .catch((error) => {
+      serverInvitePreviewRequests.delete(code);
+      throw error;
+    });
+  serverInvitePreviewRequests.set(code, request);
+  return request;
 }
 
 function renderMessagePreviewPlaceholder(url = "") {
@@ -215,6 +285,7 @@ function renderMessageStandardBody(message = {}) {
   const hasText = Boolean(text.trim());
   const attachments = getMessageAttachments(message);
   const previewUrl = extractFirstUrl(text);
+  const serverInviteCode = extractServerInviteCode(text);
   const previewData = getMessagePreviewData(message);
 
   if (previewData?.url) {
@@ -223,7 +294,11 @@ function renderMessageStandardBody(message = {}) {
 
   return `
     ${hasText ? `<p class="message-text">${renderMessageText(text)}</p>` : ""}
-    ${hasText ? (areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl)) : ""}
+    ${hasText ? (
+      serverInviteCode
+        ? renderServerInvitePlaceholder(serverInviteCode, previewUrl)
+        : (areLinkPreviewsEnabled() && previewData ? renderMessagePreviewCard(previewData, previewData.url) : renderMessagePreviewPlaceholder(previewUrl))
+    ) : ""}
     ${renderMessageAttachments(attachments)}
   `;
 }
@@ -504,6 +579,52 @@ function hydrateLinkPreviews(container) {
         }
         if (descriptionNode) {
           descriptionNode.textContent = "Открыть ссылку";
+        }
+      });
+  });
+}
+
+function hydrateServerInviteCards(container) {
+  if (!container) {
+    return;
+  }
+
+  container.querySelectorAll("[data-message-server-invite]").forEach((node) => {
+    const code = String(node.dataset.messageServerInvite || "").trim();
+    const url = String(node.dataset.serverInviteUrl || "").trim();
+    if (!code || node.dataset.previewResolved === "true") {
+      return;
+    }
+
+    const cachedInvite = serverInvitePreviewCache.get(code);
+    if (cachedInvite) {
+      node.outerHTML = renderServerInviteCard(cachedInvite, url);
+      return;
+    }
+
+    node.dataset.previewResolved = "pending";
+    fetchServerInvitePreview(code)
+      .then((invite) => {
+        const targetNode = container.querySelector(`[data-message-server-invite="${CSS.escape(code)}"]`);
+        if (!targetNode) {
+          return;
+        }
+        targetNode.outerHTML = renderServerInviteCard(invite, url);
+      })
+      .catch(() => {
+        const targetNode = container.querySelector(`[data-message-server-invite="${CSS.escape(code)}"]`);
+        if (!targetNode) {
+          return;
+        }
+        targetNode.classList.remove("is-loading");
+        targetNode.dataset.previewResolved = "true";
+        const titleNode = targetNode.querySelector(".message-server-invite-title");
+        const metaNode = targetNode.querySelector(".message-server-invite-meta");
+        if (titleNode) {
+          titleNode.textContent = "Приглашение недоступно";
+        }
+        if (metaNode) {
+          metaNode.textContent = "Ссылка истекла или была отозвана";
         }
       });
   });
@@ -881,6 +1002,7 @@ function renderMessages(container, messages, currentUserId, chatType) {
   rebuildDateDividers(container);
   initializeVoicePlayers(container);
   hydrateLinkPreviews(container);
+  hydrateServerInviteCards(container);
 }
 
 function renderMessagesSkeleton() {
@@ -934,6 +1056,7 @@ function appendMessage(container, message, currentUserId, chatType) {
   rebuildDateDividers(container);
   initializeVoicePlayers(container);
   hydrateLinkPreviews(container);
+  hydrateServerInviteCards(container);
   return true;
 }
 
@@ -968,6 +1091,7 @@ function prependMessages(container, messages, currentUserId, chatType) {
   rebuildDateDividers(container);
   initializeVoicePlayers(container);
   hydrateLinkPreviews(container);
+  hydrateServerInviteCards(container);
   return insertedCount;
 }
 
@@ -1012,6 +1136,7 @@ function replaceMessageNode(container, message, currentUserId, chatType) {
   rebuildDateDividers(container);
   initializeVoicePlayers(container);
   hydrateLinkPreviews(container);
+  hydrateServerInviteCards(container);
   return true;
 }
 
@@ -1430,9 +1555,15 @@ function fillThreadInfoPanel(info, chatType) {
       const members = Array.isArray(info?.members) ? info.members : [];
       const canEditGroup = Boolean(info?.can_edit_group);
       const canAddMembers = Boolean(info?.can_add_members);
+      const threadInfoEditActionButton = document.querySelector('#threadInfoActionMenu [data-thread-info-action="edit-group"]');
+      const isServerChannel = Boolean(getCurrentRouteInfo()?.serverId);
       membersWrapNode.hidden = false;
       if (menuTriggerNode) {
         menuTriggerNode.hidden = !canEditGroup;
+        menuTriggerNode.setAttribute("aria-label", isServerChannel ? "Действия канала" : "Действия группы");
+      }
+      if (threadInfoEditActionButton) {
+        threadInfoEditActionButton.textContent = isServerChannel ? "Настройки канала" : "Редактировать группу";
       }
       if (memberAddTriggerNode) {
         memberAddTriggerNode.hidden = !canAddMembers;
@@ -1634,6 +1765,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadInfoInviteRegenerate = document.getElementById("threadInfoInviteRegenerate");
   const threadInfoInviteStatus = document.getElementById("threadInfoInviteStatus");
   const threadInfoMembersListNode = document.getElementById("threadInfoMembersList");
+  const threadInfoEditActionButton = document.querySelector('#threadInfoActionMenu [data-thread-info-action="edit-group"]');
   const threadInfoSearchAction = document.getElementById("threadInfoSearchAction");
   const threadInfoSearchPanel = document.getElementById("threadInfoSearchPanel");
   const threadInfoSearchInput = document.getElementById("threadInfoSearchInput");
@@ -1716,6 +1848,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   let activeThreadMemberItem = null;
   let stickerLibraryState = null;
   let activeStickerPackId = "";
+
+  function getComposerPlaceholder() {
+    return chatType === "group"
+      ? (serverId ? "Сообщение в канал..." : "Сообщение в группу...")
+      : "Напишите сообщение...";
+  }
+
+  function syncComposerAvailability() {
+    const canSendMessages = chatType === "group" && currentThreadInfo?.server
+      ? Boolean(currentThreadInfo?.can_send_messages)
+      : true;
+    composer.hidden = !canSendMessages;
+    composerWrap.hidden = !canSendMessages;
+    if (!canSendMessages) {
+      input.value = "";
+      resizeComposerInput();
+      updateComposerActionButton();
+    }
+  }
   let isLoadingStickerLibrary = false;
   let stickerPickerHideTimer = null;
   let threadMemberContacts = [];
@@ -1857,7 +2008,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     status.textContent = "";
     status.className = "status thread-status";
     input.value = "";
-    input.placeholder = chatType === "group" ? "Сообщение в группу..." : "Напишите сообщение...";
+    input.placeholder = getComposerPlaceholder();
     composer.hidden = false;
     composerWrap.hidden = false;
     resizeComposerInput();
@@ -3367,6 +3518,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!userId) {
       return;
     }
+    const targetUserId = String(userId);
+    const currentDirectThreadUserId = currentThreadInfo
+      ? String(currentThreadInfo.user_id || currentThreadInfo.id || "")
+      : "";
+    if (chatType === "direct" && currentDirectThreadUserId === targetUserId) {
+      await refreshCurrentThreadInfo();
+      await loadSidebar("chatList", { showLoading: false });
+      return;
+    }
     const profile = await apiFetch(`/users/${encodeURIComponent(userId)}`);
     syncThreadUserProfileState(profile);
     await loadSidebar("chatList", { showLoading: false });
@@ -3605,6 +3765,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (activeThreadMemberItem) {
         hideThreadMemberActionMenu();
       }
+      syncComposerAvailability();
     }
     if (!activeThreadInfoView || activeThreadInfoType === chatType) {
       setActiveThreadInfoView(currentThreadInfo, chatType);
@@ -4218,7 +4379,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       input.value = nextState.text;
       input.placeholder = "Редактирование сообщения";
     } else {
-      input.placeholder = chatType === "group" ? "Сообщение в группу..." : "Напишите сообщение...";
+      input.placeholder = getComposerPlaceholder();
     }
 
     resizeComposerInput();
@@ -4741,6 +4902,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderHeaderStatus();
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
+    syncComposerAvailability();
     const nextMessages = data.messages || [];
     exitSelectionMode();
     renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
@@ -5036,6 +5198,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   threadInfoActionMenu?.addEventListener("click", (event) => {
     const action = event.target.closest("button")?.dataset.threadInfoAction;
     if (action === "edit-group") {
+      closeThreadInfoActionMenu();
+      if (serverId && chatId && typeof openServerStructureModal === "function") {
+        openServerStructureModal("channel-rename", {
+          serverId,
+          groupId: chatId
+        });
+        return;
+      }
       openThreadGroupEditModal();
     }
   });
@@ -5544,6 +5714,49 @@ document.addEventListener("DOMContentLoaded", async () => {
         : [String(imageTrigger.dataset.imageModalSrc || "").trim()].filter(Boolean);
       const startIndex = Number(imageTrigger.dataset.imageModalIndex || "0");
       openImageModal(String(imageTrigger.dataset.imageModalSrc || "").trim(), gallery, startIndex);
+      return;
+    }
+
+    const serverInviteJoinButton = event.target.closest("[data-server-invite-join]");
+    if (serverInviteJoinButton) {
+      event.preventDefault();
+      const inviteCode = String(serverInviteJoinButton.dataset.serverInviteJoin || "").trim();
+      if (!inviteCode || serverInviteJoinButton.disabled) {
+        return;
+      }
+      serverInviteJoinButton.disabled = true;
+      serverInviteJoinButton.textContent = "Подключаем...";
+      apiFetch(`/server-invite/${encodeURIComponent(inviteCode)}/join`, {
+        method: "POST"
+      }).then((payload) => {
+        const invite = payload?.invite;
+        if (invite?.code) {
+          serverInvitePreviewCache.set(invite.code, invite);
+        }
+        if (payload?.pending_approval) {
+          serverInviteJoinButton.textContent = "Заявка отправлена";
+          showAppToast("Заявка на вступление отправлена");
+          return;
+        }
+        if (payload?.redirect_url) {
+          window.location.href = payload.redirect_url;
+          return;
+        }
+        serverInviteJoinButton.textContent = "Вы присоединились";
+      }).catch((error) => {
+        serverInviteJoinButton.disabled = false;
+        serverInviteJoinButton.textContent = "Присоединиться";
+        showAppToast(error.message || "Не удалось принять приглашение", { type: "error" });
+      });
+      return;
+    }
+
+    const serverInviteOpenButton = event.target.closest("[data-server-invite-open]");
+    if (serverInviteOpenButton) {
+      event.preventDefault();
+      const serverId = String(serverInviteOpenButton.dataset.serverInviteOpen || "").trim();
+      const groupId = String(serverInviteOpenButton.dataset.serverInviteChannel || "").trim();
+      window.location.href = serverId && groupId ? getServerChannelRoute(serverId, groupId) : getServerRoute(serverId);
       return;
     }
   });

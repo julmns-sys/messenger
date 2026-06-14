@@ -1,8 +1,16 @@
+const AUTH_SIDEBAR_VIEW_KEY = "messenger:sidebar-view";
+const AUTH_SELECTED_SERVER_KEY = "messenger:selected-server-id";
+
 function setStatus(message, type = "") {
   const status = document.getElementById("status");
   if (!status) return;
   status.className = `status ${type}`.trim();
   status.textContent = message;
+}
+
+function resetPostAuthSidebarState() {
+  window.localStorage.setItem(AUTH_SIDEBAR_VIEW_KEY, "chats");
+  window.localStorage.removeItem(AUTH_SELECTED_SERVER_KEY);
 }
 
 function setNodeStatus(node, message, type = "") {
@@ -158,6 +166,7 @@ document.addEventListener("DOMContentLoaded", () => {
               ? "Аккаунт создан"
               : "Вход выполнен";
           setStatus(successMessage, "success");
+          resetPostAuthSidebarState();
           window.setTimeout(() => {
             const redirectPath = nextPath || consumePostAuthRedirect() || getChatsRoute();
             if (nextPath) {

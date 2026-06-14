@@ -15,10 +15,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const joinButton = document.getElementById("inviteJoinButton");
   const openButton = document.getElementById("inviteOpenButton");
   const route = getCurrentRouteInfo();
-  const inviteToken = route.page === "invite" ? route.segments[1] : "";
+  const isGroupInvite = route.page === "invite";
+  const isServerInvite = route.page === "server-invite";
+  const inviteCode = isGroupInvite || isServerInvite ? route.segments[1] : "";
+  const inviteRoute = isServerInvite ? getServerInviteRoute(inviteCode) : getInviteRoute(inviteCode);
+  const entityLabel = isServerInvite ? "сервер" : "группу";
   const currentPath = window.location.pathname + window.location.search + window.location.hash;
 
-  if (!inviteToken) {
+  if (!inviteCode) {
     setInviteStatus("Ссылка приглашения недействительна", "error");
     if (joinButton) {
       joinButton.disabled = true;
@@ -38,17 +42,28 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderInvite(data) {
     inviteData = data;
-    const title = data?.title || "Группа";
+    const title = isServerInvite
+      ? (data?.server_name || "Сервер")
+      : (data?.title || "Группа");
     const membersCount = Number(data?.members_count || 0);
-    const description = typeof data?.description === "string" && data.description.trim()
-      ? data.description.trim()
-      : "Описание группы пока не добавлено.";
+    const onlineCount = Number(data?.online_count || 0);
+    const description = isServerInvite
+      ? (data?.already_member
+          ? "Вы уже состоите на этом сервере."
+          : data?.require_approval
+            ? "Для вступления может потребоваться подтверждение."
+            : "Откройте приглашение и присоединитесь к серверу.")
+      : (typeof data?.description === "string" && data.description.trim()
+          ? data.description.trim()
+          : "Описание группы пока не добавлено.");
 
     if (titleNode) {
       titleNode.textContent = title;
     }
     if (subtitleNode) {
-      subtitleNode.textContent = `${membersCount} участников`;
+      subtitleNode.textContent = isServerInvite
+        ? `${membersCount} участников${onlineCount > 0 ? ` · ${onlineCount} онлайн` : ""}`
+        : `${membersCount} участников`;
     }
     if (descriptionNode) {
       descriptionNode.textContent = description;
@@ -59,11 +74,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (openButton && data?.redirect_url) {
       openButton.href = data.redirect_url;
     }
+    if (joinButton) {
+      joinButton.textContent = data?.already_member
+        ? (isServerInvite ? "Открыть сервер" : "Открыть группу")
+        : (isServerInvite ? "Вступить на сервер" : "Вступить в группу");
+    }
   }
 
   async function loadInvite() {
     try {
-      const data = await apiFetch(getInviteRoute(inviteToken));
+      const data = await apiFetch(inviteRoute);
       if (data?.already_member && data.redirect_url) {
         window.location.replace(data.redirect_url);
         return;
@@ -89,7 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
         subtitleNode.textContent = "Приглашение больше не работает";
       }
       if (descriptionNode) {
-        descriptionNode.textContent = "Попросите администратора группы прислать новую invite-ссылку.";
+        descriptionNode.textContent = `Попросите администратора прислать новую ссылку на ${entityLabel}.`;
       }
       if (joinButton) {
         joinButton.disabled = true;
@@ -108,27 +128,43 @@ document.addEventListener("DOMContentLoaded", () => {
 
     isJoining = true;
     joinButton.disabled = true;
-    joinButton.textContent = "Вступаем...";
-    setInviteStatus("Добавляем вас в группу...", "");
+    joinButton.textContent = isServerInvite ? "Подключаем..." : "Вступаем...";
+    setInviteStatus(isServerInvite ? "Подключаем вас к серверу..." : "Добавляем вас в группу...", "");
 
     try {
-      const data = await apiFetch(`${getInviteRoute(inviteToken)}/join`, {
+      const data = await apiFetch(`${inviteRoute}/join`, {
         method: "POST"
       });
       const redirectUrl = data?.redirect_url || inviteData?.redirect_url || getChatsRoute();
-      setInviteStatus("Готово. Открываем группу...", "success");
+      const pendingApproval = Boolean(data?.pending_approval);
+      if (pendingApproval) {
+        isJoining = false;
+        joinButton.disabled = false;
+        joinButton.textContent = "Ожидает подтверждения";
+        setInviteStatus("Заявка отправлена. Ожидайте подтверждения администратора.", "success");
+        return;
+      }
+      if (isServerInvite && data?.server_id) {
+        try {
+          writeSelectedServerId(String(data.server_id));
+          writeStoredSidebarView("server-detail");
+        } catch {
+          // Ignore local sidebar state persistence failures.
+        }
+      }
+      setInviteStatus(isServerInvite ? "Готово. Открываем сервер..." : "Готово. Открываем группу...", "success");
       if (openButton) {
         openButton.href = redirectUrl;
         openButton.hidden = false;
       }
-      joinButton.textContent = "Вступили";
+      joinButton.textContent = isServerInvite ? "Подключено" : "Вступили";
       window.setTimeout(() => {
         window.location.replace(redirectUrl);
       }, 220);
     } catch (error) {
       isJoining = false;
       joinButton.disabled = false;
-      joinButton.textContent = "Вступить в группу";
+      joinButton.textContent = isServerInvite ? "Вступить на сервер" : "Вступить в группу";
       if (error.message === "Не авторизован") {
         setPostAuthRedirect(currentPath);
         const next = encodeURIComponent(currentPath);

@@ -362,12 +362,47 @@ def _ensure_server_tables(conn):
                 INDEX idx_server_channels_server_category_position (server_id, category_id, position)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS server_roles (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL,
+                name VARCHAR(80) NOT NULL,
+                color VARCHAR(32) NOT NULL DEFAULT '#94a3b8',
+                position INT NOT NULL DEFAULT 0,
+                is_system TINYINT(1) NOT NULL DEFAULT 0,
+                permissions_json LONGTEXT NULL,
+                created_by INT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_server_role_name (server_id, name),
+                INDEX idx_server_roles_server_id (server_id),
+                INDEX idx_server_roles_server_position (server_id, position)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS server_invites (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL,
+                code VARCHAR(64) NOT NULL,
+                created_by INT NOT NULL,
+                expires_at DATETIME NULL,
+                max_uses INT NULL,
+                uses_count INT NOT NULL DEFAULT 0,
+                only_friends TINYINT(1) NOT NULL DEFAULT 0,
+                one_time TINYINT(1) NOT NULL DEFAULT 0,
+                require_approval TINYINT(1) NOT NULL DEFAULT 0,
+                revoked TINYINT(1) NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uniq_server_invite_code (code),
+                INDEX idx_server_invites_server_id (server_id),
+                INDEX idx_server_invites_created_by (created_by)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """)
 
         cursor.execute("""
             SELECT TABLE_NAME, COLUMN_NAME
             FROM information_schema.COLUMNS
             WHERE TABLE_SCHEMA = %s
-              AND TABLE_NAME IN ('server_categories', 'server_channels', 'server_members', 'servers')
+              AND TABLE_NAME IN ('server_categories', 'server_channels', 'server_invites', 'server_members', 'server_roles', 'servers')
         """, (DB_NAME,))
         existing = {}
         for table_name, column_name in cursor.fetchall() or []:
@@ -402,6 +437,32 @@ def _ensure_server_tables(conn):
                     ELSE role
                 END
         """)
+
+        if "color" not in existing.get("server_roles", set()):
+            cursor.execute("""
+                ALTER TABLE server_roles
+                ADD COLUMN color VARCHAR(32) NOT NULL DEFAULT '#94a3b8' AFTER name
+            """)
+        if "position" not in existing.get("server_roles", set()):
+            cursor.execute("""
+                ALTER TABLE server_roles
+                ADD COLUMN position INT NOT NULL DEFAULT 0 AFTER color
+            """)
+        if "is_system" not in existing.get("server_roles", set()):
+            cursor.execute("""
+                ALTER TABLE server_roles
+                ADD COLUMN is_system TINYINT(1) NOT NULL DEFAULT 0 AFTER position
+            """)
+        if "permissions_json" not in existing.get("server_roles", set()):
+            cursor.execute("""
+                ALTER TABLE server_roles
+                ADD COLUMN permissions_json LONGTEXT NULL AFTER is_system
+            """)
+        if "created_by" not in existing.get("server_roles", set()):
+            cursor.execute("""
+                ALTER TABLE server_roles
+                ADD COLUMN created_by INT NULL AFTER permissions_json
+            """)
 
         if "title" not in existing.get("server_categories", set()):
             cursor.execute("""
@@ -445,6 +506,36 @@ def _ensure_server_tables(conn):
             cursor.execute("""
                 ALTER TABLE server_channels
                 ADD COLUMN created_by INT NULL AFTER position
+            """)
+        if "description" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN description TEXT NULL AFTER slug
+            """)
+        if "channel_type" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN channel_type VARCHAR(32) NOT NULL DEFAULT 'text' AFTER description
+            """)
+        if "access_json" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN access_json LONGTEXT NULL AFTER channel_type
+            """)
+        if "role_permissions_json" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN role_permissions_json LONGTEXT NULL AFTER access_json
+            """)
+        if "rules_json" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN rules_json LONGTEXT NULL AFTER role_permissions_json
+            """)
+        if "restrictions_json" not in existing.get("server_channels", set()):
+            cursor.execute("""
+                ALTER TABLE server_channels
+                ADD COLUMN restrictions_json LONGTEXT NULL AFTER rules_json
             """)
         if "legacy_room_id" not in existing.get("server_channels", set()):
             cursor.execute("""
