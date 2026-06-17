@@ -8,6 +8,7 @@ const chatState = {
 };
 const CHAT_LIST_SCROLL_KEY = "messenger:chat-list-scroll-top";
 const CHAT_TAGS_KEY = "messenger:chat-tags";
+const CHAT_ACTIVE_TAG_FILTER_KEY = "messenger:chat-active-tag-filter";
 const APP_SETTINGS_KEY = "messenger:settings";
 const SERVER_CATEGORY_STATE_KEY = "messenger:server-category-state";
 const SIDEBAR_VIEW_KEY = "messenger:sidebar-view";
@@ -28,7 +29,7 @@ let groupOwnerLeaveModal = null;
 let groupDeleteConfirmModal = null;
 let pendingChatDeleteState = null;
 let chatDeleteUndoCountdownTimer = null;
-let activeChatTagFilter = "all";
+let activeChatTagFilter = readStoredActiveChatTagFilter();
 const pendingDeletedChatKeys = new Set();
 let userRelationConfirmModal = null;
 let serverStructureModal = null;
@@ -40,6 +41,7 @@ let activeServerSettingsSection = "profile";
 let serverSettingsRolesEditorState = null;
 let serverInviteModal = null;
 let serverInviteModalState = null;
+let serverSidebarInlineRenameState = null;
 let sidebarSwipeTransition = Promise.resolve();
 const SERVER_INVITE_EXPIRATION_OPTIONS = [
   { id: "30m", label: "30 минут" },
@@ -126,7 +128,7 @@ const SERVER_ROLE_DEFAULT_PERMISSIONS = {
   manage_roles: false,
   manage_channels: false,
   view_audit_log: false,
-  invite_members: true,
+  invite_members: false,
   kick_members: false,
   ban_members: false,
   manage_nicknames: false,
@@ -190,6 +192,7 @@ const SERVER_CHANNEL_ROLE_PERMISSION_DEFINITIONS = [
   { id: "view_channel", label: "Видеть канал" },
   { id: "read_messages", label: "Читать сообщения" },
   { id: "send_messages", label: "Отправлять сообщения" },
+  { id: "send_announcements", label: "Отправлять объявления" },
   { id: "send_files", label: "Отправлять файлы" },
   { id: "send_links", label: "Отправлять ссылки" },
   { id: "manage_messages", label: "Управлять сообщениями" },
@@ -1069,6 +1072,26 @@ function readChatTags() {
 
 function saveChatTags(tagMap) {
   window.localStorage.setItem(CHAT_TAGS_KEY, JSON.stringify(tagMap));
+}
+
+function readStoredActiveChatTagFilter() {
+  const rawValue = String(window.localStorage.getItem(CHAT_ACTIVE_TAG_FILTER_KEY) || "").trim();
+  if (!rawValue) {
+    return "all";
+  }
+  if (rawValue === "all" || rawValue === "untagged" || rawValue === "servers" || rawValue.startsWith("tag:")) {
+    return rawValue;
+  }
+  return "all";
+}
+
+function writeStoredActiveChatTagFilter(filter) {
+  const normalizedFilter = typeof filter === "string" ? filter.trim() : "";
+  if (!normalizedFilter) {
+    window.localStorage.removeItem(CHAT_ACTIVE_TAG_FILTER_KEY);
+    return;
+  }
+  window.localStorage.setItem(CHAT_ACTIVE_TAG_FILTER_KEY, normalizedFilter);
 }
 
 function normalizeChatTagColor(color) {
@@ -2485,6 +2508,7 @@ function buildServerStructureModal() {
           view_channel: true,
           read_messages: true,
           send_messages: type !== "voice",
+          send_announcements: true,
           send_files: type !== "voice",
           send_links: type !== "voice",
           manage_messages: true,
@@ -2496,6 +2520,7 @@ function buildServerStructureModal() {
         view_channel: !isPrivate,
         read_messages: !isPrivate,
         send_messages: !isPrivate && !isAnnouncements && type !== "voice",
+        send_announcements: false,
         send_files: !isPrivate && type === "text",
         send_links: !isPrivate && type === "text",
         manage_messages: false,
@@ -3234,14 +3259,12 @@ function createServerInviteModalState(server = {}) {
     isSending: false,
     status: "",
     statusType: "",
-    generatedInvite: null,
+    generatedInvite: Array.isArray(server?.active_invites) ? (server.active_invites[0] || null) : null,
     generatedInviteSettingsKey: "",
     settings: {
       expires_in: "24h",
       max_uses: "0",
-      one_time: false,
-      only_friends: false,
-      require_approval: false
+      one_time: false
     }
   };
 }
@@ -3250,9 +3273,7 @@ function getServerInviteSettingsKey(settings = {}) {
   return JSON.stringify({
     expires_in: String(settings.expires_in || "24h"),
     max_uses: String(settings.max_uses || "0"),
-    one_time: Boolean(settings.one_time),
-    only_friends: Boolean(settings.only_friends),
-    require_approval: Boolean(settings.require_approval)
+    one_time: Boolean(settings.one_time)
   });
 }
 
@@ -3330,7 +3351,7 @@ function updateServerInviteFriendsView() {
 }
 
 async function loadServerInviteContacts() {
-  if (!serverInviteModalState || !chatState.activeServer?.id) {
+  if (!serverInviteModalState || !chatState.activeServer?.id || !chatState.activeServer?.can_invite_members) {
     return;
   }
   serverInviteModalState.contactsLoading = true;
@@ -3382,10 +3403,13 @@ async function ensureServerInviteLinkForModal() {
     method: "POST",
     body: JSON.stringify(serverInviteModalState.settings)
   });
-  serverInviteModalState.generatedInvite = payload?.invite || null;
+  const invite = payload?.invite || null;
+  serverInviteModalState.generatedInvite = invite;
   serverInviteModalState.generatedInviteSettingsKey = settingsKey;
-  await refreshActiveServerInvites(chatState.activeServer.id);
-  return serverInviteModalState.generatedInvite;
+  if (chatState.activeServer) {
+    await refreshActiveServerInvites(chatState.activeServer.id);
+  }
+  return invite;
 }
 
 async function inviteContactToServer(contact = {}) {
@@ -3453,9 +3477,29 @@ async function sendServerInviteToCurrentChat(inviteUrl) {
 
 function renderServerInviteModalBody(server = {}) {
   const state = serverInviteModalState || createServerInviteModalState(server);
-  const activeInvites = Array.isArray(chatState.activeServer?.active_invites) ? chatState.activeServer.active_invites : [];
-  const friends = getFilteredServerInviteFriends();
   const statusClass = state.statusType ? `status ${state.statusType}` : "status";
+  const invite = state.generatedInvite || (Array.isArray(server?.active_invites) ? server.active_invites[0] : null);
+  const canInviteMembers = Boolean(server?.can_invite_members);
+  const activeInvites = Array.isArray(chatState.activeServer?.active_invites) ? chatState.activeServer.active_invites : [];
+  if (!canInviteMembers) {
+    return `
+      <div class="server-invite-modal-layout">
+        <header class="server-invite-modal-head">
+          <div>
+            <h2>Приглашение на сервер</h2>
+            <p>Доступ к пригласительной ссылке ограничен правами вашей роли.</p>
+          </div>
+        </header>
+        <section class="server-settings-section-card">
+          <div class="server-settings-placeholder">
+            <strong>У вас нет прав приглашать участников на этот сервер</strong>
+            <span>Попросите владельца сервера или администратора выдать вашей роли право приглашать участников.</span>
+          </div>
+        </section>
+        <div class="${statusClass}" id="serverInviteStatus">${escapeHtml(state.status || "")}</div>
+      </div>
+    `;
+  }
   return `
     <div class="server-invite-modal-layout">
       <header class="server-invite-modal-head">
@@ -3500,9 +3544,7 @@ function renderServerInviteModalBody(server = {}) {
           </div>
           <div class="server-settings-role-switch-list">
             ${[
-              ["one_time", "Сделать ссылку одноразовой"],
-              ["only_friends", "Только для друзей"],
-              ["require_approval", "Требовать подтверждение администратора"]
+              ["one_time", "Сделать ссылку одноразовой"]
             ].map(([key, label]) => `
               <label class="server-settings-role-toggle-row">
                 <span class="server-settings-role-toggle-copy">
@@ -3518,18 +3560,23 @@ function renderServerInviteModalBody(server = {}) {
           <div class="server-settings-actions">
             <button class="button" type="button" data-server-invite-create="true" ${state.isCreating ? "disabled" : ""}>${state.isCreating ? "Создаём..." : "Создать ссылку"}</button>
           </div>
-          ${state.generatedInvite?.url ? `
+          ${invite?.url ? `
             <div class="server-invite-link-output">
               <label class="server-settings-field">
                 <span class="label">Готовая ссылка</span>
-                <input class="search-input" type="text" readonly value="${escapeHtml(state.generatedInvite.url)}">
+                <input class="search-input" type="text" readonly value="${escapeHtml(invite.url)}">
               </label>
               <div class="server-settings-actions">
                 <button class="button button-secondary" type="button" data-server-invite-copy="true">Скопировать</button>
                 <button class="button" type="button" data-server-invite-send="true" ${state.isSending ? "disabled" : ""}>${state.isSending ? "Отправляем..." : "Отправить в чат"}</button>
               </div>
             </div>
-          ` : ""}
+          ` : `
+            <div class="server-settings-placeholder">
+              <strong>Ссылка ещё не создана.</strong>
+              <span>Настройте параметры и создайте новую ссылку приглашения.</span>
+            </div>
+          `}
         </section>
       `}
       <section class="server-settings-section-card">
@@ -3540,15 +3587,15 @@ function renderServerInviteModalBody(server = {}) {
           </div>
         </header>
         <div class="server-invite-active-list">
-          ${activeInvites.length ? activeInvites.map((invite) => `
+          ${activeInvites.length ? activeInvites.map((activeInvite) => `
             <div class="server-invite-active-row">
               <div class="server-invite-active-copy">
-                <strong>${escapeHtml(invite.code || "")}</strong>
-                <span>${escapeHtml(`${invite.uses || 0}${invite.max_uses ? `/${invite.max_uses}` : ""} использований`)} · ${escapeHtml(invite.expires_at ? `до ${formatTimestamp(invite.expires_at)}` : "без срока")}</span>
+                <strong>${escapeHtml(activeInvite.code || "")}</strong>
+                <span>${escapeHtml(`${activeInvite.uses || 0}${activeInvite.max_uses ? `/${activeInvite.max_uses}` : ""} использований`)} · ${escapeHtml(activeInvite.expires_at ? `до ${formatTimestamp(activeInvite.expires_at)}` : "без срока")}</span>
               </div>
               <div class="server-invite-active-actions">
-                <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(invite.url || "")}">Скопировать</button>
-                <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(invite.code || "")}">Отозвать</button>
+                <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(activeInvite.url || "")}">Скопировать</button>
+                <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(activeInvite.code || "")}">Отозвать</button>
               </div>
             </div>
           `).join("") : `<div class="server-settings-placeholder"><strong>Активных приглашений пока нет.</strong><span>Создайте первую ссылку в соседней вкладке.</span></div>`}
@@ -3633,6 +3680,51 @@ function renderServerSettingsMembersSection(server = {}) {
             <span>Для таблицы участников нужен отдельный endpoint. Сервер: ${escapeHtml(server?.title || "Сервер")}.</span>
           </div>
         </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderServerSettingsAccessSection(server = {}) {
+  const activeInvites = Array.isArray(server?.active_invites) ? server.active_invites : [];
+  const canInviteMembers = Boolean(server?.can_invite_members);
+  return `
+    <section class="server-settings-section-card">
+      <header class="server-settings-content-head">
+        <div>
+          <h2>Доступ</h2>
+          <p>Как пользователи могут попасть на сервер и какие правила действуют.</p>
+        </div>
+        <button class="button" type="button" data-server-open-invite-modal="true">Пригласить друзей</button>
+      </header>
+      <div class="server-settings-access-grid">
+        <section class="server-settings-section-card server-settings-invite-list-card">
+          <header class="server-settings-content-head">
+            <div>
+              <h3>Активные приглашения</h3>
+              <p>Право приглашать определяется ролью участника.</p>
+            </div>
+          </header>
+          <div class="server-invite-active-list">
+            ${activeInvites.length ? activeInvites.map((invite) => `
+              <div class="server-invite-active-row">
+                <div class="server-invite-active-copy">
+                  <strong>${escapeHtml(invite.code || "")}</strong>
+                  <span>${escapeHtml(`${invite.uses || 0}${invite.max_uses ? `/${invite.max_uses}` : ""} использований`)} · ${escapeHtml(invite.expires_at ? `до ${formatTimestamp(invite.expires_at)}` : "без срока")}</span>
+                </div>
+                <div class="server-invite-active-actions">
+                  <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(invite.url || "")}">Скопировать</button>
+                  <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(invite.code || "")}" ${canInviteMembers ? "" : "disabled"}>Отозвать</button>
+                </div>
+              </div>
+            `).join("") : `
+              <div class="server-settings-placeholder">
+                <strong>Активных приглашений нет.</strong>
+                <span>${canInviteMembers ? "Создайте первую ссылку для входа на сервер." : "У вас нет прав приглашать участников на этот сервер."}</span>
+              </div>
+            `}
+          </div>
+        </section>
       </div>
     </section>
   `;
@@ -4048,92 +4140,6 @@ function renderServerSettingsBansSection() {
   `;
 }
 
-function renderServerSettingsAccessSection(server = {}) {
-  const activeInvites = Array.isArray(server?.active_invites) ? server.active_invites : [];
-  const canInviteMembers = Boolean(server?.can_invite_members);
-  return `
-    <section class="server-settings-section-card">
-      <header class="server-settings-content-head">
-        <div>
-          <h2>Доступ</h2>
-          <p>Как пользователи могут попасть на сервер и какие правила действуют.</p>
-        </div>
-        <button class="button" type="button" data-server-open-invite-modal="true" ${canInviteMembers ? "" : "disabled"}>Пригласить друзей</button>
-      </header>
-      <div class="server-settings-access-grid">
-        <div class="server-settings-choice-group">
-          <span class="label">Как можно присоединиться к вашему серверу?</span>
-          <div class="server-settings-choice-list">
-            <button class="server-settings-choice-chip is-active" type="button">Только по приглашению</button>
-            <button class="server-settings-choice-chip" type="button">По заявке</button>
-            <button class="server-settings-choice-chip" type="button">Публичный</button>
-          </div>
-        </div>
-        <div class="settings-item server-settings-inline-item">
-          <div class="settings-copy">
-            <strong>Сервер с возрастным ограничением</strong>
-            <span>Отметьте, если сервер содержит контент 18+.</span>
-          </div>
-          <label class="settings-switch" aria-label="Сервер с возрастным ограничением">
-            <input type="checkbox">
-            <span class="settings-switch-ui"></span>
-          </label>
-        </div>
-        <div class="settings-item server-settings-inline-item">
-          <div class="settings-copy">
-            <strong>Правила сервера</strong>
-            <span>Добавьте базовые правила для участников сервера ${escapeHtml(server?.title || "")}.</span>
-          </div>
-          <label class="settings-switch" aria-label="Правила сервера">
-            <input type="checkbox" checked>
-            <span class="settings-switch-ui"></span>
-          </label>
-        </div>
-        <div class="server-settings-rules-box">
-          <label class="server-settings-field">
-            <span class="label">Новое правило</span>
-            <div class="server-settings-rule-input-row">
-              <input class="search-input" type="text" placeholder="Введите правило" disabled>
-              <button class="button button-secondary server-settings-disabled-button" type="button" disabled>Добавить</button>
-            </div>
-          </label>
-          <div class="server-settings-rule-list">
-            <div class="server-settings-rule-item">1. Уважайте участников сервера.</div>
-            <div class="server-settings-rule-item">2. Не публикуйте спам и вредоносные ссылки.</div>
-          </div>
-        </div>
-        <section class="server-settings-section-card server-settings-invite-list-card">
-          <header class="server-settings-content-head">
-            <div>
-              <h3>Активные приглашения</h3>
-              <p>Управляйте ссылками доступа к серверу.</p>
-            </div>
-          </header>
-          <div class="server-invite-active-list">
-            ${activeInvites.length ? activeInvites.map((invite) => `
-              <div class="server-invite-active-row">
-                <div class="server-invite-active-copy">
-                  <strong>${escapeHtml(invite.code || "")}</strong>
-                  <span>${escapeHtml(`${invite.uses || 0}${invite.max_uses ? `/${invite.max_uses}` : ""} использований`)} · ${escapeHtml(invite.expires_at ? `до ${formatTimestamp(invite.expires_at)}` : "без срока")}</span>
-                </div>
-                <div class="server-invite-active-actions">
-                  <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(invite.url || "")}">Скопировать</button>
-                  <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(invite.code || "")}" ${canInviteMembers ? "" : "disabled"}>Отозвать</button>
-                </div>
-              </div>
-            `).join("") : `
-              <div class="server-settings-placeholder">
-                <strong>Активных приглашений нет.</strong>
-                <span>${canInviteMembers ? "Создайте первую ссылку для входа на сервер." : "У вас нет права управлять приглашениями."}</span>
-              </div>
-            `}
-          </div>
-        </section>
-      </div>
-    </section>
-  `;
-}
-
 function renderServerSettingsContent(server = {}, section = "profile") {
   if (section === "members") {
     return renderServerSettingsMembersSection(server);
@@ -4261,7 +4267,9 @@ function showServerInviteModal(server) {
   if (contentNode) {
     contentNode.innerHTML = renderServerInviteModalBody(server);
   }
-  void loadServerInviteContacts();
+  if (server?.can_invite_members) {
+    void loadServerInviteContacts();
+  }
   serverInviteModal.hidden = false;
   requestAnimationFrame(() => {
     serverInviteModal?.classList.add("visible");
@@ -4271,10 +4279,6 @@ function showServerInviteModal(server) {
 async function openServerInviteModalForServer(preferredServerId = null) {
   try {
     const server = await resolveActiveServerContext(preferredServerId);
-    if (!server.can_invite_members) {
-      showAppToast("У вас нет права создавать приглашения", { type: "error" });
-      return;
-    }
     showServerInviteModal(server);
   } catch (error) {
     showAppToast(error.message || "Не удалось открыть приглашение", { type: "error" });
@@ -4464,6 +4468,10 @@ function buildServerInviteModal() {
         if (serverInviteModalState) {
           serverInviteModalState.status = "Приглашение отозвано";
           serverInviteModalState.statusType = "success";
+          if (serverInviteModalState.generatedInvite?.code === code) {
+            serverInviteModalState.generatedInvite = null;
+            serverInviteModalState.generatedInviteSettingsKey = "";
+          }
         }
         rerender();
         if (activeServerSettingsSection === "access" && !serverSettingsModal?.hidden) {
@@ -4631,7 +4639,7 @@ function buildServerSettingsModal() {
     }
 
     const saveProfileButton = event.target.closest("[data-server-settings-save-profile='true']");
-    if (saveProfileButton) {
+    if (saveProfileButton && chatState.activeServer?.id) {
       const titleInput = modal.querySelector("#serverSettingsTitleInput");
       const descriptionInput = modal.querySelector("#serverSettingsDescriptionInput");
       const statusNode = modal.querySelector("#serverSettingsProfileStatus");
@@ -4646,18 +4654,38 @@ function buildServerSettingsModal() {
         return;
       }
 
-      chatState.activeServer = {
-        ...(chatState.activeServer || {}),
-        title: nextTitle,
-        description: nextDescription
-      };
-      renderServerSettingsModal(chatState.activeServer);
-      setSidebarMode(chatState.sidebarView, chatState.activeServer);
       if (statusNode) {
-        statusNode.textContent = "Изменения сохранены локально. Серверный PATCH можно подключить следующим шагом.";
-        statusNode.className = "status success";
+        statusNode.textContent = "Сохраняем изменения...";
+        statusNode.className = "status";
       }
-      showAppToast("Профиль сервера обновлён локально");
+      saveProfileButton.disabled = true;
+      apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          title: nextTitle,
+          description: nextDescription
+        })
+      }).then((data) => {
+        chatState.activeServer = data?.server || {
+          ...(chatState.activeServer || {}),
+          title: nextTitle,
+          description: nextDescription
+        };
+        renderServerSettingsModal(chatState.activeServer);
+        setSidebarMode(chatState.sidebarView, chatState.activeServer);
+        if (statusNode) {
+          statusNode.textContent = "Изменения сохранены";
+          statusNode.className = "status success";
+        }
+        showAppToast("Профиль сервера обновлён");
+      }).catch((error) => {
+        if (statusNode) {
+          statusNode.textContent = error.message || "Не удалось сохранить изменения";
+          statusNode.className = "status error";
+        }
+      }).finally(() => {
+        saveProfileButton.disabled = false;
+      });
       return;
     }
 
@@ -4994,19 +5022,17 @@ function openSidebarServerHeaderMenu() {
   const isServerOwner = isCurrentUserServerOwner(chatState.activeServer || {});
   menu.querySelectorAll("[data-server-header-action]").forEach((button) => {
     const action = String(button.dataset.serverHeaderAction || "");
-    button.hidden = false;
-    button.style.display = "";
-    let shouldDisable = false;
+    let shouldShow = true;
     if (action === "invite") {
-      shouldDisable = !canInviteMembers;
+      shouldShow = canInviteMembers;
     } else if (action === "leave") {
-      button.hidden = isServerOwner;
-      button.style.display = isServerOwner ? "none" : "";
-      shouldDisable = false;
+      shouldShow = !isServerOwner;
     } else {
-      shouldDisable = !canManageServer;
+      shouldShow = canManageServer;
     }
-    button.disabled = shouldDisable;
+    button.hidden = !shouldShow;
+    button.style.display = shouldShow ? "" : "none";
+    button.disabled = false;
   });
 
   if (sidebarServerHeaderMenuHideTimer) {
@@ -5094,6 +5120,7 @@ function showServerSidebarActionMenu(anchor, mode, payload = {}) {
   const groupId = payload.groupId ? String(payload.groupId) : "";
   const targetTitle = String(payload.title || "").trim() || (mode === "category" ? "Категория" : "Канал");
   const targetLabel = mode === "category" ? "Категория" : "Канал";
+  const isChannelMenu = mode === "channel";
 
   menu.dataset.mode = mode;
   menu.dataset.serverId = serverId;
@@ -5105,11 +5132,12 @@ function showServerSidebarActionMenu(anchor, mode, payload = {}) {
       <div class="server-sidebar-action-menu-label">${escapeHtml(targetLabel)}</div>
       <div class="server-sidebar-action-menu-target">${escapeHtml(targetTitle)}</div>
     </div>
+    ${isChannelMenu ? `<button type="button" data-server-sidebar-action="settings">${renderActionMenuItemContent("/assets/icons/app/settings.svg", "Настройки канала")}</button>` : ""}
     <button type="button" data-server-sidebar-action="rename">${renderActionMenuItemContent("/assets/icons/ui/Edit_fill.svg", "Переименовать")}</button>
     <button type="button" data-server-sidebar-action="delete" class="danger">${renderActionMenuItemContent("/assets/icons/ui/Trash.svg", "Удалить")}</button>
   `;
   menu.hidden = false;
-  const menuWidth = 200;
+  const menuWidth = isChannelMenu ? 220 : 200;
   const fallbackRect = anchor?.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
   const pointX = Number(anchor?.clientX);
   const pointY = Number(anchor?.clientY);
@@ -5180,6 +5208,133 @@ async function handleServerSidebarDeleteAction(mode, payload = {}) {
         window.location.replace(getServerRoute(serverId));
       }
     }
+  }
+}
+
+function isServerChannelInlineEditing(groupId) {
+  return Boolean(
+    serverSidebarInlineRenameState
+    && String(serverSidebarInlineRenameState.groupId || "") === String(groupId || "")
+  );
+}
+
+function focusServerChannelInlineRenameInput() {
+  const input = document.querySelector("[data-server-channel-inline-input]");
+  if (!input) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select();
+  });
+}
+
+function rerenderActiveServerSidebar() {
+  const list = document.getElementById("chatList");
+  if (!list || !chatState.activeServer) {
+    return;
+  }
+  renderServerSidebar(list, chatState.activeServer);
+}
+
+function startServerChannelInlineRename(payload = {}) {
+  const groupId = String(payload.groupId || "");
+  if (!groupId) {
+    return;
+  }
+  serverSidebarInlineRenameState = {
+    serverId: String(payload.serverId || ""),
+    categoryId: String(payload.categoryId || ""),
+    groupId,
+    initialTitle: String(payload.title || "").trim(),
+    draftTitle: String(payload.title || "").trim(),
+    saving: false,
+    error: ""
+  };
+  rerenderActiveServerSidebar();
+}
+
+function cancelServerChannelInlineRename() {
+  if (!serverSidebarInlineRenameState) {
+    return;
+  }
+  serverSidebarInlineRenameState = null;
+  rerenderActiveServerSidebar();
+}
+
+function updateServerChannelInlineRenameDraft(value) {
+  if (!serverSidebarInlineRenameState) {
+    return;
+  }
+  serverSidebarInlineRenameState.draftTitle = String(value || "").slice(0, 80);
+}
+
+function syncActiveServerChannelUpdate(updatedChannel = {}) {
+  if (!chatState.activeServer?.categories) {
+    return;
+  }
+  const targetId = String(updatedChannel.group_id || updatedChannel.id || "");
+  if (!targetId) {
+    return;
+  }
+  chatState.activeServer.categories = chatState.activeServer.categories.map((category) => ({
+    ...category,
+    channels: (Array.isArray(category?.channels) ? category.channels : []).map((channel) => (
+      String(channel.id || "") === targetId
+        ? {
+          ...channel,
+          ...updatedChannel,
+          id: updatedChannel.group_id || updatedChannel.id || channel.id
+        }
+        : channel
+    ))
+  }));
+}
+
+async function submitServerChannelInlineRename() {
+  const state = serverSidebarInlineRenameState;
+  if (!state || state.saving) {
+    return;
+  }
+
+  const nextTitle = String(state.draftTitle || "").trim();
+  if (!nextTitle) {
+    state.error = "Название обязательно";
+    rerenderActiveServerSidebar();
+    return;
+  }
+
+  if (nextTitle === state.initialTitle) {
+    cancelServerChannelInlineRename();
+    return;
+  }
+
+  state.saving = true;
+  state.error = "";
+  rerenderActiveServerSidebar();
+
+  try {
+    const updatedChannel = await apiFetch(
+      `/servers/${encodeURIComponent(state.serverId)}/channels/${encodeURIComponent(state.groupId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ title: nextTitle })
+      }
+    );
+    syncActiveServerChannelUpdate(updatedChannel);
+    const route = getCurrentRouteInfo();
+    if (String(route.serverId || "") === String(state.serverId) && String(route.chatId || "") === String(state.groupId)) {
+      const chatTitleNode = document.getElementById("chatTitle");
+      if (chatTitleNode) {
+        chatTitleNode.textContent = nextTitle;
+      }
+    }
+    serverSidebarInlineRenameState = null;
+    rerenderActiveServerSidebar();
+  } catch (error) {
+    state.saving = false;
+    state.error = error.message || "Не удалось переименовать канал";
+    rerenderActiveServerSidebar();
   }
 }
 
@@ -5357,7 +5512,20 @@ function initSidebarProfile() {
         title: serverSidebarActionMenu.dataset.title || ""
       };
       hideServerSidebarActionMenu();
+      if (action === "settings" && mode === "channel") {
+        openServerStructureModal("channel-rename", {
+          serverId: payload.serverId,
+          categoryId: payload.categoryId,
+          groupId: payload.groupId,
+          initialTitle: payload.title
+        });
+        return;
+      }
       if (action === "rename") {
+        if (mode === "channel") {
+          startServerChannelInlineRename(payload);
+          return;
+        }
         openServerStructureModal(mode === "category" ? "category-rename" : "channel-rename", {
           serverId: payload.serverId,
           categoryId: payload.categoryId,
@@ -5372,6 +5540,11 @@ function initSidebarProfile() {
       }
     }
 
+    if (event.target.closest("[data-server-channel-inline-editing='true']")) {
+      event.stopPropagation();
+      return;
+    }
+
     if (serverSidebarActionMenu && !serverSidebarActionMenu.hidden) {
       if (!event.target.closest(".server-sidebar-action-menu")) {
         hideServerSidebarActionMenu();
@@ -5381,6 +5554,10 @@ function initSidebarProfile() {
 
   document.addEventListener("contextmenu", (event) => {
     if (!chatState.activeServer?.can_manage_server) {
+      return;
+    }
+    if (event.target.closest("[data-server-channel-inline-editing='true']")) {
+      event.preventDefault();
       return;
     }
     const channelNode = event.target.closest("[data-server-channel-context]");
@@ -5495,6 +5672,19 @@ function initSidebarProfile() {
   });
 
   document.addEventListener("keydown", (event) => {
+    const inlineRenameInput = event.target.closest("[data-server-channel-inline-input]");
+    if (inlineRenameInput) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void submitServerChannelInlineRename();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelServerChannelInlineRename();
+        return;
+      }
+    }
     if (event.key === "Escape" && !menu.hidden) {
       closeSidebarProfileMenu(menuTrigger, menu);
       return;
@@ -5519,6 +5709,14 @@ function initSidebarProfile() {
       return;
     }
     closeSidebarProfileMenu(menuTrigger, menu);
+  });
+
+  document.addEventListener("input", (event) => {
+    const inlineRenameInput = event.target.closest("[data-server-channel-inline-input]");
+    if (!inlineRenameInput) {
+      return;
+    }
+    updateServerChannelInlineRenameDraft(inlineRenameInput.value);
   });
 
   document.addEventListener("click", (event) => {
@@ -5611,6 +5809,7 @@ function isChatMatchingActiveTagFilter(chat) {
 
 function normalizeActiveChatTagFilter() {
   if (activeChatTagFilter === "all" || activeChatTagFilter === "untagged") {
+    writeStoredActiveChatTagFilter(activeChatTagFilter);
     return;
   }
 
@@ -5618,6 +5817,7 @@ function normalizeActiveChatTagFilter() {
   if (!hasActiveTag) {
     activeChatTagFilter = "all";
   }
+  writeStoredActiveChatTagFilter(activeChatTagFilter);
 }
 
 function renderChatTagFilters(listId = "chatList") {
@@ -5741,6 +5941,7 @@ function bindChatTagFilters(listId = "chatList") {
 
     const nextFilter = trigger.dataset.chatTagFilter || "all";
     if (nextFilter === "servers") {
+      writeStoredActiveChatTagFilter(activeChatTagFilter);
       writeStoredSidebarView("servers");
       await animateSidebarContentSwipe("left", async () => {
         await loadServers(container.dataset.listId || listId, { showLoading: false });
@@ -5749,6 +5950,7 @@ function bindChatTagFilters(listId = "chatList") {
     }
 
     activeChatTagFilter = nextFilter;
+    writeStoredActiveChatTagFilter(activeChatTagFilter);
     const previousSidebarMode = chatState.sidebarView;
     const route = getCurrentRouteInfo();
     writeStoredSidebarView("chats");
@@ -6139,28 +6341,43 @@ function renderServerSidebar(list, server) {
                 const unreadCount = Math.max(0, Number(channel?.unread_count || 0));
                 const unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
                 const previewText = channel?.description || getServerSidebarPreviewText(channel.last_message);
+                const isInlineEditing = isServerChannelInlineEditing(channel.id);
+                const inlineRenameState = isInlineEditing ? serverSidebarInlineRenameState : null;
                 return `
                   <div
                     class="server-channel-row ${String(channel?.id || "") === currentGroupId ? "active" : ""}"
                     data-server-channel-context="${escapeHtml(String(channel.id || ""))}"
+                    data-server-category-id="${escapeHtml(String(category.id || ""))}"
                     data-server-id="${escapeHtml(String(server.id || ""))}"
                     data-server-channel-title="${escapeHtml(channel.title || "")}"
                   >
-                    <a
-                      class="server-channel-item ${String(channel?.id || "") === currentGroupId ? "active" : ""}"
-                      href="${getServerChannelRoute(server.id, channel.id)}"
-                      data-chat-id="${escapeHtml(String(channel.id || ""))}"
-                      data-chat-type="group"
+                    <${isInlineEditing ? "div" : "a"}
+                      class="server-channel-item ${String(channel?.id || "") === currentGroupId ? "active" : ""} ${isInlineEditing ? "is-inline-editing" : ""}"
+                      ${isInlineEditing ? 'data-server-channel-inline-editing="true"' : `href="${getServerChannelRoute(server.id, channel.id)}" data-chat-id="${escapeHtml(String(channel.id || ""))}" data-chat-type="group"`}
                     >
                       <span class="server-channel-icon" aria-hidden="true">
                         <img class="icon-asset" src="${getServerChannelIconPath(channel)}" alt="">
                       </span>
                       <span class="server-channel-copy">
-                        <strong class="server-channel-name">${escapeHtml(channel.title || "channel")}</strong>
-                        <span class="server-channel-preview">${escapeHtml(previewText || "Канал сервера")}</span>
+                        ${isInlineEditing ? `
+                          <input
+                            class="server-channel-inline-input"
+                            type="text"
+                            maxlength="80"
+                            value="${escapeHtml(inlineRenameState?.draftTitle || channel.title || "")}"
+                            data-server-channel-inline-input="${escapeHtml(String(channel.id || ""))}"
+                            ${inlineRenameState?.saving ? "disabled" : ""}
+                          >
+                          <span class="server-channel-inline-hint ${inlineRenameState?.error ? "is-error" : ""}">
+                            ${escapeHtml(inlineRenameState?.error || (inlineRenameState?.saving ? "Сохраняем..." : "Enter сохранить, Esc отмена"))}
+                          </span>
+                        ` : `
+                          <strong class="server-channel-name">${escapeHtml(channel.title || "channel")}</strong>
+                          <span class="server-channel-preview">${escapeHtml(previewText || "Канал сервера")}</span>
+                        `}
                       </span>
                       ${unreadCount > 0 ? `<span class="chat-unread-badge">${escapeHtml(unreadLabel)}</span>` : ""}
-                    </a>
+                    </${isInlineEditing ? "div" : "a"}>
                   </div>
                 `;
               }).join("") || '<div class="empty-state compact">Каналов пока нет</div>'}
@@ -6174,6 +6391,9 @@ function renderServerSidebar(list, server) {
 
 function renderServerDetail(list, server) {
   renderServerSidebar(list, server);
+  if (serverSidebarInlineRenameState) {
+    focusServerChannelInlineRenameInput();
+  }
 }
 
 async function loadServerDetail(serverId, listId = "chatList", options = {}) {
@@ -6255,7 +6475,7 @@ async function loadServers(listId = "chatList", options = {}) {
 async function loadSidebar(listId = "chatList", options = {}) {
   const route = getCurrentRouteInfo();
   const preferredView = readStoredSidebarView();
-  if (route.serverId) {
+  if (route.serverId && preferredView !== "servers") {
     writeSelectedServerId(route.serverId);
     writeStoredSidebarView("server-detail");
     await loadChats(listId, {
@@ -6289,6 +6509,12 @@ function bindSidebarServerNavigation(listId = "chatList") {
   if (backButton && backButton.dataset.serverBackBound !== "true") {
     backButton.dataset.serverBackBound = "true";
     backButton.addEventListener("click", async () => {
+      const route = getCurrentRouteInfo();
+      if (route.serverId) {
+        writeStoredSidebarView("servers");
+        await loadServers(listId, { showLoading: false });
+        return;
+      }
       writeStoredSidebarView("servers");
       await loadServers(listId, { showLoading: false });
     });
@@ -7330,7 +7556,7 @@ function renderChats(list, chats) {
       const href = isServer
         ? getServerRoute(chat.id)
         : isGroup
-          ? getGroupChatRoute(chat.id, chat.server_id || null)
+          ? getGroupChatRoute(chat.id)
           : getDirectChatRoute(chat.id);
       const preview = getChatListPreviewText(chat.last_message);
       const name = chat.title || chat.username || chat.name || "Чат";

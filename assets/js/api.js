@@ -297,6 +297,93 @@ function consumePostAuthRedirect() {
   return path;
 }
 
+function recoverLeadingJsonFragment(raw = "") {
+  const source = String(raw || "");
+  const start = source.search(/\S/);
+  if (start < 0) {
+    return "";
+  }
+
+  const openingChar = source[start];
+  if (openingChar !== "{" && openingChar !== "[") {
+    return null;
+  }
+
+  const matchingChar = openingChar === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaping = true;
+        continue;
+      }
+      if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (char === openingChar) {
+      depth += 1;
+      continue;
+    }
+
+    if (char === matchingChar) {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+async function parseApiResponsePayload(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const raw = await response.text();
+
+  if (!contentType.includes("application/json")) {
+    return raw;
+  }
+
+  if (!raw.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const recoveredFragment = recoverLeadingJsonFragment(raw);
+    if (recoveredFragment) {
+      try {
+        return JSON.parse(recoveredFragment);
+      } catch {
+        // Fall through to the structured error below.
+      }
+    }
+
+    const payloadError = new Error("Сервер вернул некорректный JSON.");
+    payloadError.cause = error;
+    payloadError.rawResponse = raw;
+    throw payloadError;
+  }
+}
+
 async function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
@@ -329,10 +416,7 @@ async function apiFetch(path, options = {}) {
     window.clearTimeout(timeoutId);
   }
 
-  const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
+  const payload = await parseApiResponsePayload(response);
 
   if (!response.ok) {
     const message =

@@ -2607,6 +2607,7 @@ def get_server_channel_record(conn, group_id):
             sc.position,
             sc.channel_type,
             sc.access_json,
+            sc.role_permissions_json,
             sc.restrictions_json,
             s.title AS server_title,
             s.description AS server_description,
@@ -2677,6 +2678,36 @@ def is_allowed_by_server_channel_scope(scope, server_member, selected_role_ids=N
     return True
 
 
+def get_server_channel_member_permissions(server_channel, server_member):
+    channel_type = str(row_value(server_channel, "channel_type") or "text").strip().lower()
+    default_permissions = build_default_channel_role_permissions(channel_type)
+    role_permissions = parse_json_object(
+        row_value(server_channel, "role_permissions_json"),
+        default_permissions
+    )
+    role_key = get_server_member_role_key(server_member)
+
+    if can_bypass_server_channel_restrictions(server_member):
+        return {
+            permission_key: True
+            for permission_key in SERVER_CHANNEL_ROLE_PERMISSION_KEYS
+        }
+
+    current_permissions = role_permissions.get(role_key) if isinstance(role_permissions.get(role_key), dict) else {}
+    base_permissions = default_permissions.get(role_key)
+    if not base_permissions and current_permissions:
+        base_permissions = {
+            permission_key: False
+            for permission_key in SERVER_CHANNEL_ROLE_PERMISSION_KEYS
+        }
+    if not base_permissions:
+        base_permissions = default_permissions.get("member") or {}
+    return {
+        permission_key: bool(current_permissions.get(permission_key, default_value))
+        for permission_key, default_value in base_permissions.items()
+    }
+
+
 def can_send_messages_in_server_channel(conn, group_id, user_id):
     server_channel = get_server_channel_record(conn, group_id)
     if not server_channel:
@@ -2697,7 +2728,7 @@ def can_send_messages_in_server_channel(conn, group_id, user_id):
     return is_allowed_by_server_channel_scope(access.get("write"), server_member, selected_role_ids)
 
 
-def ensure_server_channel_message_allowed(conn, group_id, user_id, text="", includes_files=False, editing=False):
+def ensure_server_channel_message_allowed(conn, group_id, user_id, text="", includes_files=False, editing=False, message_type="text"):
     server_channel = get_server_channel_record(conn, group_id)
     if not server_channel:
         return
@@ -2714,14 +2745,20 @@ def ensure_server_channel_message_allowed(conn, group_id, user_id, text="", incl
         str(row_value(server_channel, "channel_type") or "text").strip().lower()
     ))
     selected_role_ids = access.get("selected_role_ids") if isinstance(access.get("selected_role_ids"), list) else []
+    permissions = get_server_channel_member_permissions(server_channel, server_member)
+    normalized_message_type = str(message_type or "text").strip().lower() or "text"
     normalized_text = str(text or "")
     has_links = bool(MESSAGE_URL_PATTERN.search(normalized_text))
     has_everyone = text_has_everyone_mention(normalized_text)
 
-    if restrictions.get("read_only") and not editing:
-        raise PermissionError("Канал работает в режиме только чтения")
-    if not is_allowed_by_server_channel_scope(access.get("write"), server_member, selected_role_ids):
-        raise PermissionError("У вас нет права писать в этот канал")
+    if normalized_message_type == "wide":
+        if not permissions.get("send_announcements"):
+            raise PermissionError("У вас нет права отправлять объявления в этот канал")
+    else:
+        if restrictions.get("read_only") and not editing:
+            raise PermissionError("Канал работает в режиме только чтения")
+        if not is_allowed_by_server_channel_scope(access.get("write"), server_member, selected_role_ids):
+            raise PermissionError("У вас нет права писать в этот канал")
     if includes_files:
         if restrictions.get("block_files"):
             raise PermissionError("Отправка файлов в этом канале запрещена")
@@ -2773,6 +2810,21 @@ def can_manage_server(conn, user_id, server_id):
         return True
     member = get_server_member(conn, server_id, user_id)
     return bool(member and member["is_admin"])
+
+
+def normalize_boolean_flag(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
 
 
 SERVER_ROLE_PERMISSION_KEYS = (
@@ -2861,7 +2913,6 @@ DEFAULT_SERVER_ROLE_DEFINITIONS = [
         "is_system": True,
         "permissions": build_server_role_permissions({
             "view_server",
-            "invite_members",
             "change_nickname",
             "read_messages",
             "send_messages",
@@ -2900,6 +2951,7 @@ SERVER_CHANNEL_ROLE_PERMISSION_KEYS = (
     "view_channel",
     "read_messages",
     "send_messages",
+    "send_announcements",
     "send_files",
     "send_links",
     "manage_messages",
@@ -2939,6 +2991,7 @@ def build_default_channel_role_permissions(channel_type="text"):
             "view_channel": True,
             "read_messages": True,
             "send_messages": channel_type != "voice",
+            "send_announcements": True,
             "send_files": channel_type != "voice",
             "send_links": channel_type != "voice",
             "manage_messages": True,
@@ -2948,6 +3001,7 @@ def build_default_channel_role_permissions(channel_type="text"):
             "view_channel": not is_private,
             "read_messages": not is_private,
             "send_messages": channel_type not in {"voice", "announcements"} and not is_private,
+            "send_announcements": False,
             "send_files": channel_type == "text" and not is_private,
             "send_links": channel_type == "text" and not is_private,
             "manage_messages": False,
@@ -3232,6 +3286,7 @@ def get_server_summary_for_invites(conn, server_id):
         SELECT
             s.id,
             s.title,
+            s.invite_code,
             (
                 SELECT COUNT(*)
                 FROM server_members sm
@@ -3256,6 +3311,31 @@ def get_server_summary_for_invites(conn, server_id):
     return server_row
 
 
+def get_server_primary_invite(conn, server_id):
+    return conn.execute("""
+        SELECT
+            si.id,
+            si.server_id,
+            si.code,
+            si.created_by,
+            si.expires_at,
+            si.max_uses,
+            si.uses_count,
+            si.only_friends,
+            si.one_time,
+            si.require_approval,
+            si.revoked,
+            si.created_at
+        FROM servers s
+        JOIN server_invites si
+          ON si.server_id = s.id
+         AND si.code = s.invite_code
+        WHERE s.id = %s
+          AND si.revoked = 0
+        LIMIT 1
+    """, (server_id,)).fetchone()
+
+
 def get_active_server_invites(conn, server_id):
     return conn.execute("""
         SELECT id, server_id, code, created_by, expires_at, max_uses, uses_count,
@@ -3265,6 +3345,70 @@ def get_active_server_invites(conn, server_id):
           AND revoked = 0
         ORDER BY created_at DESC, id DESC
     """, (server_id,)).fetchall()
+
+
+def ensure_server_primary_invite(conn, server_id, actor_user_id=None):
+    server = conn.execute("""
+        SELECT id, owner_id, invite_code
+        FROM servers
+        WHERE id = %s
+        LIMIT 1
+    """, (server_id,)).fetchone()
+    if not server:
+        return None
+
+    code = str(row_value(server, "invite_code") or "").strip()
+    if not code:
+        code = generate_server_invite_code(conn)
+        conn.execute("""
+            UPDATE servers
+            SET invite_code = %s
+            WHERE id = %s
+        """, (code, server_id))
+
+    conn.execute("""
+        UPDATE server_invites
+        SET revoked = 1
+        WHERE server_id = %s
+          AND code != %s
+          AND revoked = 0
+    """, (server_id, code))
+
+    invite = conn.execute("""
+        SELECT id
+        FROM server_invites
+        WHERE code = %s
+        LIMIT 1
+    """, (code,)).fetchone()
+    created_by = int(actor_user_id or row_value(server, "owner_id") or 0)
+    if invite:
+        conn.execute("""
+            UPDATE server_invites
+            SET server_id = %s,
+                created_by = %s,
+                expires_at = NULL,
+                max_uses = NULL,
+                only_friends = 0,
+                one_time = 0,
+                require_approval = 0,
+                revoked = 0
+            WHERE id = %s
+        """, (server_id, created_by, invite["id"]))
+    else:
+        conn.execute("""
+            INSERT INTO server_invites (
+                server_id, code, created_by, expires_at, max_uses, only_friends, one_time, require_approval, revoked
+            )
+            VALUES (%s, %s, %s, NULL, NULL, 0, 0, 0, 0)
+        """, (server_id, code, created_by))
+
+    return conn.execute("""
+        SELECT id, server_id, code, created_by, expires_at, max_uses, uses_count,
+               only_friends, one_time, require_approval, revoked, created_at
+        FROM server_invites
+        WHERE code = %s
+        LIMIT 1
+    """, (code,)).fetchone()
 
 
 def create_server_invite(conn, server_id, created_by, settings=None):
@@ -3297,7 +3441,7 @@ def create_server_invite(conn, server_id, created_by, settings=None):
 
 
 def get_server_invite_by_code(conn, code):
-    return conn.execute("""
+    invite = conn.execute("""
         SELECT
             si.id,
             si.server_id,
@@ -3317,6 +3461,17 @@ def get_server_invite_by_code(conn, code):
         WHERE si.code = %s
         LIMIT 1
     """, (code,)).fetchone()
+    if invite:
+        return invite
+    server = conn.execute("""
+        SELECT id
+        FROM servers
+        WHERE invite_code = %s
+        LIMIT 1
+    """, (code,)).fetchone()
+    if not server:
+        return None
+    return ensure_server_primary_invite(conn, int(server["id"]))
 
 def get_server_member_ids(conn, server_id):
     rows = conn.execute("""
@@ -3453,13 +3608,19 @@ def create_server_channel_group(conn, server_id, category_id, creator_user_id, t
     return group_id
 
 
-def create_server_with_defaults(conn, owner_id, title, description=""):
+def create_server_with_defaults(conn, owner_id, title, description="", allow_member_invites=False):
     normalized_title = normalize_server_title(title)
     invite_code = generate_server_invite_code(conn)
     conn.execute("""
-        INSERT INTO servers (title, description, owner_id, invite_code)
-        VALUES (%s, %s, %s, %s)
-    """, (normalized_title, str(description or "").strip() or None, owner_id, invite_code))
+        INSERT INTO servers (title, description, owner_id, invite_code, allow_member_invites)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        normalized_title,
+        str(description or "").strip() or None,
+        owner_id,
+        invite_code,
+        1 if allow_member_invites else 0,
+    ))
     server_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
     conn.execute("""
         INSERT INTO server_members (server_id, user_id, is_admin)
@@ -3477,6 +3638,7 @@ def create_server_with_defaults(conn, owner_id, title, description=""):
     """, (server_id, "Общий", "Общий", owner_id))
     category_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
     group_id = create_server_channel_group(conn, server_id, category_id, owner_id, "general")
+    ensure_server_primary_invite(conn, server_id, owner_id)
     return {
         "server_id": server_id,
         "category_id": category_id,
@@ -3486,7 +3648,7 @@ def create_server_with_defaults(conn, owner_id, title, description=""):
 
 def build_server_response(conn, server_id, viewer_user_id):
     server = conn.execute("""
-        SELECT s.id, s.title, s.description, s.owner_id, s.created_at
+        SELECT s.id, s.title, s.description, s.owner_id, s.invite_code, s.allow_member_invites, s.created_at
         FROM servers s
         JOIN server_members sm ON sm.server_id = s.id
         WHERE s.id = %s AND sm.user_id = %s
@@ -3613,19 +3775,23 @@ def build_server_response(conn, server_id, viewer_user_id):
             } if channel["last_message_text"] is not None or channel["last_message_type"] is not None else None
         })
 
+    can_invite_members = can_create_server_invites(conn, viewer_user_id, server_id)
+
     return {
         "id": server["id"],
         "title": server["title"],
         "description": server["description"],
         "started_at": format_timestamp(server["created_at"]),
         "owner_id": server["owner_id"],
+        "invite_code": row_value(server, "invite_code"),
+        "allow_member_invites": bool(row_value(server, "allow_member_invites")),
         "is_owner": int(server["owner_id"]) == int(viewer_user_id),
         "can_manage_server": can_manage_server(conn, viewer_user_id, server_id),
         "default_channel_id": default_channel_id,
         "unread_count": total_unread,
         "updated_at": format_timestamp(latest_updated_at),
         "last_message": latest_preview,
-        "can_invite_members": can_create_server_invites(conn, viewer_user_id, server_id),
+        "can_invite_members": can_invite_members,
         "roles": get_server_roles(conn, server_id),
         "active_invites": [
             serialize_server_invite_row(
@@ -3643,7 +3809,7 @@ def build_server_response(conn, server_id, viewer_user_id):
                 viewer_member=get_server_member(conn, server_id, viewer_user_id)
             )
             for invite_row in get_active_server_invites(conn, server_id)
-        ] if can_create_server_invites(conn, viewer_user_id, server_id) else [],
+        ] if can_invite_members else [],
         "categories": [
             {
                 "id": category["id"],
@@ -3735,6 +3901,12 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
         "can_send_messages": True,
         "members_count": members_count_row["members_count"],
         "messages_count": messages_count_row["messages_count"] if messages_count_row else 0,
+        "current_user_permissions": {
+            "send_messages": True,
+            "send_announcements": False,
+            "manage_messages": bool(viewer_member and viewer_member["is_admin"]),
+            "manage_channel": False,
+        },
         "members": members
     }
 
@@ -3746,6 +3918,8 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
 
     server_channel = get_server_channel_record(conn, group_id)
     if server_channel:
+        server_member = get_server_member(conn, server_channel["server_id"], viewer_user_id)
+        channel_permissions = get_server_channel_member_permissions(server_channel, server_member) if server_member else {}
         payload["server"] = {
             "id": server_channel["server_id"],
             "title": server_channel["server_title"],
@@ -3754,6 +3928,12 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
             "category_title": server_channel["category_title"]
         }
         payload["can_send_messages"] = can_send_messages_in_server_channel(conn, group_id, viewer_user_id)
+        payload["current_user_permissions"] = {
+            "send_messages": bool(payload["can_send_messages"]),
+            "send_announcements": bool(channel_permissions.get("send_announcements")),
+            "manage_messages": bool(channel_permissions.get("manage_messages")),
+            "manage_channel": bool(channel_permissions.get("manage_channel")),
+        }
         payload["can_edit_group"] = False
         payload["can_add_members"] = False
         payload["can_manage_admins"] = False
@@ -3944,6 +4124,7 @@ def serialize_direct_message(message):
 
 
 def serialize_group_message(message):
+    message_type = row_value(message, "message_type", "text") or "text"
     return {
         "id": message["id"],
         "sender_id": message["sender_id"],
@@ -3957,7 +4138,10 @@ def serialize_group_message(message):
         "image": serialize_message_image(message),
         "attachments": serialize_message_attachments(message),
         "sticker": serialize_message_sticker(message),
-        "message_type": message["message_type"] or "text",
+        "message_type": message_type,
+        "type": message_type,
+        "layout": "wide" if message_type in {"wide", "special"} else None,
+        "badge": row_value(message, "badge"),
         "created_at": format_timestamp(message["created_at"]),
         "is_edited": bool(message["edited_at"])
     }
@@ -4083,6 +4267,7 @@ def get_group_message_for_group(conn, group_id, message_id):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.badge,
             gm.reply_to_message_id,
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
@@ -4171,10 +4356,16 @@ def parse_message_create_payload():
     content_type = str(request.content_type or "").split(";", 1)[0].strip().lower()
     if request.files or content_type == "multipart/form-data":
         text = str(request.form.get("text", "") or "").strip()
+        message_type = str(request.form.get("type", "") or "").strip()
+        layout = str(request.form.get("layout", "") or "").strip()
+        badge = str(request.form.get("badge", "") or "").strip()
         reply_to_id = request.form.get("reply_to_id")
         images = request.files.getlist("images[]") or request.files.getlist("images")
         return {
             "text": text,
+            "type": message_type,
+            "layout": layout,
+            "badge": badge,
             "reply_to_id": reply_to_id,
             "images": [image for image in images if image and image.filename],
             "is_multipart": True
@@ -4183,6 +4374,9 @@ def parse_message_create_payload():
     data = request.get_json(silent=True) or {}
     return {
         "text": str(data.get("text", "") or "").strip(),
+        "type": str(data.get("type", "") or "").strip(),
+        "layout": str(data.get("layout", "") or "").strip(),
+        "badge": str(data.get("badge", "") or "").strip(),
         "reply_to_id": data.get("reply_to_id"),
         "images": [],
         "is_multipart": False
@@ -4303,6 +4497,7 @@ def fetch_group_messages_page(conn, group_id, user_id, limit, before_id=None):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.badge,
             gm.reply_to_message_id,
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
@@ -4400,6 +4595,7 @@ def search_group_messages(conn, group_id, user_id, query, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.badge,
             gm.reply_to_message_id,
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
@@ -4602,6 +4798,7 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.badge,
             gm.reply_to_message_id,
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
@@ -4642,6 +4839,7 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.badge,
             gm.reply_to_message_id,
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
@@ -4681,6 +4879,7 @@ def fetch_group_message_context(conn, group_id, user_id, message_id, limit):
             u.name AS sender_name,
             gm.text,
             gm.message_type,
+            gm.badge,
             gm.reply_to_message_id,
             gm.reply_preview_text,
             gm.reply_preview_sender_name,
@@ -4811,7 +5010,7 @@ def create_direct_message_record(conn, chat_id, sender_id, text, message_type="t
     return get_direct_message_for_chat(conn, chat_id, cur.lastrowid)
 
 
-def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, image=None, sticker=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None):
+def create_group_message_record(conn, group_id, sender_id, text, message_type="text", audio=None, image=None, sticker=None, reply_to_message=None, forwarded_from=None, forwarded_dialog_payload=None, badge=None):
     preview = extract_message_preview(text) if message_type == "text" else None
     reply_preview = build_reply_preview_payload(reply_to_message)
     forwarded_payload = forwarded_from or {}
@@ -4823,6 +5022,7 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             sender_id,
             text,
             message_type,
+            badge,
             reply_to_message_id,
             reply_preview_text,
             reply_preview_sender_name,
@@ -4842,12 +5042,13 @@ def create_group_message_record(conn, group_id, sender_id, text, message_type="t
             sticker_id,
             sticker_asset_path
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         group_id,
         sender_id,
         text,
         message_type,
+        str(badge or "").strip()[:64] or None,
         reply_preview["reply_to_message_id"] if reply_preview else None,
         reply_preview["reply_preview_text"] if reply_preview else None,
         reply_preview["reply_preview_sender_name"] if reply_preview else None,
@@ -7698,6 +7899,64 @@ def get_server(server_id):
         conn.close()
 
 
+@app.patch("/servers/<int:server_id>")
+def update_server(server_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    data = request.json or {}
+    conn = get_db()
+    try:
+        if not can_manage_server(conn, user_id, server_id):
+            return jsonify({"message": "Недостаточно прав"}), 403
+
+        server = conn.execute("""
+            SELECT id, title, description, allow_member_invites
+            FROM servers
+            WHERE id = %s
+            LIMIT 1
+        """, (server_id,)).fetchone()
+        if not server:
+            return jsonify({"message": "Сервер не найден"}), 404
+
+        next_title = normalize_server_title(data.get("title"), fallback=row_value(server, "title") or "")
+        next_description = str(
+            data.get("description")
+            if data.get("description") is not None
+            else row_value(server, "description") or ""
+        ).strip() or None
+        next_allow_member_invites = normalize_boolean_flag(
+            data.get("allow_member_invites"),
+            default=bool(row_value(server, "allow_member_invites")),
+        )
+
+        if not next_title:
+            return jsonify({"message": "Название сервера обязательно"}), 400
+
+        conn.execute("""
+            UPDATE servers
+            SET title = %s,
+                description = %s,
+                allow_member_invites = %s
+            WHERE id = %s
+        """, (
+            next_title,
+            next_description,
+            1 if next_allow_member_invites else 0,
+            server_id,
+        ))
+        conn.commit()
+
+        payload = build_server_response(conn, server_id, user_id)
+        return jsonify({"server": payload})
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 @app.get("/servers/<int:server_id>/invites")
 def get_server_invites(server_id):
     user_id = current_user_id()
@@ -7709,7 +7968,7 @@ def get_server_invites(server_id):
         if not can_access_server(conn, user_id, server_id):
             return jsonify({"message": "Сервер не найден"}), 404
         if not can_create_server_invites(conn, user_id, server_id):
-            return jsonify({"message": "Недостаточно прав"}), 403
+            return jsonify({"message": "У вас нет прав приглашать участников на этот сервер"}), 403
         server_summary = get_server_summary_for_invites(conn, server_id)
         viewer_member = get_server_member(conn, server_id, user_id)
         invites = [
@@ -7732,7 +7991,7 @@ def get_server_invite_contacts(server_id):
         if not can_access_server(conn, user_id, server_id):
             return jsonify({"message": "Сервер не найден"}), 404
         if not can_create_server_invites(conn, user_id, server_id):
-            return jsonify({"message": "Недостаточно прав"}), 403
+            return jsonify({"message": "У вас нет прав приглашать участников на этот сервер"}), 403
 
         contacts = conn.execute("""
             SELECT
@@ -7813,14 +8072,14 @@ def create_server_invite_endpoint(server_id):
         if not can_access_server(conn, user_id, server_id):
             return jsonify({"message": "Сервер не найден"}), 404
         if not can_create_server_invites(conn, user_id, server_id):
-            return jsonify({"message": "Недостаточно прав"}), 403
+            return jsonify({"message": "У вас нет прав приглашать участников на этот сервер"}), 403
         expires_delta = duration_map[expires_in]
         invite = create_server_invite(conn, server_id, user_id, {
             "expires_at": datetime.now(timezone.utc) + expires_delta if expires_delta else None,
             "max_uses": max_uses_map[max_uses_raw],
-            "only_friends": bool(data.get("only_friends")),
+            "only_friends": False,
             "one_time": bool(data.get("one_time")),
-            "require_approval": bool(data.get("require_approval")),
+            "require_approval": False,
         })
         conn.commit()
         server_summary = get_server_summary_for_invites(conn, server_id)
@@ -7846,7 +8105,7 @@ def revoke_server_invite(server_id, code):
         if not can_access_server(conn, user_id, server_id):
             return jsonify({"message": "Сервер не найден"}), 404
         if not can_create_server_invites(conn, user_id, server_id):
-            return jsonify({"message": "Недостаточно прав"}), 403
+            return jsonify({"message": "У вас нет прав приглашать участников на этот сервер"}), 403
         invite = conn.execute("""
             SELECT id
             FROM server_invites
@@ -7859,6 +8118,11 @@ def revoke_server_invite(server_id, code):
             UPDATE server_invites
             SET revoked = 1
             WHERE server_id = %s AND code = %s
+        """, (server_id, code))
+        conn.execute("""
+            UPDATE servers
+            SET invite_code = NULL
+            WHERE id = %s AND invite_code = %s
         """, (server_id, code))
         conn.commit()
         return jsonify({"ok": True, "code": code})
@@ -8117,12 +8381,13 @@ def create_server():
     data = request.json or {}
     title = normalize_server_title(data.get("title"), fallback="")
     description = str(data.get("description") or "").strip()
+    allow_member_invites = normalize_boolean_flag(data.get("allow_member_invites"), default=False)
     if not title:
         return jsonify({"message": "Название сервера обязательно"}), 400
 
     conn = get_db()
     try:
-        created = create_server_with_defaults(conn, user_id, title, description)
+        created = create_server_with_defaults(conn, user_id, title, description, allow_member_invites)
         conn.commit()
         payload = build_server_response(conn, created["server_id"], user_id)
         return jsonify({
@@ -10330,12 +10595,19 @@ def create_group_message(group_id):
 
     payload = parse_message_create_payload()
     text = payload["text"]
+    raw_type = str(payload.get("type") or "").strip().lower()
+    raw_layout = str(payload.get("layout") or "").strip().lower()
+    message_type = "wide" if raw_type in {"wide", "special"} or raw_layout == "wide" else "text"
+    badge = str(payload.get("badge") or "").strip()[:64] or None
     reply_to_id = payload["reply_to_id"]
     images = payload["images"]
 
     if not text and not images:
         conn.close()
         return jsonify({"message": "Текст сообщения или фотография обязательны"}), 400
+    if message_type == "wide" and images:
+        conn.close()
+        return jsonify({"message": "Широкие сообщения пока не поддерживают вложения"}), 400
     if images:
         try:
             current_user = getattr(g, "current_user", None) or {}
@@ -10369,16 +10641,25 @@ def create_group_message(group_id):
             user_id,
             text=text,
             includes_files=bool(images),
-            editing=False
+            editing=False,
+            message_type=message_type
         )
     except PermissionError as error:
         conn.close()
         return jsonify({"message": str(error)}), 403
-    if text and not images and reply_to_id is None and is_duplicate_recent_group_invite(conn, group_id, user_id, text):
+    if message_type == "text" and text and not images and reply_to_id is None and is_duplicate_recent_group_invite(conn, group_id, user_id, text):
         conn.close()
         return jsonify({"message": "Эта ссылка уже была отправлена последним сообщением"}), 409
 
-    message = create_group_message_record(conn, group_id, user_id, text, "text", reply_to_message=reply_to_message)
+    message = create_group_message_record(
+        conn,
+        group_id,
+        user_id,
+        text,
+        message_type,
+        reply_to_message=reply_to_message,
+        badge=badge or ("Объявление" if message_type == "wide" else None)
+    )
     if attachments:
         insert_message_attachments(conn, "group", message["id"], attachments)
         message = get_group_message_for_group(conn, group_id, message["id"])

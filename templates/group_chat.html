@@ -15,9 +15,6 @@
           <p class="muted desktop-only" id="chatSubtitleDesktop">Загрузка...</p>
           <p class="muted" id="chatSubtitle">Загрузка...</p>
         </div>
-        <div class="thread-header-side">
-          <div class="avatar header-avatar" id="chatAvatar">?</div>
-        </div>
       </div>
     </header>
     <div class="content-body">
@@ -33,6 +30,10 @@
       <div class="messages" id="messages"></div>
       <button class="scroll-down-button" id="scrollDownButton" type="button" aria-label="Scroll down"><img class="icon-asset" src="/assets/icons/ui/Arrow_down.svg" alt=""></button>
       <div class="composer-wrap">
+        <div class="composer-mode composer-mode-wide" id="composerMode" hidden>
+          <span>📢 Режим объявления</span>
+          <button type="button" id="cancelWideMode" aria-label="Отключить режим объявления">×</button>
+        </div>
         <form class="composer" id="messageForm" novalidate>
           {% if photo_messages_enabled and global_file_uploads_enabled %}
             <input id="photoMessageInput" type="file" accept="image/*" multiple hidden>
@@ -45,12 +46,15 @@
           {% endif %}
           <div class="composer-input-shell">
             <div class="composer-attachments" id="composerAttachments" hidden></div>
-            <textarea class="textarea composer-textarea" id="messageInput" placeholder="Сообщение в канал..." rows="1" required></textarea>
+            <textarea class="textarea composer-textarea" id="messageInput" placeholder="" rows="1" required></textarea>
           </div>
           <button class="send-button composer-action-button" type="submit" aria-label="Записать голосовое сообщение" title="Записать голосовое">
             <img class="icon-asset" src="/assets/icons/ui/Mic.svg" alt="">
           </button>
         </form>
+        <div class="composer-send-menu" id="composerSendMenu" hidden>
+          <button class="composer-send-menu-item" id="composerSendSuperButton" type="button">Отправить как суперсообщение</button>
+        </div>
         <div class="sticker-picker-popup" id="stickerPickerPopup" hidden>
           <div class="sticker-picker-head">
             <div class="sticker-pack-tabs" id="stickerPackTabs"></div>

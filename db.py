@@ -322,6 +322,8 @@ def _ensure_server_tables(conn):
                 title VARCHAR(255) NOT NULL,
                 description TEXT NULL,
                 owner_id INT NOT NULL,
+                invite_code VARCHAR(255) NULL,
+                allow_member_invites TINYINT(1) NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """)
@@ -412,6 +414,11 @@ def _ensure_server_tables(conn):
             cursor.execute("""
                 ALTER TABLE servers
                 ADD COLUMN invite_code VARCHAR(255) NULL AFTER owner_id
+            """)
+        if "allow_member_invites" not in existing.get("servers", set()):
+            cursor.execute("""
+                ALTER TABLE servers
+                ADD COLUMN allow_member_invites TINYINT(1) NOT NULL DEFAULT 0 AFTER invite_code
             """)
 
         if "is_admin" not in existing.get("server_members", set()):
@@ -578,6 +585,7 @@ def _ensure_contacts_alias_column(conn):
 def _ensure_message_preview_columns(conn, table_name):
     expected_columns = {
         "message_type": "VARCHAR(32) NOT NULL DEFAULT 'text'",
+        "badge": "VARCHAR(64) NULL",
         "reply_to_message_id": "INT NULL",
         "reply_preview_text": "TEXT NULL",
         "reply_preview_sender_name": "VARCHAR(255) NULL",

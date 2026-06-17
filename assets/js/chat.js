@@ -8,6 +8,19 @@ const linkPreviewCache = new Map();
 const linkPreviewRequests = new Map();
 const serverInvitePreviewCache = new Map();
 const serverInvitePreviewRequests = new Map();
+const THREAD_MESSAGE_SELECTOR = ".message[data-message-id], .wide-message[data-message-id]";
+const THREAD_RENDERED_MESSAGE_SELECTOR = ".message:not(.pending), .wide-message:not(.pending)";
+
+function findThreadMessageNode(root, messageId) {
+  if (!root || messageId == null) {
+    return null;
+  }
+  return root.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"], .wide-message[data-message-id="${CSS.escape(String(messageId))}"]`);
+}
+
+function getThreadMessageTargetNode(target) {
+  return target?.closest?.(".message[data-message-id], .wide-message[data-message-id]") || null;
+}
 
 function areLinkPreviewsEnabled() {
   return !document.body.classList.contains("settings-link-previews-off");
@@ -824,6 +837,28 @@ function formatThreadInfoCount(value) {
   return new Intl.NumberFormat("ru-RU").format(Math.round(numericValue));
 }
 
+function isWideMessage(message) {
+  const messageType = String(message?.message_type || message?.type || "").trim().toLowerCase();
+  const layout = String(message?.layout || "").trim().toLowerCase();
+  return messageType === "wide" || messageType === "special" || layout === "wide";
+}
+
+function renderWideMessage(message, currentUserId) {
+  const own = String(message?.sender_id || "") === String(currentUserId || "");
+  return `
+    <article class="wide-message ${own ? "own" : ""}" ${message?.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="${escapeHtml(String(message?.message_type || message?.type || "wide"))}" data-created-at="${escapeHtml(String(message?.created_at || ""))}" data-own="${own ? "true" : "false"}">
+      <div class="wide-message-header">
+        <div class="wide-message-author">${escapeHtml(message?.sender_name || "Пользователь")}</div>
+        <span class="wide-message-badge">${escapeHtml(message?.badge || "Объявление")}</span>
+      </div>
+      <div class="wide-message-text">${renderMessageText(message?.text || "")}</div>
+      <div class="wide-message-footer">
+        <span class="message-time">${escapeHtml(formatTime(message?.created_at || ""))}</span>
+      </div>
+    </article>
+  `;
+}
+
 function renderMessageItem(message, currentUserId, chatType) {
   const isSystem = (message.message_type || "text") === "system";
   const isVoice = (message.message_type || "text") === "voice";
@@ -860,6 +895,9 @@ function renderMessageItem(message, currentUserId, chatType) {
       </article>
     `;
   }
+  if (isWideMessage(message)) {
+    return renderWideMessage(message, currentUserId);
+  }
   return `
     <article class="${messageClasses.join(" ")}" ${message.id != null ? `data-message-id="${escapeHtml(String(message.id))}"` : ""} data-message-type="${escapeHtml(String(message.message_type || "text"))}" data-created-at="${escapeHtml(String(message.created_at || ""))}" data-own="${own ? "true" : "false"}">
       ${!own && message.sender_name && chatType === "group" ? `<button type="button" class="message-author message-author-button" data-message-author-id="${escapeHtml(String(message.sender_id || ""))}" data-message-author-name="${escapeHtml(message.sender_name)}">${renderSystemAccountLabel(message.sender_name, message.sender_username || "", { allowLabelFallback: true })}</button>` : ""}
@@ -877,6 +915,24 @@ function renderMessageItem(message, currentUserId, chatType) {
 
 function renderPendingMessageItem(text, chatType, options = {}) {
   const directClass = chatType === "direct" ? " message-direct" : "";
+  if (options.type === "wide") {
+    return `
+      <article class="wide-message own pending" data-pending-message="true" data-message-type="wide" data-own="true">
+        <div class="wide-message-header">
+          <div class="wide-message-author">${escapeHtml(options.senderName || "Вы")}</div>
+          <span class="wide-message-badge">${escapeHtml(options.badge || "Объявление")}</span>
+        </div>
+        <div class="wide-message-text">${renderMessageText(text || "")}</div>
+        <div class="wide-message-footer">
+          <span class="message-status-indicator" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+        </div>
+      </article>
+    `;
+  }
   if (Array.isArray(options.attachments) && options.attachments.length) {
     return `
       <article class="message own pending${directClass}" data-pending-message="true" data-own="true">
@@ -966,7 +1022,7 @@ function rebuildDateDividers(container) {
   container.querySelectorAll('[data-date-divider="true"]').forEach((node) => node.remove());
 
   let previousDateKey = "";
-  const messageNodes = [...container.querySelectorAll(".message:not(.pending)")];
+  const messageNodes = [...container.querySelectorAll(THREAD_RENDERED_MESSAGE_SELECTOR)];
   for (const messageNode of messageNodes) {
     const createdAt = messageNode.dataset.createdAt || "";
     const dateKey = getLocalDateKey(createdAt);
@@ -1119,7 +1175,7 @@ function removePendingMessage(node) {
 }
 
 function ensureEmptyState(container) {
-  if (container.querySelector(".message") || container.querySelector(".empty-state")) {
+  if (container.querySelector(".message, .wide-message") || container.querySelector(".empty-state")) {
     return;
   }
 
@@ -1127,7 +1183,7 @@ function ensureEmptyState(container) {
 }
 
 function replaceMessageNode(container, message, currentUserId, chatType) {
-  const messageNode = container.querySelector(`.message[data-message-id="${CSS.escape(String(message.id))}"]`);
+  const messageNode = findThreadMessageNode(container, message.id);
   if (!messageNode) {
     return false;
   }
@@ -1141,7 +1197,7 @@ function replaceMessageNode(container, message, currentUserId, chatType) {
 }
 
 function removeMessageNode(container, messageId) {
-  const messageNode = container.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+  const messageNode = findThreadMessageNode(container, messageId);
   if (!messageNode) {
     return false;
   }
@@ -1156,7 +1212,7 @@ function removeMessageNode(container, messageId) {
 function markOwnMessagesAsRead(container, uptoMessageId) {
   if (!uptoMessageId) return;
 
-  container.querySelectorAll(".message.own[data-message-id]").forEach((node) => {
+  container.querySelectorAll('.message.own[data-message-id], .wide-message.own[data-message-id]').forEach((node) => {
     const messageId = Number(node.dataset.messageId || "0");
     if (!messageId || messageId > uptoMessageId) {
       return;
@@ -1454,17 +1510,49 @@ function getGroupPresenceText(info = {}) {
   return `${membersCount} участников`;
 }
 
+function renderThreadMemberAvatar(member = {}) {
+  const displayName = member?.name || member?.username || "U";
+  const avatarLabel = member?.avatar_label || initials(displayName);
+  const avatarUrl = String(
+    member?.avatar_url || member?.photo_url || member?.profile_photo_url || ""
+  ).trim();
+  const presenceDot = !member?.hide_presence && member?.is_online
+    ? '<span class="presence-dot online thread-member-presence-dot" aria-hidden="true"></span>'
+    : "";
+
+  if (avatarUrl) {
+    return `
+      <div class="avatar small thread-member-avatar has-image">
+        <img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(displayName)}" loading="lazy">
+        ${presenceDot}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="avatar small thread-member-avatar">
+      ${escapeHtml(avatarLabel)}
+      ${presenceDot}
+    </div>
+  `;
+}
+
 function renderGroupProfilePanel(info = {}) {
   const title = info?.title || "Группа";
-  const description = info?.description && String(info.description).trim() ? info.description : "Нет описания";
+  const isServerChannel = Boolean(getCurrentRouteInfo()?.serverId);
+  if (isServerChannel) {
+    return `
+      <section class="thread-info-channel-heading">
+        <h3 class="thread-info-name thread-info-channel-title">${escapeHtml(title)}</h3>
+      </section>
+    `;
+  }
   return `
     <section class="thread-info-card thread-info-card-profile">
-      <div class="thread-info-card-eyebrow">Profile</div>
       <div class="thread-info-hero">
         <div class="avatar group-avatar thread-info-avatar">${escapeHtml(initials(title))}</div>
         <h3 class="thread-info-name">${escapeHtml(title)}</h3>
         <p class="thread-info-handle">${escapeHtml(getGroupPresenceText(info))}</p>
-        <p class="thread-info-description">${escapeHtml(description)}</p>
       </div>
     </section>
   `;
@@ -1557,7 +1645,7 @@ function fillThreadInfoPanel(info, chatType) {
       const canAddMembers = Boolean(info?.can_add_members);
       const threadInfoEditActionButton = document.querySelector('#threadInfoActionMenu [data-thread-info-action="edit-group"]');
       const isServerChannel = Boolean(getCurrentRouteInfo()?.serverId);
-      membersWrapNode.hidden = false;
+      membersWrapNode.hidden = isServerChannel;
       if (menuTriggerNode) {
         menuTriggerNode.hidden = !canEditGroup;
         menuTriggerNode.setAttribute("aria-label", isServerChannel ? "Действия канала" : "Действия группы");
@@ -1566,9 +1654,11 @@ function fillThreadInfoPanel(info, chatType) {
         threadInfoEditActionButton.textContent = isServerChannel ? "Настройки канала" : "Редактировать группу";
       }
       if (memberAddTriggerNode) {
-        memberAddTriggerNode.hidden = !canAddMembers;
+        memberAddTriggerNode.hidden = isServerChannel || !canAddMembers;
       }
-      membersListNode.innerHTML = members.length
+      membersListNode.innerHTML = isServerChannel
+        ? ""
+        : members.length
         ? members.map((member) => `
           <article
             class="member-item"
@@ -1579,10 +1669,7 @@ function fillThreadInfoPanel(info, chatType) {
             data-member-is-owner="${member.is_owner ? "true" : "false"}"
             data-member-can-manage="${member.can_manage ? "true" : "false"}"
           >
-            <div class="avatar small">
-              ${escapeHtml(initials(member.name || member.username || "U"))}
-              ${!member.hide_presence && member.is_online ? '<span class="presence-dot online thread-member-presence-dot" aria-hidden="true"></span>' : ""}
-            </div>
+            ${renderThreadMemberAvatar(member)}
             <div class="result-meta">
               <div class="result-topline">
                 <h3 class="result-name">${renderSystemAccountLabel(member.name || member.username || "User", member)}</h3>
@@ -1681,7 +1768,7 @@ function setInviteActionButton(button, iconPath, label) {
 }
 
 function setMessageSearchTarget(messageId) {
-  document.querySelectorAll(".message.search-target").forEach((node) => {
+  document.querySelectorAll(".message.search-target, .wide-message.search-target").forEach((node) => {
     node.classList.remove("search-target");
   });
 
@@ -1689,7 +1776,7 @@ function setMessageSearchTarget(messageId) {
     return null;
   }
 
-  const targetNode = document.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+  const targetNode = findThreadMessageNode(document, messageId);
   if (!targetNode) {
     return null;
   }
@@ -1746,12 +1833,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const composer = document.getElementById("messageForm");
   const contentBody = document.querySelector(".content-body");
   const contentNode = document.querySelector(".content");
+  const contentHeaderNode = document.querySelector(".content-header");
   const status = document.getElementById("messageStatus");
   const input = document.getElementById("messageInput");
   const scrollDownButton = document.getElementById("scrollDownButton");
   const titleNode = document.getElementById("chatTitle");
   const subtitleNode = document.getElementById("chatSubtitle");
-  const headerAvatarNode = document.getElementById("chatAvatar");
   const threadInfoCloseButton = document.getElementById("threadInfoClose");
   const threadInfoMenuTrigger = document.getElementById("threadInfoMenuTrigger");
   const threadInfoActionMenu = document.getElementById("threadInfoActionMenu");
@@ -1793,7 +1880,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadGroupEditStatus = document.getElementById("threadGroupEditStatus");
   const threadGroupEditSubmit = document.getElementById("threadGroupEditSubmit");
   const composerWrap = composer?.closest(".composer-wrap");
+  const composerModeNode = document.getElementById("composerMode");
+  const cancelWideModeButton = document.getElementById("cancelWideMode");
+  const wideMessageButton = document.getElementById("wideMessageButton");
   const sendButton = composer?.querySelector('button[type="submit"]');
+  const composerSendMenu = document.getElementById("composerSendMenu");
+  const composerSendSuperButton = document.getElementById("composerSendSuperButton");
   const photoMessageButton = document.getElementById("photoMessageButton");
   const photoMessageInput = document.getElementById("photoMessageInput");
   const composerAttachmentsNode = document.getElementById("composerAttachments");
@@ -1836,6 +1928,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let hideMessageMenuTimer = null;
   let editingMessageState = null;
   let replyMessageState = null;
+  let composerMode = "normal";
   let forwardMessageState = null;
   let selectedForwardTargetKey = "";
   let touchMenuPressTimer = null;
@@ -1850,19 +1943,61 @@ document.addEventListener("DOMContentLoaded", async () => {
   let activeStickerPackId = "";
 
   function getComposerPlaceholder() {
+    return composerMode === "wide" ? "Напишите объявление..." : "";
+  }
+
+  function canUseWideComposerMode() {
     return chatType === "group"
-      ? (serverId ? "Сообщение в канал..." : "Сообщение в группу...")
-      : "Напишите сообщение...";
+      && Boolean(currentThreadInfo?.server)
+      && Boolean(currentThreadInfo?.current_user_permissions?.send_announcements);
+  }
+
+  function canSendNormalMessages() {
+    return chatType !== "group"
+      || !currentThreadInfo?.server
+      || Boolean(currentThreadInfo?.can_send_messages);
+  }
+
+  function setComposerWideMode(nextMode) {
+    const normalizedMode = nextMode === "wide" && canUseWideComposerMode() ? "wide" : "normal";
+    if (normalizedMode === "wide" && editingMessageState) {
+      setEditingMessageState(null);
+    }
+    composerMode = normalizedMode;
+    input.placeholder = editingMessageState ? "Редактирование сообщения" : getComposerPlaceholder();
+    composer.classList.toggle("is-wide-mode", composerMode === "wide");
+    if (composerModeNode) {
+      composerModeNode.hidden = composerMode !== "wide";
+      composerModeNode.classList.toggle("active", composerMode === "wide");
+    }
+    if (wideMessageButton) {
+      wideMessageButton.hidden = !canUseWideComposerMode();
+      wideMessageButton.disabled = !canSendNormalMessages() && canUseWideComposerMode();
+      wideMessageButton.classList.toggle("active", composerMode === "wide");
+      wideMessageButton.setAttribute("aria-pressed", composerMode === "wide" ? "true" : "false");
+    }
+    updateComposerActionButton();
+    resizeComposerInput();
+  }
+
+  function syncWideComposerControls() {
+    if (!canSendNormalMessages() && canUseWideComposerMode()) {
+      composerMode = "wide";
+    }
+    if (!canUseWideComposerMode() && composerMode === "wide") {
+      composerMode = "normal";
+    }
+    setComposerWideMode(composerMode);
   }
 
   function syncComposerAvailability() {
-    const canSendMessages = chatType === "group" && currentThreadInfo?.server
-      ? Boolean(currentThreadInfo?.can_send_messages)
-      : true;
-    composer.hidden = !canSendMessages;
-    composerWrap.hidden = !canSendMessages;
-    if (!canSendMessages) {
+    const canSendAnything = canSendNormalMessages() || canUseWideComposerMode();
+    composer.hidden = !canSendAnything;
+    composerWrap.hidden = !canSendAnything;
+    syncWideComposerControls();
+    if (!canSendAnything) {
       input.value = "";
+      setComposerWideMode("normal");
       resizeComposerInput();
       updateComposerActionButton();
     }
@@ -1928,6 +2063,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   composer.parentNode.insertBefore(replyBanner, composer);
   contentBody.insertBefore(selectionToolbar, composerWrap);
   contentBody.appendChild(deleteUndoToast);
+
+  function hideComposerSendMenu() {
+    if (!composerSendMenu || composerSendMenu.hidden) {
+      return;
+    }
+    composerSendMenu.hidden = true;
+    sendButton?.setAttribute("aria-expanded", "false");
+  }
+
+  function openComposerSendMenu(clientX, clientY) {
+    if (!composerSendMenu || !sendButton || !canUseWideComposerMode()) {
+      return;
+    }
+    composerSendMenu.hidden = false;
+    sendButton.setAttribute("aria-expanded", "true");
+    const wrapRect = composerWrap.getBoundingClientRect();
+    const menuRect = composerSendMenu.getBoundingClientRect();
+    const left = Math.max(12, Math.min(clientX - wrapRect.left - menuRect.width + 18, wrapRect.width - menuRect.width - 12));
+    const top = Math.max(12, Math.min(clientY - wrapRect.top - menuRect.height - 10, wrapRect.height - menuRect.height - 12));
+    composerSendMenu.style.left = `${left}px`;
+    composerSendMenu.style.top = `${top}px`;
+  }
 
   function disconnectRealtime() {
     emitTypingStop();
@@ -2005,6 +2162,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     pendingMessageState = null;
     forwardMessageState = null;
     selectedForwardTargetKey = "";
+    composerMode = "normal";
     status.textContent = "";
     status.className = "status thread-status";
     input.value = "";
@@ -2012,6 +2170,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     composer.hidden = false;
     composerWrap.hidden = false;
     resizeComposerInput();
+    syncWideComposerControls();
     updateComposerActionButton();
     setChatTitle("Загрузка...", "Подготавливаем переписку", "Подготавливаем переписку");
     messagesNode.innerHTML = renderMessagesSkeleton();
@@ -2569,15 +2728,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (sendButton) {
       const hasText = Boolean(input.value.trim());
       const hasAttachments = composerAttachments.length > 0;
-      const state = isRecordingVoice ? "recording" : (editingMessageState ? "save" : ((hasText || hasAttachments) ? "send" : "idle"));
+      const canRecordVoice = canSendNormalMessages() && composerMode !== "wide" && !hasAttachments && !editingMessageState;
+      const state = isRecordingVoice ? "recording" : (editingMessageState ? "save" : ((hasText || hasAttachments || composerMode === "wide") ? "send" : "idle"));
       const labels = {
-        idle: "Записать голосовое сообщение",
+        idle: canRecordVoice ? "Записать голосовое сообщение" : "Отправить сообщение",
         send: "Отправить сообщение",
         save: "Сохранить изменения",
         recording: "Остановить запись голосового сообщения"
       };
       const titles = {
-        idle: "Голосовое сообщение",
+        idle: canRecordVoice ? "Голосовое сообщение" : "Отправить",
         send: "Отправить",
         save: "Сохранить",
         recording: "Остановить запись"
@@ -2593,7 +2753,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       sendButton.style.setProperty("--voice-record-scale", isRecordingVoice ? "1" : "0");
     }
     if (photoMessageButton) {
-      photoMessageButton.disabled = isSendingMessage || Boolean(input.disabled) || Boolean(editingMessageState);
+      photoMessageButton.disabled = isSendingMessage || Boolean(input.disabled) || Boolean(editingMessageState) || composerMode === "wide";
     }
   }
 
@@ -2962,14 +3122,180 @@ document.addEventListener("DOMContentLoaded", async () => {
     mediaRecorder.stop();
   }
 
+  async function submitComposerMessage(options = {}) {
+    const forceWide = Boolean(options.forceWide);
+    if (isSendingMessage || isRecordingVoice) return;
+
+    const rawText = input.value.trim();
+    const wideCommandMatch = rawText.match(/^\/(?:wide|announce)\s+([\s\S]+)$/i);
+    const isWideCommand = Boolean(wideCommandMatch);
+    const isWideSubmit = forceWide || composerMode === "wide" || (isWideCommand && canUseWideComposerMode());
+    const text = isWideCommand ? String(wideCommandMatch?.[1] || "").trim() : rawText;
+    const hasAttachments = composerAttachments.length > 0;
+
+    if (forceWide && !canUseWideComposerMode()) {
+      return;
+    }
+    if (!text && !hasAttachments) {
+      if (forceWide) {
+        status.textContent = "Введите текст для суперсообщения";
+        status.className = "status error";
+      }
+      return;
+    }
+    if (isWideSubmit && hasAttachments) {
+      status.textContent = "Широкие сообщения пока не поддерживают вложения";
+      status.className = "status error";
+      return;
+    }
+
+    if (editingMessageState) {
+      emitTypingStop();
+      if (text === editingMessageState.text.trim()) {
+        setEditingMessageState(null);
+        input.value = "";
+        resizeComposerInput();
+        updateComposerActionButton();
+        status.textContent = "";
+        status.className = "status thread-status";
+        return;
+      }
+
+      isSendingMessage = true;
+      setComposerBusyState(true);
+      status.textContent = "";
+      status.className = "status thread-status";
+
+      try {
+        const updatedMessage = await apiFetch(editingMessageState.basePath, {
+          method: "PATCH",
+          body: JSON.stringify({ text })
+        });
+
+        setEditingMessageState(null);
+        input.value = "";
+        resizeComposerInput();
+        updateComposerActionButton();
+        replaceMessageNode(messagesNode, updatedMessage, currentUser.id, chatType);
+        syncMessageSelectionState(updatedMessage.id);
+        await loadSidebar("chatList", { showLoading: false });
+        await markCurrentChatAsRead();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      } finally {
+        isSendingMessage = false;
+        setComposerBusyState(false);
+        input.focus();
+      }
+      return;
+    }
+
+    isSendingMessage = true;
+    typingState.isSending = true;
+    emitTypingStop();
+    const shouldStickToBottom = isNearBottom(messagesNode);
+    const pendingMessageNode = appendPendingMessage(messagesNode, text, chatType, {
+      type: isWideSubmit ? "wide" : "text",
+      badge: isWideSubmit ? "Объявление" : "",
+      senderName: currentUser?.name || "Вы",
+      attachments: getComposerAttachmentPayload()
+    });
+    pendingMessageState = { text, node: pendingMessageNode };
+    setComposerBusyState(true);
+    if (shouldStickToBottom) {
+      scrollMessagesToBottom(messagesNode);
+    }
+    updateScrollDownButton(messagesNode, scrollDownButton);
+
+    status.textContent = "";
+    status.className = "status thread-status";
+
+    try {
+      const hadChatId = Boolean(chatId);
+      if (!hadChatId && chatType !== "group") {
+        await createDirectChatOnFirstMessage();
+      }
+
+      const path = chatType === "group" ? `/groups/${chatId}/messages` : `/chats/${chatId}/messages`;
+      let requestBody;
+      if (hasAttachments) {
+        const compressedImages = await Promise.all(
+          composerAttachments.map((attachment) => compressImage(attachment.file))
+        );
+        const formData = new FormData();
+        formData.append("text", text);
+        if (replyMessageState?.messageId) {
+          formData.append("reply_to_id", String(replyMessageState.messageId));
+        }
+        compressedImages.forEach((file) => {
+          formData.append("images[]", file, file.name || "photo.jpg");
+        });
+        requestBody = formData;
+      } else {
+        const payload = {
+          text,
+          reply_to_id: replyMessageState?.messageId || null
+        };
+        if (isWideSubmit) {
+          payload.type = "wide";
+          payload.layout = "wide";
+          payload.badge = "Объявление";
+        }
+        requestBody = JSON.stringify(payload);
+      }
+
+      const sentMessage = await apiFetch(path, {
+        method: "POST",
+        body: requestBody
+      });
+
+      removePendingMessage(pendingMessageNode);
+      pendingMessageState = null;
+      input.value = "";
+      resizeComposerInput();
+      clearComposerAttachments();
+      setComposerWideMode("normal");
+      appendMessage(messagesNode, sentMessage, currentUser.id, chatType);
+      syncMessageSelectionState(sentMessage.id);
+      await loadThread();
+      if (shouldStickToBottom) {
+        scrollMessagesToBottom(messagesNode);
+      }
+
+      if (!hadChatId && chatType !== "group") {
+        await loadSidebar("chatList", { showLoading: false });
+        await markCurrentChatAsRead();
+        connectRealtime();
+      }
+      setReplyMessageState(null);
+      status.textContent = "";
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = "status error";
+    } finally {
+      if (pendingMessageState?.node === pendingMessageNode) {
+        removePendingMessage(pendingMessageNode);
+        pendingMessageState = null;
+      }
+      typingState.isSending = false;
+      isSendingMessage = false;
+      setComposerBusyState(false);
+      updateComposerActionButton();
+      input.focus();
+      updateScrollDownButton(messagesNode, scrollDownButton);
+    }
+  }
+
   function getBaseHeaderStatus() {
     if (chatType === "group") {
+      const groupStatus = serverId ? "" : getGroupPresenceText(currentThreadInfo || {});
       return {
         mobile: {
           mode: "text",
-          value: getGroupPresenceText(currentThreadInfo || {})
+          value: groupStatus
         },
-        desktopSubtitle: getGroupPresenceText(currentThreadInfo || {}),
+        desktopSubtitle: groupStatus,
         desktopPresence: ""
       };
     }
@@ -3062,7 +3388,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function refreshVisibleMessageTimes() {
-    messagesNode.querySelectorAll(".message[data-created-at]").forEach((node) => {
+    messagesNode.querySelectorAll(".message[data-created-at], .wide-message[data-created-at]").forEach((node) => {
       const timeNode = node.querySelector(".message-time");
       if (!timeNode) {
         return;
@@ -3297,7 +3623,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const existingNode = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+    const existingNode = findThreadMessageNode(messagesNode, messageId);
     if (existingNode) {
       existingNode.scrollIntoView({ block: "center", behavior: "smooth" });
       setMessageSearchTarget(messageId);
@@ -4101,7 +4427,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function syncMessageSelectionState(messageId) {
-    const node = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+    const node = findThreadMessageNode(messagesNode, messageId);
     if (!node) {
       return;
     }
@@ -4116,7 +4442,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const deleteMeButton = selectionToolbar.querySelector('[data-action="delete-me"]');
     const forwardDialogButton = selectionToolbar.querySelector('[data-action="forward-dialog"]');
     const selectedNodes = [...selectedMessageIds].map((messageId) => (
-      messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`)
+      findThreadMessageNode(messagesNode, messageId)
     )).filter(Boolean);
     const allOwn = selectedNodes.length > 0 && selectedNodes.every((node) => node.dataset.own === "true");
 
@@ -4150,7 +4476,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function clearSelectedMessages() {
     selectedMessageIds.forEach((messageId) => {
-      const node = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+      const node = findThreadMessageNode(messagesNode, messageId);
       if (node) {
         node.classList.remove("selected");
       }
@@ -4205,7 +4531,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function collectSelectedMessageItems() {
     const selectedIds = new Set(selectedMessageIds);
-    const messageNodes = [...messagesNode.querySelectorAll(".message[data-message-id]")];
+    const messageNodes = [...messagesNode.querySelectorAll(THREAD_MESSAGE_SELECTOR)];
 
     return messageNodes
       .map((node, index) => {
@@ -4251,7 +4577,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       item.messageNode.classList.remove("selected");
       renderedMessages.add(`id:${item.messageId}`);
       const nextAnchor = item.anchorNextId
-        ? container.querySelector(`.message[data-message-id="${CSS.escape(String(item.anchorNextId))}"]`)
+        ? findThreadMessageNode(container, item.anchorNextId)
         : null;
       if (nextAnchor) {
         container.insertBefore(item.messageNode, nextAnchor);
@@ -4259,7 +4585,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       const prevAnchor = item.anchorPrevId
-        ? container.querySelector(`.message[data-message-id="${CSS.escape(String(item.anchorPrevId))}"]`)
+        ? findThreadMessageNode(container, item.anchorPrevId)
         : null;
       if (prevAnchor?.parentNode === container) {
         prevAnchor.insertAdjacentElement("afterend", item.messageNode);
@@ -4726,7 +5052,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       exitSelectionMode();
     }
 
-    const messageNode = messagesNode.querySelector(`.message[data-message-id="${CSS.escape(String(messageId))}"]`);
+    const messageNode = findThreadMessageNode(messagesNode, messageId);
     if (!messageNode) {
       return;
     }
@@ -4737,7 +5063,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       nextSibling: messageNode.nextElementSibling,
       anchorNextId: Number(messageNode.nextElementSibling?.dataset?.messageId || "0") || null,
       anchorPrevId: Number(messageNode.previousElementSibling?.dataset?.messageId || "0") || null,
-      originalIndex: [...messagesNode.querySelectorAll(".message[data-message-id]")].findIndex((node) => node === messageNode)
+      originalIndex: [...messagesNode.querySelectorAll(THREAD_MESSAGE_SELECTOR)].findIndex((node) => node === messageNode)
     };
     messageNode.classList.remove("selected");
     const removed = removeMessageNode(messagesNode, Number(messageId));
@@ -5176,9 +5502,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     setThreadInfoOpen(true);
   }
 
-  titleNode?.addEventListener("click", openThreadInfoPanel);
-  subtitleNode?.addEventListener("click", openThreadInfoPanel);
-  headerAvatarNode?.addEventListener("click", openThreadInfoPanel);
+  contentHeaderNode?.addEventListener("click", (event) => {
+    if (
+      event.target.closest("a, button, input, textarea, select, label")
+      || event.target.closest(".thread-back")
+      || event.target.closest(".thread-mobile-search-trigger")
+    ) {
+      return;
+    }
+    openThreadInfoPanel();
+  });
   threadInfoMenuTrigger?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -5699,10 +6032,33 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    if (!hasText && !hasAttachments && !editingMessageState) {
+    if (!hasText && !hasAttachments && !editingMessageState && composerMode !== "wide") {
       event.preventDefault();
       await startVoiceRecording();
     }
+  });
+
+  sendButton?.addEventListener("contextmenu", async (event) => {
+    event.preventDefault();
+    openComposerSendMenu(event.clientX, event.clientY);
+  });
+
+  composerSendSuperButton?.addEventListener("click", async () => {
+    hideComposerSendMenu();
+    await submitComposerMessage({ forceWide: true });
+  });
+
+  wideMessageButton?.addEventListener("click", () => {
+    if (!canUseWideComposerMode() || isSendingMessage || isRecordingVoice) {
+      return;
+    }
+    setComposerWideMode(composerMode === "wide" ? "normal" : "wide");
+    input.focus();
+  });
+
+  cancelWideModeButton?.addEventListener("click", () => {
+    setComposerWideMode("normal");
+    input.focus();
   });
 
   messagesNode.addEventListener("click", (event) => {
@@ -5812,7 +6168,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   messagesNode.addEventListener("contextmenu", (event) => {
-    const messageNode = event.target.closest(".message[data-message-id]");
+    const messageNode = getThreadMessageTargetNode(event.target);
     if (!messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       return;
     }
@@ -5914,7 +6270,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const messageNode = event.target.closest(".message[data-message-id]");
+    const messageNode = getThreadMessageTargetNode(event.target);
     if (!isSelectionMode || !messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       return;
     }
@@ -5925,7 +6281,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   messagesNode.addEventListener("touchstart", (event) => {
     const touch = event.touches[0];
-    const messageNode = event.target.closest(".message[data-message-id]");
+    const messageNode = getThreadMessageTargetNode(event.target);
     if (!touch || !messageNode || messageNode.classList.contains("pending") || isSystemMessageNode(messageNode)) {
       touchMenuTarget = null;
       touchMenuPoint = null;
@@ -6071,6 +6427,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("click", (event) => {
+    if (!event.target.closest("#composerSendMenu") && !event.target.closest(".send-button")) {
+      hideComposerSendMenu();
+    }
     if (!event.target.closest(".message-action-menu")) {
       hideMessageMenu();
     }
@@ -6083,7 +6442,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("mousedown", (event) => {
-    if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
+    if (!event.target.closest("#composerSendMenu") && !event.target.closest(".send-button")) {
+      hideComposerSendMenu();
+    }
+    if (!event.target.closest(".message-action-menu") && !getThreadMessageTargetNode(event.target)) {
       hideMessageMenu();
     }
     if (!event.target.closest(".thread-member-action-menu") && !event.target.closest(".member-item[data-member-id]")) {
@@ -6092,7 +6454,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("touchstart", (event) => {
-    if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
+    if (!event.target.closest("#composerSendMenu") && !event.target.closest(".send-button")) {
+      hideComposerSendMenu();
+    }
+    if (!event.target.closest(".message-action-menu") && !getThreadMessageTargetNode(event.target)) {
       hideMessageMenu();
     }
     if (!event.target.closest(".thread-member-action-menu") && !event.target.closest(".member-item[data-member-id]")) {
@@ -6101,7 +6466,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   }, { passive: true });
 
   document.addEventListener("contextmenu", (event) => {
-    if (!event.target.closest(".message-action-menu") && !event.target.closest(".message[data-message-id]")) {
+    if (!event.target.closest("#composerSendMenu") && !event.target.closest(".send-button")) {
+      hideComposerSendMenu();
+    }
+    if (!event.target.closest(".message-action-menu") && !getThreadMessageTargetNode(event.target)) {
       hideMessageMenu();
     }
     if (!event.target.closest(".thread-member-action-menu") && !event.target.closest(".member-item[data-member-id]")) {
@@ -6111,6 +6479,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      hideComposerSendMenu();
       if (!forwardModal.hidden) {
         closeForwardModal();
         return;
@@ -6212,138 +6581,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   composer.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (isSendingMessage || isRecordingVoice) return;
-
-    const text = input.value.trim();
-    const hasAttachments = composerAttachments.length > 0;
-    if (!text && !hasAttachments) return;
-
-    if (editingMessageState) {
-      emitTypingStop();
-      if (text === editingMessageState.text.trim()) {
-        setEditingMessageState(null);
-        input.value = "";
-        resizeComposerInput();
-        updateComposerActionButton();
-        status.textContent = "";
-        status.className = "status thread-status";
-        return;
-      }
-
-      isSendingMessage = true;
-      setComposerBusyState(true);
-      status.textContent = "";
-      status.className = "status thread-status";
-
-      try {
-        const updatedMessage = await apiFetch(editingMessageState.basePath, {
-          method: "PATCH",
-          body: JSON.stringify({ text })
-        });
-
-        setEditingMessageState(null);
-        input.value = "";
-        resizeComposerInput();
-        updateComposerActionButton();
-        replaceMessageNode(messagesNode, updatedMessage, currentUser.id, chatType);
-        syncMessageSelectionState(updatedMessage.id);
-        await loadSidebar("chatList", { showLoading: false });
-        await markCurrentChatAsRead();
-      } catch (error) {
-        status.textContent = error.message;
-        status.className = "status error";
-      } finally {
-        isSendingMessage = false;
-        setComposerBusyState(false);
-        input.focus();
-      }
-      return;
-    }
-
-    isSendingMessage = true;
-    typingState.isSending = true;
-    emitTypingStop();
-    const shouldStickToBottom = isNearBottom(messagesNode);
-    const pendingMessageNode = appendPendingMessage(messagesNode, text, chatType, {
-      attachments: getComposerAttachmentPayload()
-    });
-    pendingMessageState = { text, node: pendingMessageNode };
-    setComposerBusyState(true);
-    if (shouldStickToBottom) {
-      scrollMessagesToBottom(messagesNode);
-    }
-    updateScrollDownButton(messagesNode, scrollDownButton);
-
-    status.textContent = "Отправка...";
-    status.className = "status thread-status";
-
-    try {
-      const hadChatId = Boolean(chatId);
-      if (!hadChatId && chatType !== "group") {
-        await createDirectChatOnFirstMessage();
-      }
-
-      const path = chatType === "group" ? `/groups/${chatId}/messages` : `/chats/${chatId}/messages`;
-      let requestBody;
-      if (hasAttachments) {
-        const compressedImages = await Promise.all(
-          composerAttachments.map((attachment) => compressImage(attachment.file))
-        );
-        const formData = new FormData();
-        formData.append("text", text);
-        if (replyMessageState?.messageId) {
-          formData.append("reply_to_id", String(replyMessageState.messageId));
-        }
-        compressedImages.forEach((file) => {
-          formData.append("images[]", file, file.name || "photo.jpg");
-        });
-        requestBody = formData;
-      } else {
-        requestBody = JSON.stringify({
-          text,
-          reply_to_id: replyMessageState?.messageId || null
-        });
-      }
-
-      const sentMessage = await apiFetch(path, {
-        method: "POST",
-        body: requestBody
-      });
-
-      removePendingMessage(pendingMessageNode);
-      pendingMessageState = null;
-      input.value = "";
-      resizeComposerInput();
-      clearComposerAttachments();
-      appendMessage(messagesNode, sentMessage, currentUser.id, chatType);
-      syncMessageSelectionState(sentMessage.id);
-      await loadThread();
-      if (shouldStickToBottom) {
-        scrollMessagesToBottom(messagesNode);
-      }
-
-      if (!hadChatId && chatType !== "group") {
-        await loadSidebar("chatList", { showLoading: false });
-        await markCurrentChatAsRead();
-        connectRealtime();
-      }
-      setReplyMessageState(null);
-      status.textContent = "";
-    } catch (error) {
-      status.textContent = error.message;
-      status.className = "status error";
-    } finally {
-      if (pendingMessageState?.node === pendingMessageNode) {
-        removePendingMessage(pendingMessageNode);
-        pendingMessageState = null;
-      }
-      typingState.isSending = false;
-      isSendingMessage = false;
-      setComposerBusyState(false);
-      updateComposerActionButton();
-      input.focus();
-      updateScrollDownButton(messagesNode, scrollDownButton);
-    }
+    await submitComposerMessage();
   });
 
   window.addEventListener("pagehide", () => {

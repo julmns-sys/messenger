@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS messages (
     sender_id INT NOT NULL,
     text TEXT NOT NULL,
     message_type VARCHAR(32) NOT NULL DEFAULT 'text',
+    badge VARCHAR(64) NULL,
     reply_to_message_id INT NULL,
     reply_preview_text TEXT NULL,
     reply_preview_sender_name VARCHAR(255) NULL,
@@ -179,6 +180,8 @@ CREATE TABLE IF NOT EXISTS servers (
     title VARCHAR(255) NOT NULL,
     description TEXT NULL,
     owner_id INT NOT NULL,
+    invite_code VARCHAR(255) NULL,
+    allow_member_invites TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -231,6 +234,7 @@ CREATE TABLE IF NOT EXISTS group_messages (
     sender_id INT NOT NULL,
     text TEXT NOT NULL,
     message_type VARCHAR(32) NOT NULL DEFAULT 'text',
+    badge VARCHAR(64) NULL,
     reply_to_message_id INT NULL,
     reply_preview_text TEXT NULL,
     reply_preview_sender_name VARCHAR(255) NULL,
