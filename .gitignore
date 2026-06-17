@@ -4,5 +4,6 @@ __pycache__/
 messenger.db
 .env
 assets/uploads/photos/
+assets/uploads/messages/
 assets/stickers/uploads/
 assets/ASSETS.md

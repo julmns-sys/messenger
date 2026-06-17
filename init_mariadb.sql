@@ -190,10 +190,35 @@ CREATE TABLE IF NOT EXISTS server_members (
     server_id INT NOT NULL,
     user_id INT NOT NULL,
     is_admin TINYINT(1) NOT NULL DEFAULT 0,
+    role VARCHAR(32) NOT NULL DEFAULT 'member',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uniq_server_member (server_id, user_id),
     INDEX idx_server_members_server_id (server_id),
     INDEX idx_server_members_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS server_banned_users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    server_id INT NOT NULL,
+    user_id INT NOT NULL,
+    created_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_server_banned_user (server_id, user_id),
+    INDEX idx_server_banned_users_server_id (server_id),
+    INDEX idx_server_banned_users_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS server_audit_log (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    server_id INT NOT NULL,
+    actor_user_id INT NOT NULL,
+    target_user_id INT NULL,
+    action VARCHAR(120) NOT NULL,
+    details_json LONGTEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_server_audit_server_created (server_id, created_at),
+    INDEX idx_server_audit_actor (actor_user_id),
+    INDEX idx_server_audit_target (target_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS server_categories (

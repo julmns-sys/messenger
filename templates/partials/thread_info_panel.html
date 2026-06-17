@@ -22,103 +22,105 @@
   <div class="thread-info-panel-body">
     <div id="threadInfoProfilePanel"></div>
     <section class="thread-info-card thread-info-card-chat" id="threadInfoChatCard">
-      <div class="thread-info-card-head">
-        <div>
-          <div class="thread-info-card-eyebrow">Chat Info</div>
-          <div class="thread-info-card-title-row">
-            <h3 class="thread-info-card-title">О чате</h3>
-            <div class="thread-info-tag-slot" id="threadInfoTag"></div>
-          </div>
-        </div>
-      </div>
-      <div class="thread-info-facts">
-        <button class="thread-info-search-action" id="threadInfoSearchAction" type="button">
-          <span class="thread-info-search-icon" aria-hidden="true">
-            <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Search_fill.svg" alt="">
-          </span>
-          <span class="thread-info-search-copy">
-            <strong>Поиск по сообщениям</strong>
-            <span>Найти сообщение и перейти к нему</span>
-          </span>
-        </button>
-        <div class="thread-info-search-panel" id="threadInfoSearchPanel" hidden>
-          <div class="thread-info-search-panel-row">
-            <input class="search-input thread-info-search-input" id="threadInfoSearchInput" type="search" placeholder="Поиск в сообщениях">
-            <button class="button button-secondary thread-info-search-reset" id="threadInfoSearchReset" type="button">Последние</button>
-          </div>
-          <div class="status thread-info-search-status" id="threadInfoSearchStatus"></div>
-          <div class="thread-info-search-results" id="threadInfoSearchResults"></div>
-        </div>
-        <div class="thread-info-fact">
-          <div class="thread-info-fact-pair">
-            <div class="thread-info-fact-item">
-              <span class="thread-info-label">Дата начала</span>
-              <strong id="threadInfoStartedAt">Пока нет</strong>
-            </div>
-            <div class="thread-info-fact-item">
-              <span class="thread-info-label">Количество сообщений</span>
-              <strong id="threadInfoMessagesCount">0</strong>
+      <div class="thread-info-chat-info" id="threadInfoChatInfoContent">
+        <div class="thread-info-card-head">
+          <div>
+            <div class="thread-info-card-eyebrow">Chat Info</div>
+            <div class="thread-info-card-title-row">
+              <h3 class="thread-info-card-title">О чате</h3>
+              <div class="thread-info-tag-slot" id="threadInfoTag"></div>
             </div>
           </div>
         </div>
-        <div class="thread-info-shortcuts" aria-label="Разделы чата">
-          <button class="thread-info-shortcut" type="button">
-            <span class="thread-info-shortcut-icon" aria-hidden="true">
-              <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Img_box_fill.svg" alt="">
+        <div class="thread-info-facts">
+          <button class="thread-info-search-action" id="threadInfoSearchAction" type="button">
+            <span class="thread-info-search-icon" aria-hidden="true">
+              <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Search_fill.svg" alt="">
             </span>
-            <span class="thread-info-shortcut-copy">
-              <strong>Медиа</strong>
-              <span id="threadInfoMediaCount">Скоро</span>
+            <span class="thread-info-search-copy">
+              <strong>Поиск по сообщениям</strong>
+              <span>Найти сообщение и перейти к нему</span>
             </span>
-            <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
           </button>
-          <button class="thread-info-shortcut" type="button">
-            <span class="thread-info-shortcut-icon" aria-hidden="true">
-              <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Folder.svg" alt="">
-            </span>
-            <span class="thread-info-shortcut-copy">
-              <strong>Файлы</strong>
-              <span id="threadInfoFilesCount">Скоро</span>
-            </span>
-            <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
-          </button>
-        </div>
-        {% if is_group_chat %}
-          <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
-            <div class="thread-info-invite-card">
-              <button class="thread-info-invite-toggle" id="threadInfoInviteToggle" type="button" aria-expanded="false" aria-controls="threadInfoInvitePanel">
-                <span class="thread-info-invite-toggle-main">
-                  <span class="thread-info-invite-icon-wrap" aria-hidden="true">
-                    <img class="menu-item-icon icon-asset" src="/assets/icons/ui/link.svg" alt="">
+          <div class="thread-info-search-panel" id="threadInfoSearchPanel" hidden>
+            <div class="thread-info-search-panel-row">
+              <input class="search-input thread-info-search-input" id="threadInfoSearchInput" type="search" placeholder="Поиск в сообщениях">
+              <button class="button button-secondary thread-info-search-reset" id="threadInfoSearchReset" type="button">Последние</button>
+            </div>
+            <div class="status thread-info-search-status" id="threadInfoSearchStatus"></div>
+            <div class="thread-info-search-results" id="threadInfoSearchResults"></div>
+          </div>
+          <div class="thread-info-fact">
+            <div class="thread-info-fact-pair">
+              <div class="thread-info-fact-item">
+                <span class="thread-info-label">Дата начала</span>
+                <strong id="threadInfoStartedAt">Пока нет</strong>
+              </div>
+              <div class="thread-info-fact-item">
+                <span class="thread-info-label">Количество сообщений</span>
+                <strong id="threadInfoMessagesCount">0</strong>
+              </div>
+            </div>
+          </div>
+          <div class="thread-info-shortcuts" aria-label="Разделы чата">
+            <button class="thread-info-shortcut" type="button">
+              <span class="thread-info-shortcut-icon" aria-hidden="true">
+                <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Img_box_fill.svg" alt="">
+              </span>
+              <span class="thread-info-shortcut-copy">
+                <strong>Медиа</strong>
+                <span id="threadInfoMediaCount">Скоро</span>
+              </span>
+              <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
+            </button>
+            <button class="thread-info-shortcut" type="button">
+              <span class="thread-info-shortcut-icon" aria-hidden="true">
+                <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Folder.svg" alt="">
+              </span>
+              <span class="thread-info-shortcut-copy">
+                <strong>Файлы</strong>
+                <span id="threadInfoFilesCount">Скоро</span>
+              </span>
+              <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
+            </button>
+          </div>
+          {% if is_group_chat %}
+            <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
+              <div class="thread-info-invite-card">
+                <button class="thread-info-invite-toggle" id="threadInfoInviteToggle" type="button" aria-expanded="false" aria-controls="threadInfoInvitePanel">
+                  <span class="thread-info-invite-toggle-main">
+                    <span class="thread-info-invite-icon-wrap" aria-hidden="true">
+                      <img class="menu-item-icon icon-asset" src="/assets/icons/ui/link.svg" alt="">
+                    </span>
+                    <span class="thread-info-invite-toggle-copy">
+                      <strong>Пригласительная ссылка</strong>
+                      <span id="threadInfoInviteHint">Нажмите, чтобы показать ссылку</span>
+                    </span>
                   </span>
-                  <span class="thread-info-invite-toggle-copy">
-                    <strong>Пригласительная ссылка</strong>
-                    <span id="threadInfoInviteHint">Нажмите, чтобы показать ссылку</span>
-                  </span>
-                </span>
-                <img class="thread-info-invite-chevron icon-asset" src="/assets/icons/ui/Expand_down.svg" alt="">
-              </button>
-              <div class="thread-info-invite-panel" id="threadInfoInvitePanel" aria-hidden="true" hidden>
-                <div class="thread-info-invite-panel-inner">
-                  <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer" title="">
-                    <span class="thread-info-invite-link-text" id="threadInfoInviteLinkText"></span>
-                  </a>
-                  <div class="thread-info-invite-actions">
-                    <button class="thread-info-invite-action-button" id="threadInfoInviteCopy" type="button" aria-label="Скопировать ссылку" title="Скопировать ссылку">
-                      <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Copy.svg" alt="">
-                      <span class="menu-item-label">Скопировать</span>
-                    </button>
-                    <button class="thread-info-invite-action-button" id="threadInfoInviteRegenerate" type="button" aria-label="Обновить ссылку" title="Обновить ссылку">
-                      <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Refresh_2.svg" alt="">
-                      <span class="menu-item-label">Обновить ссылку</span>
-                    </button>
+                  <img class="thread-info-invite-chevron icon-asset" src="/assets/icons/ui/Expand_down.svg" alt="">
+                </button>
+                <div class="thread-info-invite-panel" id="threadInfoInvitePanel" aria-hidden="true" hidden>
+                  <div class="thread-info-invite-panel-inner">
+                    <a class="thread-info-invite-link" id="threadInfoInviteLink" href="#" target="_blank" rel="noopener noreferrer" title="">
+                      <span class="thread-info-invite-link-text" id="threadInfoInviteLinkText"></span>
+                    </a>
+                    <div class="thread-info-invite-actions">
+                      <button class="thread-info-invite-action-button" id="threadInfoInviteCopy" type="button" aria-label="Скопировать ссылку" title="Скопировать ссылку">
+                        <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Copy.svg" alt="">
+                        <span class="menu-item-label">Скопировать</span>
+                      </button>
+                      <button class="thread-info-invite-action-button" id="threadInfoInviteRegenerate" type="button" aria-label="Обновить ссылку" title="Обновить ссылку">
+                        <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Refresh_2.svg" alt="">
+                        <span class="menu-item-label">Обновить ссылку</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
+                <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
               </div>
-              <div class="status thread-info-invite-status" id="threadInfoInviteStatus"></div>
             </div>
-          </div>
-        {% endif %}
+          {% endif %}
+        </div>
       </div>
       <div class="thread-info-members" id="threadInfoMembersWrap" {% if not is_group_chat %}hidden{% endif %}>
         <div class="thread-info-members-header">
@@ -126,6 +128,10 @@
           {% if is_group_chat %}
             <button class="icon-button thread-member-add-trigger" id="threadMemberAddTrigger" type="button" aria-label="Добавить участников" hidden><img class="icon-asset" src="/assets/icons/ui/Add_round.svg" alt=""></button>
           {% endif %}
+        </div>
+        <div class="thread-info-members-search" id="threadInfoMembersSearchWrap" hidden>
+          <input class="search-input thread-info-members-search-input" id="threadInfoMembersSearchInput" type="search" placeholder="Поиск участника">
+          <div class="thread-info-members-summary" id="threadInfoMembersSummary"></div>
         </div>
         <div class="member-list thread-info-members-list" id="threadInfoMembersList"></div>
       </div>

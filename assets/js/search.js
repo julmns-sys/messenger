@@ -288,6 +288,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const form = document.getElementById("searchForm");
   const input = document.getElementById("searchInput");
+  const submitButton = document.getElementById("searchSubmitButton");
   const status = document.getElementById("searchStatus");
   const contactsList = document.getElementById("contactsList");
   const resultList = document.getElementById("resultList");
@@ -295,6 +296,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   const profilePanel = document.getElementById("searchUserInfoProfilePanel");
 
   if (!form || !input) return;
+
+  const updateSearchSubmitVisibility = () => {
+    if (!submitButton) {
+      return;
+    }
+    const hasValue = Boolean(String(input.value || "").trim());
+    submitButton.classList.toggle("is-visible", hasValue);
+    submitButton.setAttribute("aria-hidden", hasValue ? "false" : "true");
+    submitButton.tabIndex = hasValue ? 0 : -1;
+  };
+
+  updateSearchSubmitVisibility();
 
   infoCloseButton?.addEventListener("click", () => {
     closeSearchUserInfo();
@@ -474,6 +487,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   input.addEventListener("input", () => {
+    updateSearchSubmitVisibility();
     if (input.value.trim()) {
       return;
     }
@@ -489,6 +503,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     event.preventDefault();
     const query = input.value.trim().replace(/^@/, "");
     if (!query) {
+      updateSearchSubmitVisibility();
       searchState.results = [];
       searchState.hasSearched = false;
       renderResults(searchState.results);
@@ -505,12 +520,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       searchState.results = Array.isArray(data) ? data : data.items || [];
       searchState.hasSearched = true;
       renderResults(searchState.results);
+      updateSearchSubmitVisibility();
       status.textContent = `${searchState.results.length} найдено`;
       status.className = "status";
     } catch (error) {
       searchState.hasSearched = true;
       searchState.results = [];
       renderResults(searchState.results);
+      updateSearchSubmitVisibility();
       status.textContent = error.message;
       status.className = "status error";
     }

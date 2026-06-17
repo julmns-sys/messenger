@@ -15,6 +15,11 @@
           <p class="muted desktop-only" id="chatSubtitleDesktop">Загрузка...</p>
           <p class="muted" id="chatSubtitle">Загрузка...</p>
         </div>
+        <div class="thread-header-side thread-header-side-actions">
+          <button class="icon-button thread-members-trigger" id="threadMembersTrigger" type="button" aria-label="Открыть участников" hidden>
+            <img class="icon-asset" src="/assets/icons/ui/user.svg" alt="">
+          </button>
+        </div>
       </div>
     </header>
     <div class="content-body">
@@ -35,9 +40,9 @@
           <button type="button" id="cancelWideMode" aria-label="Отключить режим объявления">×</button>
         </div>
         <form class="composer" id="messageForm" novalidate>
-          {% if photo_messages_enabled and global_file_uploads_enabled %}
-            <input id="photoMessageInput" type="file" accept="image/*" multiple hidden>
-            <button class="composer-attach-button" id="photoMessageButton" type="button" aria-label="Прикрепить фотографию" title="Прикрепить фото"><img class="icon-asset" src="/assets/icons/ui/Upload.svg" alt=""></button>
+          {% if global_file_uploads_enabled %}
+            <input id="photoMessageInput" type="file" multiple hidden>
+            <button class="composer-attach-button" id="photoMessageButton" type="button" aria-label="Прикрепить файл" title="Прикрепить файл"><img class="icon-asset" src="/assets/icons/ui/Upload.svg" alt=""></button>
           {% endif %}
           {% if global_stickers_enabled %}
             <button class="composer-sticker-button" id="stickerPickerButton" type="button" aria-label="Открыть стикеры" title="Стикеры">

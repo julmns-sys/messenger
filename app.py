@@ -76,8 +76,17 @@ MESSAGE_IMAGE_EXTENSIONS_BY_MIME = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
+GENERIC_MESSAGE_ATTACHMENT_EXTENSION_BY_MIME = {
+    "application/pdf": ".pdf",
+    "application/zip": ".zip",
+    "application/x-zip-compressed": ".zip",
+    "application/json": ".json",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+}
 MAX_STICKER_FILE_BYTES = 1 * 1024 * 1024
 MAX_MESSAGE_IMAGE_FILE_BYTES = 5 * 1024 * 1024
+MAX_MESSAGE_ATTACHMENT_FILE_BYTES = 20 * 1024 * 1024
 SYSTEM_USERNAME = "chatik"
 SYSTEM_NAME = "Chatik"
 SYSTEM_EMAIL = "chatik@system.local"
@@ -1111,6 +1120,48 @@ def save_message_image_upload(uploaded_file):
     }
 
 
+def save_message_attachment_upload(uploaded_file):
+    if not uploaded_file or not uploaded_file.filename:
+        raise ValueError("Файл вложения не найден")
+
+    mime_type = str(uploaded_file.mimetype or "").split(";", 1)[0].strip().lower() or "application/octet-stream"
+    stream = getattr(uploaded_file, "stream", None)
+    if stream is not None:
+        current_position = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        file_size = int(stream.tell() or 0)
+        stream.seek(current_position)
+    else:
+        file_size = 0
+
+    if file_size <= 0:
+        raise ValueError("Файл вложения пустой")
+    if file_size > MAX_MESSAGE_ATTACHMENT_FILE_BYTES:
+        raise ValueError("Размер файла не должен превышать 20 MB")
+
+    original_name = Path(str(uploaded_file.filename or "file")).name or "file"
+    original_extension = Path(original_name).suffix.lower()
+    extension = (
+        original_extension[:16]
+        if re.fullmatch(r"\.[a-z0-9]{1,15}", original_extension)
+        else GENERIC_MESSAGE_ATTACHMENT_EXTENSION_BY_MIME.get(mime_type, ".bin")
+    )
+    filename = f"{uuid.uuid4().hex}{extension}"
+    destination_path = MESSAGE_IMAGE_UPLOAD_DIR / filename
+    try:
+        uploaded_file.save(destination_path)
+    except OSError as error:
+        print(f"[MESSAGE ATTACHMENT UPLOAD] failed to save {destination_path}: {error}", flush=True)
+        raise RuntimeError("Не удалось сохранить файл") from error
+
+    return {
+        "url": f"/assets/uploads/messages/{filename}",
+        "file_name": original_name[:255],
+        "mime_type": mime_type[:120],
+        "size": file_size
+    }
+
+
 def normalize_pack_visibility(value):
     normalized = str(value or "").strip().lower()
     return "public" if normalized == "public" else "private"
@@ -1781,6 +1832,74 @@ def append_admin_audit_log(conn, actor_user_id, target_user_id, action, reason="
         (str(reason or "").strip() or None),
         json.dumps(details or {}, ensure_ascii=False) if details else None
     ))
+
+
+def append_server_audit_log(conn, server_id, actor_user_id, action, target_user_id=None, details=None):
+    conn.execute("""
+        INSERT INTO server_audit_log (server_id, actor_user_id, target_user_id, action, details_json)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        int(server_id),
+        int(actor_user_id),
+        int(target_user_id) if target_user_id else None,
+        str(action or "").strip()[:120],
+        json.dumps(details or {}, ensure_ascii=False) if details else None
+    ))
+
+
+def can_view_server_audit_log(conn, user_id, server_id):
+    member = get_server_member(conn, server_id, user_id)
+    if not member:
+        return False
+    if can_manage_server(conn, user_id, server_id):
+        return True
+    return server_member_has_permission(conn, server_id, member, "view_audit_log")
+
+
+def get_server_audit_log_entries(conn, server_id, limit=50):
+    rows = conn.execute("""
+        SELECT
+            sal.id,
+            sal.server_id,
+            sal.actor_user_id,
+            sal.target_user_id,
+            sal.action,
+            sal.details_json,
+            sal.created_at,
+            actor.name AS actor_name,
+            actor.username AS actor_username,
+            target.name AS target_name,
+            target.username AS target_username
+        FROM server_audit_log sal
+        JOIN users actor ON actor.id = sal.actor_user_id
+        LEFT JOIN users target ON target.id = sal.target_user_id
+        WHERE sal.server_id = %s
+        ORDER BY sal.created_at DESC, sal.id DESC
+        LIMIT %s
+    """, (server_id, int(limit))).fetchall()
+    items = []
+    for row in rows:
+        details = {}
+        raw_details = row_value(row, "details_json")
+        if raw_details:
+            try:
+                details = json.loads(raw_details)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                details = {}
+        items.append({
+            "id": int(row_value(row, "id") or 0),
+            "server_id": int(row_value(row, "server_id") or 0),
+            "actor_user_id": int(row_value(row, "actor_user_id") or 0),
+            "actor_name": row_value(row, "actor_name") or row_value(row, "actor_username") or "Пользователь",
+            "actor_username": row_value(row, "actor_username") or "",
+            "target_user_id": int(row_value(row, "target_user_id") or 0) or None,
+            "target_name": row_value(row, "target_name") or row_value(row, "target_username") or "",
+            "target_username": row_value(row, "target_username") or "",
+            "action": row_value(row, "action") or "",
+            "details": details if isinstance(details, dict) else {},
+            "created_at": format_timestamp(row_value(row, "created_at")),
+        })
+    return items
 
 
 def serialize_admin_user(user):
@@ -2708,6 +2827,46 @@ def get_server_channel_member_permissions(server_channel, server_member):
     }
 
 
+def get_server_channel_effective_message_permissions(conn, server_channel, server_member):
+    if not server_channel or not server_member:
+        return {
+            "send_messages": False,
+            "send_announcements": False,
+            "send_files": False,
+            "send_links": False,
+            "manage_messages": False,
+            "delete_messages": False,
+            "mention_everyone": False,
+            "manage_channel": False,
+        }
+
+    if can_bypass_server_channel_restrictions(server_member):
+        return {
+            "send_messages": True,
+            "send_announcements": True,
+            "send_files": True,
+            "send_links": True,
+            "manage_messages": True,
+            "delete_messages": True,
+            "mention_everyone": True,
+            "manage_channel": True,
+        }
+
+    role_key = get_server_member_role_key(server_member)
+    role_permissions = get_server_role_permissions_map(conn, int(row_value(server_channel, "server_id") or 0)).get(role_key, {})
+    channel_permissions = get_server_channel_member_permissions(server_channel, server_member)
+    return {
+        "send_messages": bool(channel_permissions.get("send_messages")) and bool(role_permissions.get("send_messages", True)),
+        "send_announcements": bool(channel_permissions.get("send_announcements")) and bool(role_permissions.get("send_messages", True)),
+        "send_files": bool(channel_permissions.get("send_files")) and bool(role_permissions.get("attach_files", True)),
+        "send_links": bool(channel_permissions.get("send_links")) and bool(role_permissions.get("embed_links", True)),
+        "manage_messages": bool(channel_permissions.get("manage_messages")) or bool(role_permissions.get("manage_messages")),
+        "delete_messages": bool(role_permissions.get("delete_messages")) or bool(channel_permissions.get("manage_messages")) or bool(role_permissions.get("manage_messages")),
+        "mention_everyone": bool(role_permissions.get("mention_everyone")),
+        "manage_channel": bool(channel_permissions.get("manage_channel")) or bool(role_permissions.get("manage_channels")),
+    }
+
+
 def can_send_messages_in_server_channel(conn, group_id, user_id):
     server_channel = get_server_channel_record(conn, group_id)
     if not server_channel:
@@ -2717,6 +2876,7 @@ def can_send_messages_in_server_channel(conn, group_id, user_id):
         return False
     if can_bypass_server_channel_restrictions(server_member):
         return True
+    effective_permissions = get_server_channel_effective_message_permissions(conn, server_channel, server_member)
 
     channel_type = str(row_value(server_channel, "channel_type") or "text").strip().lower()
     access = parse_json_object(row_value(server_channel, "access_json"), build_default_channel_access(channel_type))
@@ -2725,7 +2885,7 @@ def can_send_messages_in_server_channel(conn, group_id, user_id):
 
     if restrictions.get("read_only"):
         return False
-    return is_allowed_by_server_channel_scope(access.get("write"), server_member, selected_role_ids)
+    return bool(effective_permissions.get("send_messages")) and is_allowed_by_server_channel_scope(access.get("write"), server_member, selected_role_ids)
 
 
 def ensure_server_channel_message_allowed(conn, group_id, user_id, text="", includes_files=False, editing=False, message_type="text"):
@@ -2745,7 +2905,7 @@ def ensure_server_channel_message_allowed(conn, group_id, user_id, text="", incl
         str(row_value(server_channel, "channel_type") or "text").strip().lower()
     ))
     selected_role_ids = access.get("selected_role_ids") if isinstance(access.get("selected_role_ids"), list) else []
-    permissions = get_server_channel_member_permissions(server_channel, server_member)
+    permissions = get_server_channel_effective_message_permissions(conn, server_channel, server_member)
     normalized_message_type = str(message_type or "text").strip().lower() or "text"
     normalized_text = str(text or "")
     has_links = bool(MESSAGE_URL_PATTERN.search(normalized_text))
@@ -2757,19 +2917,27 @@ def ensure_server_channel_message_allowed(conn, group_id, user_id, text="", incl
     else:
         if restrictions.get("read_only") and not editing:
             raise PermissionError("Канал работает в режиме только чтения")
+        if not permissions.get("send_messages"):
+            raise PermissionError("У вас нет права писать в этот канал")
         if not is_allowed_by_server_channel_scope(access.get("write"), server_member, selected_role_ids):
             raise PermissionError("У вас нет права писать в этот канал")
     if includes_files:
+        if not permissions.get("send_files"):
+            raise PermissionError("У вас нет права отправлять файлы в этот канал")
         if restrictions.get("block_files"):
             raise PermissionError("Отправка файлов в этом канале запрещена")
         if not is_allowed_by_server_channel_scope(access.get("files"), server_member, selected_role_ids):
             raise PermissionError("У вас нет права отправлять файлы в этот канал")
     if has_links:
+        if not permissions.get("send_links"):
+            raise PermissionError("У вас нет права отправлять ссылки в этот канал")
         if restrictions.get("block_links"):
             raise PermissionError("Ссылки в этом канале запрещены")
         if not is_allowed_by_server_channel_scope(access.get("links"), server_member, selected_role_ids):
             raise PermissionError("У вас нет права отправлять ссылки в этот канал")
     if has_everyone:
+        if not permissions.get("mention_everyone"):
+            raise PermissionError("У вас нет права упоминать @everyone в этом канале")
         if restrictions.get("block_everyone_mentions"):
             raise PermissionError("Упоминание @everyone в этом канале запрещено")
         if not is_allowed_by_server_channel_scope(access.get("everyone_mentions"), server_member, selected_role_ids):
@@ -2791,6 +2959,21 @@ def ensure_server_channel_message_allowed(conn, group_id, user_id, text="", incl
                 raise PermissionError("Слишком быстро. Подождите перед следующей отправкой сообщения")
 
 
+def can_delete_group_message_for_all(conn, group_id, actor_user_id, message_row):
+    if not message_row:
+        return False
+    if int(row_value(message_row, "sender_id") or 0) == int(actor_user_id or 0):
+        return True
+    server_channel = get_server_channel_record(conn, group_id)
+    if not server_channel:
+        return False
+    server_member = get_server_member(conn, int(row_value(server_channel, "server_id") or 0), actor_user_id)
+    if not server_member:
+        return False
+    permissions = get_server_channel_effective_message_permissions(conn, server_channel, server_member)
+    return bool(permissions.get("manage_messages") or permissions.get("delete_messages"))
+
+
 def can_access_server(conn, user_id, server_id):
     return get_server_member(conn, server_id, user_id) is not None
 
@@ -2810,6 +2993,84 @@ def can_manage_server(conn, user_id, server_id):
         return True
     member = get_server_member(conn, server_id, user_id)
     return bool(member and member["is_admin"])
+
+
+def server_member_has_permission(conn, server_id, server_member, permission_key):
+    if not server_member:
+        return False
+    role_key = get_server_member_role_key(server_member)
+    if role_key == "owner" or bool(row_value(server_member, "is_admin")):
+        return True
+    permissions = get_server_role_permissions_map(conn, server_id).get(role_key, {})
+    if permissions.get("administrator"):
+        return True
+    return bool(permissions.get(permission_key))
+
+
+def get_server_assignable_role_names(conn, server_id, actor_user_id):
+    server = conn.execute("""
+        SELECT owner_id
+        FROM servers
+        WHERE id = %s
+        LIMIT 1
+    """, (server_id,)).fetchone()
+    if not server:
+        return []
+    if int(row_value(server, "owner_id") or 0) == int(actor_user_id or 0):
+        return [
+            str(role.get("name") or "").strip()
+            for role in get_server_roles(conn, server_id)
+            if str(role.get("name") or "").strip().lower() != "owner"
+        ]
+    actor_member = get_server_member(conn, server_id, actor_user_id)
+    if not actor_member or not server_member_has_permission(conn, server_id, actor_member, "manage_roles"):
+        return []
+    return [
+        str(role.get("name") or "").strip()
+        for role in get_server_roles(conn, server_id)
+        if str(role.get("name") or "").strip().lower() not in {"owner", "admin"}
+    ]
+
+
+def can_manage_server_member_action(conn, actor_user_id, server_id, target_user_id, permission_key=None, next_role_key=None):
+    server = conn.execute("""
+        SELECT owner_id
+        FROM servers
+        WHERE id = %s
+        LIMIT 1
+    """, (server_id,)).fetchone()
+    if not server:
+        return False
+    owner_id = int(row_value(server, "owner_id") or 0)
+    actor_id = int(actor_user_id or 0)
+    target_id = int(target_user_id or 0)
+    if not actor_id or not target_id or actor_id == target_id:
+        return False
+
+    actor_member = get_server_member(conn, server_id, actor_id)
+    target_member = get_server_member(conn, server_id, target_id)
+    if not actor_member or not target_member:
+        return False
+
+    if target_id == owner_id:
+        return False
+
+    if actor_id == owner_id:
+        if next_role_key == "owner":
+            return False
+        return True
+
+    if permission_key and not server_member_has_permission(conn, server_id, actor_member, permission_key):
+        return False
+
+    target_role_key = get_server_member_role_key(target_member)
+    if bool(row_value(target_member, "is_admin")) or target_role_key in {"owner", "admin"}:
+        return False
+
+    if next_role_key in {"owner", "admin"}:
+        return False
+
+    return True
 
 
 def normalize_boolean_flag(value, default=False):
@@ -2946,7 +3207,7 @@ def serialize_server_role_row(role_row):
     }
 
 
-SERVER_CHANNEL_TYPES = {"text", "voice", "announcements", "private"}
+SERVER_CHANNEL_TYPES = {"text", "announcements", "private"}
 SERVER_CHANNEL_ROLE_PERMISSION_KEYS = (
     "view_channel",
     "read_messages",
@@ -3237,6 +3498,125 @@ def get_server_online_count(conn, server_id):
         WHERE server_id = %s
     """, (server_id,)).fetchall()
     return sum(1 for row in member_rows if is_user_online(row["user_id"]))
+
+
+def remove_server_member_from_server(conn, server_id, user_id):
+    channel_rows = conn.execute("""
+        SELECT group_id
+        FROM server_channels
+        WHERE server_id = %s
+    """, (server_id,)).fetchall()
+    group_ids = [int(row["group_id"]) for row in channel_rows if row and row["group_id"]]
+
+    if group_ids:
+        conn.executemany("""
+            DELETE FROM group_members
+            WHERE group_id = %s AND user_id = %s
+        """, [(group_id, user_id) for group_id in group_ids])
+        conn.executemany("""
+            DELETE FROM group_read_states
+            WHERE group_id = %s AND user_id = %s
+        """, [(group_id, user_id) for group_id in group_ids])
+
+    conn.execute("""
+        DELETE FROM server_members
+        WHERE server_id = %s AND user_id = %s
+    """, (server_id, user_id))
+
+
+def get_server_members_for_settings(conn, server_id, viewer_user_id=None):
+    server = conn.execute("""
+        SELECT id, owner_id
+        FROM servers
+        WHERE id = %s
+        LIMIT 1
+    """, (server_id,)).fetchone()
+    if not server:
+        return []
+
+    member_rows = conn.execute("""
+        SELECT
+            u.id,
+            u.name,
+            u.username,
+            u.bio,
+            sm.is_admin,
+            sm.role
+        FROM server_members sm
+        JOIN users u ON u.id = sm.user_id
+        WHERE sm.server_id = %s
+        ORDER BY
+            CASE
+                WHEN u.id = %s THEN 0
+                WHEN sm.is_admin = 1 OR LOWER(COALESCE(sm.role, '')) = 'admin' THEN 1
+                ELSE 2
+            END,
+            COALESCE(u.name, u.username),
+            u.username
+    """, (server_id, server["owner_id"])).fetchall()
+
+    viewer_id = int(viewer_user_id or 0)
+    assignable_role_names = get_server_assignable_role_names(conn, server_id, viewer_id) if viewer_id else []
+    roles_by_key = {
+        str(role_name).strip().lower(): str(role_name).strip()
+        for role_name in assignable_role_names
+        if str(role_name).strip()
+    }
+    members = []
+    for member in member_rows:
+        role_key = get_server_member_role_key(member)
+        member_user_id = int(row_value(member, "id") or 0)
+        can_kick_member = bool(viewer_id) and can_manage_server_member_action(
+            conn,
+            viewer_id,
+            server_id,
+            member_user_id,
+            permission_key="kick_members",
+        )
+        can_ban_member = bool(viewer_id) and can_manage_server_member_action(
+            conn,
+            viewer_id,
+            server_id,
+            member_user_id,
+            permission_key="ban_members",
+        )
+        assignable_roles = [
+            roles_by_key[role_name]
+            for role_name in roles_by_key
+            if can_manage_server_member_action(
+                conn,
+                viewer_id,
+                server_id,
+                member_user_id,
+                permission_key="manage_roles",
+                next_role_key=role_name,
+            )
+        ]
+        can_manage_member = can_kick_member or can_ban_member or bool(assignable_roles)
+        members.append({
+            **serialize_public_user(member),
+            "is_admin": bool(row_value(member, "is_admin")),
+            "is_owner": member_user_id == int(row_value(server, "owner_id") or 0),
+            "server_role": role_key,
+            "can_manage": can_manage_member,
+            "can_kick": can_kick_member,
+            "can_ban": can_ban_member,
+            "assignable_roles": assignable_roles,
+        })
+    return members
+
+
+def get_server_members_directory(conn, server_id):
+    return [
+        {
+            **member,
+            "can_manage": False,
+            "can_kick": False,
+            "can_ban": False,
+            "assignable_roles": [],
+        }
+        for member in get_server_members_for_settings(conn, server_id, None)
+    ]
 
 
 def serialize_server_invite_row(invite_row, server_row=None, viewer_member=None):
@@ -3605,6 +3985,12 @@ def create_server_channel_group(conn, server_id, category_id, creator_user_id, t
         next_position,
         creator_user_id,
     ))
+    append_server_audit_log(conn, server_id, creator_user_id, "create_channel", details={
+        "category_id": category_id,
+        "group_id": group_id,
+        "title": normalized_payload["title"],
+        "type": normalized_payload["type"],
+    })
     return group_id
 
 
@@ -3776,6 +4162,9 @@ def build_server_response(conn, server_id, viewer_user_id):
         })
 
     can_invite_members = can_create_server_invites(conn, viewer_user_id, server_id)
+    can_manage_current_server = can_manage_server(conn, viewer_user_id, server_id)
+    can_view_audit_current_server = can_view_server_audit_log(conn, viewer_user_id, server_id)
+    roles = get_server_roles(conn, server_id)
 
     return {
         "id": server["id"],
@@ -3786,13 +4175,17 @@ def build_server_response(conn, server_id, viewer_user_id):
         "invite_code": row_value(server, "invite_code"),
         "allow_member_invites": bool(row_value(server, "allow_member_invites")),
         "is_owner": int(server["owner_id"]) == int(viewer_user_id),
-        "can_manage_server": can_manage_server(conn, viewer_user_id, server_id),
+        "can_manage_server": can_manage_current_server,
+        "can_view_audit_log": can_view_audit_current_server,
         "default_channel_id": default_channel_id,
         "unread_count": total_unread,
         "updated_at": format_timestamp(latest_updated_at),
         "last_message": latest_preview,
         "can_invite_members": can_invite_members,
-        "roles": get_server_roles(conn, server_id),
+        "roles": roles,
+        "member_directory": get_server_members_directory(conn, server_id),
+        "members": get_server_members_for_settings(conn, server_id, viewer_user_id) if can_manage_current_server else [],
+        "audit_log": get_server_audit_log_entries(conn, server_id) if can_view_audit_current_server else [],
         "active_invites": [
             serialize_server_invite_row(
                 invite_row,
@@ -3919,7 +4312,7 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
     server_channel = get_server_channel_record(conn, group_id)
     if server_channel:
         server_member = get_server_member(conn, server_channel["server_id"], viewer_user_id)
-        channel_permissions = get_server_channel_member_permissions(server_channel, server_member) if server_member else {}
+        channel_permissions = get_server_channel_effective_message_permissions(conn, server_channel, server_member) if server_member else {}
         payload["server"] = {
             "id": server_channel["server_id"],
             "title": server_channel["server_title"],
@@ -3931,6 +4324,9 @@ def build_group_response(conn, group_id, viewer_user_id, include_messages=False,
         payload["current_user_permissions"] = {
             "send_messages": bool(payload["can_send_messages"]),
             "send_announcements": bool(channel_permissions.get("send_announcements")),
+            "send_files": bool(channel_permissions.get("send_files")),
+            "send_links": bool(channel_permissions.get("send_links")),
+            "delete_messages": bool(channel_permissions.get("delete_messages")),
             "manage_messages": bool(channel_permissions.get("manage_messages")),
             "manage_channel": bool(channel_permissions.get("manage_channel")),
         }
@@ -4361,6 +4757,7 @@ def parse_message_create_payload():
         badge = str(request.form.get("badge", "") or "").strip()
         reply_to_id = request.form.get("reply_to_id")
         images = request.files.getlist("images[]") or request.files.getlist("images")
+        files = request.files.getlist("files[]") or request.files.getlist("files")
         return {
             "text": text,
             "type": message_type,
@@ -4368,6 +4765,7 @@ def parse_message_create_payload():
             "badge": badge,
             "reply_to_id": reply_to_id,
             "images": [image for image in images if image and image.filename],
+            "files": [file for file in files if file and file.filename],
             "is_multipart": True
         }
 
@@ -4379,6 +4777,7 @@ def parse_message_create_payload():
         "badge": str(data.get("badge", "") or "").strip(),
         "reply_to_id": data.get("reply_to_id"),
         "images": [],
+        "files": [],
         "is_multipart": False
     }
 
@@ -5629,6 +6028,18 @@ def invite_page(token):
 
     conn.close()
     return send_from_directory(".", "invite.html")
+
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    prefers_html = (
+        request.method == "GET"
+        and request.accept_mimetypes.best_match(["text/html", "application/json"]) == "text/html"
+        and request.accept_mimetypes["text/html"] >= request.accept_mimetypes["application/json"]
+    )
+    if prefers_html:
+        return render_template("404.html"), 404
+    return jsonify({"message": "Страница не найдена"}), 404
 
 
 @app.get("/server-invite/<code>")
@@ -7946,10 +8357,48 @@ def update_server(server_id):
             1 if next_allow_member_invites else 0,
             server_id,
         ))
+        append_server_audit_log(conn, server_id, user_id, "update_server_profile", details={
+            "title": next_title,
+            "description": next_description or "",
+            "allow_member_invites": bool(next_allow_member_invites),
+        })
         conn.commit()
 
         payload = build_server_response(conn, server_id, user_id)
         return jsonify({"server": payload})
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.delete("/servers/<int:server_id>/audit-log")
+def clear_server_audit_log(server_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        server = conn.execute("""
+            SELECT owner_id
+            FROM servers
+            WHERE id = %s
+            LIMIT 1
+        """, (server_id,)).fetchone()
+        if not server:
+            return jsonify({"message": "Сервер не найден"}), 404
+        if int(row_value(server, "owner_id") or 0) != int(user_id):
+            return jsonify({"message": "Только создатель сервера может очистить журнал аудита"}), 403
+
+        conn.execute("""
+            DELETE FROM server_audit_log
+            WHERE server_id = %s
+        """, (server_id,))
+        append_server_audit_log(conn, server_id, user_id, "clear_audit_log")
+        conn.commit()
+        return jsonify({"ok": True, "server_id": server_id})
     except Exception:
         conn.rollback()
         raise
@@ -8081,6 +8530,12 @@ def create_server_invite_endpoint(server_id):
             "one_time": bool(data.get("one_time")),
             "require_approval": False,
         })
+        append_server_audit_log(conn, server_id, user_id, "create_invite", details={
+            "code": row_value(invite, "code"),
+            "max_uses": max_uses_map[max_uses_raw],
+            "one_time": bool(data.get("one_time")),
+            "expires_at": format_timestamp(row_value(invite, "expires_at")),
+        })
         conn.commit()
         server_summary = get_server_summary_for_invites(conn, server_id)
         viewer_member = get_server_member(conn, server_id, user_id)
@@ -8121,9 +8576,12 @@ def revoke_server_invite(server_id, code):
         """, (server_id, code))
         conn.execute("""
             UPDATE servers
-            SET invite_code = NULL
-            WHERE id = %s AND invite_code = %s
-        """, (server_id, code))
+            SET invite_code = CASE WHEN invite_code = %s THEN NULL ELSE invite_code END
+            WHERE id = %s
+        """, (code, server_id))
+        append_server_audit_log(conn, server_id, user_id, "revoke_invite", details={
+            "code": code,
+        })
         conn.commit()
         return jsonify({"ok": True, "code": code})
     except Exception:
@@ -8157,27 +8615,7 @@ def leave_server(server_id):
         if int(server["owner_id"]) == int(user_id):
             return jsonify({"message": "Владелец сервера пока не может выйти без передачи владения или удаления сервера"}), 409
 
-        channel_rows = conn.execute("""
-            SELECT group_id
-            FROM server_channels
-            WHERE server_id = %s
-        """, (server_id,)).fetchall()
-        group_ids = [int(row["group_id"]) for row in channel_rows if row and row["group_id"]]
-
-        if group_ids:
-            conn.executemany("""
-                DELETE FROM group_members
-                WHERE group_id = %s AND user_id = %s
-            """, [(group_id, user_id) for group_id in group_ids])
-            conn.executemany("""
-                DELETE FROM group_read_states
-                WHERE group_id = %s AND user_id = %s
-            """, [(group_id, user_id) for group_id in group_ids])
-
-        conn.execute("""
-            DELETE FROM server_members
-            WHERE server_id = %s AND user_id = %s
-        """, (server_id, user_id))
+        remove_server_member_from_server(conn, server_id, user_id)
         conn.commit()
 
         remaining_member_ids = get_server_member_ids(conn, server_id)
@@ -8188,6 +8626,144 @@ def leave_server(server_id):
             "ok": True,
             "server_id": server_id,
             "user_id": user_id
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.delete("/servers/<int:server_id>/members/<int:target_user_id>")
+def remove_server_member(server_id, target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server_member_action(conn, user_id, server_id, target_user_id, permission_key="kick_members"):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        target_member = get_server_member(conn, server_id, target_user_id)
+        if not target_member:
+            return jsonify({"message": "Участник не найден"}), 404
+
+        remove_server_member_from_server(conn, server_id, target_user_id)
+        append_server_audit_log(conn, server_id, user_id, "remove_member", target_user_id=target_user_id)
+        conn.commit()
+
+        remaining_member_ids = get_server_member_ids(conn, server_id)
+        emit_chat_list_updated_for_users([target_user_id], "server", server_id)
+        emit_server_structure_updated_for_users([*remaining_member_ids, target_user_id], server_id)
+
+        return jsonify({
+            "ok": True,
+            "server_id": server_id,
+            "user_id": int(target_user_id),
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.post("/servers/<int:server_id>/members/<int:target_user_id>/ban")
+def ban_server_member(server_id, target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        if not can_manage_server_member_action(conn, user_id, server_id, target_user_id, permission_key="ban_members"):
+            return jsonify({"message": "Недостаточно прав"}), 403
+        target_member = get_server_member(conn, server_id, target_user_id)
+        if not target_member:
+            return jsonify({"message": "Участник не найден"}), 404
+
+        conn.execute("""
+            INSERT IGNORE INTO server_banned_users (server_id, user_id, created_by)
+            VALUES (%s, %s, %s)
+        """, (server_id, target_user_id, user_id))
+        remove_server_member_from_server(conn, server_id, target_user_id)
+        append_server_audit_log(conn, server_id, user_id, "ban_member", target_user_id=target_user_id)
+        conn.commit()
+
+        remaining_member_ids = get_server_member_ids(conn, server_id)
+        emit_chat_list_updated_for_users([target_user_id], "server", server_id)
+        emit_server_structure_updated_for_users([*remaining_member_ids, target_user_id], server_id)
+
+        return jsonify({
+            "ok": True,
+            "server_id": server_id,
+            "user_id": int(target_user_id),
+            "banned": True,
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.patch("/servers/<int:server_id>/members/<int:target_user_id>")
+def update_server_member(server_id, target_user_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"message": "Не авторизован"}), 401
+
+    conn = get_db()
+    try:
+        data = request.json or {}
+        next_role_name = str(data.get("role") or "").strip()
+        next_role_key = next_role_name.lower()
+        if not next_role_name:
+            return jsonify({"message": "Роль обязательна"}), 400
+        if not can_manage_server_member_action(
+            conn,
+            user_id,
+            server_id,
+            target_user_id,
+            permission_key="manage_roles",
+            next_role_key=next_role_key,
+        ):
+            return jsonify({"message": "Недостаточно прав"}), 403
+
+        target_member = get_server_member(conn, server_id, target_user_id)
+        if not target_member:
+            return jsonify({"message": "Участник не найден"}), 404
+
+        available_roles = {
+            str(role.get("name") or "").strip().lower(): str(role.get("name") or "").strip()
+            for role in get_server_roles(conn, server_id)
+            if str(role.get("name") or "").strip()
+        }
+        if next_role_key not in available_roles:
+            return jsonify({"message": "Роль не найдена"}), 404
+
+        conn.execute("""
+            UPDATE server_members
+            SET role = %s,
+                is_admin = %s
+            WHERE server_id = %s AND user_id = %s
+        """, (
+            available_roles[next_role_key],
+            1 if next_role_key == "admin" else 0,
+            server_id,
+            target_user_id,
+        ))
+        append_server_audit_log(conn, server_id, user_id, "assign_role", target_user_id=target_user_id, details={
+            "role": available_roles[next_role_key],
+        })
+        conn.commit()
+
+        emit_server_structure_updated(conn, server_id)
+        return jsonify({
+            "ok": True,
+            "server_id": server_id,
+            "user_id": int(target_user_id),
+            "role": available_roles[next_role_key],
         })
     except Exception:
         conn.rollback()
@@ -8243,6 +8819,10 @@ def create_server_role(server_id):
             user_id,
         ))
         role_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
+        append_server_audit_log(conn, server_id, user_id, "create_role", details={
+            "name": name,
+            "color": color,
+        })
         conn.commit()
         role_row = conn.execute("""
             SELECT id, server_id, name, color, position, is_system, permissions_json, created_by, created_at
@@ -8319,6 +8899,12 @@ def update_server_role(server_id, role_id):
                 permissions_json = %s
             WHERE id = %s AND server_id = %s
         """, (next_name, next_color, next_position, permissions_json, role_id, server_id))
+        append_server_audit_log(conn, server_id, user_id, "update_role", details={
+            "role_id": role_id,
+            "name": next_name,
+            "color": next_color,
+            "position": next_position,
+        })
         conn.commit()
         updated_row = conn.execute("""
             SELECT id, server_id, name, color, position, is_system, permissions_json, created_by, created_at
@@ -8358,6 +8944,10 @@ def delete_server_role(server_id, role_id):
             DELETE FROM server_roles
             WHERE id = %s AND server_id = %s
         """, (role_id, server_id))
+        append_server_audit_log(conn, server_id, user_id, "delete_role", details={
+            "role_id": role_id,
+            "name": row_value(role_row, "name") or "",
+        })
         conn.commit()
         return jsonify({"ok": True, "role_id": role_id})
     except Exception:
@@ -8428,6 +9018,10 @@ def create_server_category(server_id):
             VALUES (%s, %s, %s, %s, %s)
         """, (server_id, title, title, next_position, user_id))
         category_id = conn.execute("SELECT LAST_INSERT_ID() AS id").fetchone()["id"]
+        append_server_audit_log(conn, server_id, user_id, "create_category", details={
+            "category_id": category_id,
+            "title": title,
+        })
         conn.commit()
         emit_server_structure_updated(conn, server_id)
         return jsonify({
@@ -8520,6 +9114,10 @@ def update_server_category(server_id, category_id):
             SET title = %s, name = %s
             WHERE id = %s AND server_id = %s
         """, (title, title, category_id, server_id))
+        append_server_audit_log(conn, server_id, user_id, "update_category", details={
+            "category_id": category_id,
+            "title": title,
+        })
         conn.commit()
         emit_server_structure_updated(conn, server_id)
         return jsonify({
@@ -8559,6 +9157,10 @@ def delete_server_category(server_id, category_id):
             DELETE FROM server_categories
             WHERE id = %s AND server_id = %s
         """, (category_id, server_id))
+        append_server_audit_log(conn, server_id, user_id, "delete_category", details={
+            "category_id": category_id,
+            "deleted_channel_ids": [int(row["group_id"]) for row in channel_rows],
+        })
         conn.commit()
         emit_server_structure_updated(conn, server_id)
         emit_chat_list_updated_for_users(get_server_member_ids(conn, server_id), "server", server_id)
@@ -8623,6 +9225,11 @@ def update_server_channel(server_id, group_id):
             SET title = %s, description = %s
             WHERE id = %s
         """, (payload["title"], payload["description"], group_id))
+        append_server_audit_log(conn, server_id, user_id, "update_channel", details={
+            "group_id": group_id,
+            "title": payload["title"],
+            "type": payload["type"],
+        })
         conn.commit()
         emit_group_updated(group_id)
         emit_server_structure_updated(conn, server_id)
@@ -8654,6 +9261,10 @@ def delete_server_channel(server_id, group_id):
         if not channel:
             return jsonify({"message": "Канал не найден"}), 404
         delete_group_with_dependencies(conn, group_id)
+        append_server_audit_log(conn, server_id, user_id, "delete_channel", details={
+            "group_id": group_id,
+            "title": row_value(channel, "title") or "",
+        })
         conn.commit()
         emit_server_structure_updated(conn, server_id)
         emit_chat_list_updated_for_users(get_server_member_ids(conn, server_id), "server", server_id)
@@ -8933,16 +9544,16 @@ def create_chat_message(chat_id):
     text = payload["text"]
     reply_to_id = payload["reply_to_id"]
     images = payload["images"]
+    files = payload.get("files") or []
 
-    if not text and not images:
-        return jsonify({"message": "Текст сообщения или фотография обязательны"}), 400
+    if not text and not images and not files:
+        return jsonify({"message": "Текст сообщения или файл обязательны"}), 400
 
     attachments = []
-    if images:
+    if images or files:
         try:
             current_user = getattr(g, "current_user", None) or {}
             ensure_global_file_uploads_enabled()
-            ensure_photo_messages_enabled()
             require_permission_to_upload_files(current_user)
         except PermissionError as error:
             return jsonify({"message": str(error)}), 403
@@ -8967,16 +9578,17 @@ def create_chat_message(chat_id):
         if not reply_to_message:
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
-    if images:
+    if images or files:
         try:
             attachments = [save_message_image_upload(image) for image in images]
+            attachments.extend(save_message_attachment_upload(file) for file in files)
         except ValueError as error:
             conn.close()
             return jsonify({"message": str(error)}), 400
         except RuntimeError as error:
             conn.close()
             return jsonify({"message": str(error)}), 500
-    if text and not images and reply_to_id is None and is_duplicate_recent_direct_invite(conn, chat_id, user_id, text):
+    if text and not images and not files and reply_to_id is None and is_duplicate_recent_direct_invite(conn, chat_id, user_id, text):
         conn.close()
         return jsonify({"message": "Эта ссылка уже была отправлена последним сообщением"}), 409
     conn.execute("DELETE FROM hidden_direct_chats WHERE chat_id = %s", (chat_id,))
@@ -9482,9 +10094,9 @@ def delete_chat_message(chat_id, message_id):
         return jsonify({"message": "Сообщение не найдено"}), 404
 
     if scope == "all":
-        if message["sender_id"] != user_id:
+        if not can_delete_group_message_for_all(conn, group_id, user_id, message):
             conn.close()
-            return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
+            return jsonify({"message": "У вас нет права удалять это сообщение у всех"}), 403
 
         voice_url = message.get("audio_url")
         image_url = message.get("image_url")
@@ -9548,10 +10160,10 @@ def bulk_delete_chat_messages(chat_id):
         return jsonify({"message": "Некоторые сообщения не найдены"}), 404
 
     if scope == "all":
-        foreign_ids = [row["id"] for row in message_rows if row["sender_id"] != user_id]
+        foreign_ids = [row["id"] for row in message_rows if not can_delete_group_message_for_all(conn, group_id, user_id, row)]
         if foreign_ids:
             conn.close()
-            return jsonify({"message": "Удалить у всех можно только свои сообщения"}), 403
+            return jsonify({"message": "У вас нет права удалять некоторые сообщения у всех"}), 403
 
         voice_urls = [row["audio_url"] for row in message_rows]
         image_urls = [row["image_url"] for row in message_rows]
@@ -9859,6 +10471,15 @@ def join_server_by_invite(code):
                 "redirect_url": redirect_url,
                 "invite": serialized_invite,
             })
+
+        ban_row = conn.execute("""
+            SELECT 1
+            FROM server_banned_users
+            WHERE server_id = %s AND user_id = %s
+            LIMIT 1
+        """, (server_id, user_id)).fetchone()
+        if ban_row:
+            return jsonify({"message": "Вы заблокированы на этом сервере"}), 403
 
         if bool(invite["only_friends"]):
             is_friend = conn.execute("""
@@ -10601,18 +11222,18 @@ def create_group_message(group_id):
     badge = str(payload.get("badge") or "").strip()[:64] or None
     reply_to_id = payload["reply_to_id"]
     images = payload["images"]
+    files = payload.get("files") or []
 
-    if not text and not images:
+    if not text and not images and not files:
         conn.close()
-        return jsonify({"message": "Текст сообщения или фотография обязательны"}), 400
-    if message_type == "wide" and images:
+        return jsonify({"message": "Текст сообщения или файл обязательны"}), 400
+    if message_type == "wide" and (images or files):
         conn.close()
         return jsonify({"message": "Широкие сообщения пока не поддерживают вложения"}), 400
-    if images:
+    if images or files:
         try:
             current_user = getattr(g, "current_user", None) or {}
             ensure_global_file_uploads_enabled()
-            ensure_photo_messages_enabled()
             require_permission_to_upload_files(current_user)
         except PermissionError as error:
             conn.close()
@@ -10625,9 +11246,10 @@ def create_group_message(group_id):
             conn.close()
             return jsonify({"message": "Сообщение для ответа не найдено"}), 404
     attachments = []
-    if images:
+    if images or files:
         try:
             attachments = [save_message_image_upload(image) for image in images]
+            attachments.extend(save_message_attachment_upload(file) for file in files)
         except ValueError as error:
             conn.close()
             return jsonify({"message": str(error)}), 400
@@ -10640,14 +11262,14 @@ def create_group_message(group_id):
             group_id,
             user_id,
             text=text,
-            includes_files=bool(images),
+            includes_files=bool(images or files),
             editing=False,
             message_type=message_type
         )
     except PermissionError as error:
         conn.close()
         return jsonify({"message": str(error)}), 403
-    if message_type == "text" and text and not images and reply_to_id is None and is_duplicate_recent_group_invite(conn, group_id, user_id, text):
+    if message_type == "text" and text and not images and not files and reply_to_id is None and is_duplicate_recent_group_invite(conn, group_id, user_id, text):
         conn.close()
         return jsonify({"message": "Эта ссылка уже была отправлена последним сообщением"}), 409
 

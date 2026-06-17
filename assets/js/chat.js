@@ -250,6 +250,24 @@ function normalizeMessageAttachment(attachment = {}) {
   };
 }
 
+function isImageAttachment(attachment = {}) {
+  return String(attachment?.mime_type || "").toLowerCase().startsWith("image/");
+}
+
+function formatAttachmentSize(size = 0) {
+  const normalizedSize = Number(size || 0);
+  if (!Number.isFinite(normalizedSize) || normalizedSize <= 0) {
+    return "";
+  }
+  if (normalizedSize >= 1024 * 1024) {
+    return `${(normalizedSize / (1024 * 1024)).toFixed(normalizedSize >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  }
+  if (normalizedSize >= 1024) {
+    return `${Math.round(normalizedSize / 1024)} KB`;
+  }
+  return `${normalizedSize} B`;
+}
+
 function getMessageAttachments(message = {}) {
   const rawAttachments = Array.isArray(message?.attachments) ? message.attachments : [];
   const attachments = rawAttachments
@@ -276,20 +294,43 @@ function renderMessageAttachments(attachments = []) {
     return "";
   }
 
+  const imageAttachments = attachments.filter((attachment) => isImageAttachment(attachment));
+  const fileAttachments = attachments.filter((attachment) => !isImageAttachment(attachment));
   return `
-    <div class="message-attachments" data-count="${escapeHtml(String(Math.min(attachments.length, 6)))}">
-      ${attachments.map((attachment, index) => `
-        <button
-          class="message-image"
-          type="button"
-          data-image-modal-src="${escapeHtml(attachment.url)}"
-          data-image-modal-index="${escapeHtml(String(index))}"
-          aria-label="Открыть фотографию ${escapeHtml(String(index + 1))}"
-        >
-          <img src="${escapeHtml(attachment.url)}" alt="Фотография" loading="lazy">
-        </button>
-      `).join("")}
-    </div>
+    ${imageAttachments.length ? `
+      <div class="message-attachments" data-count="${escapeHtml(String(Math.min(imageAttachments.length, 6)))}">
+        ${imageAttachments.map((attachment, index) => `
+          <button
+            class="message-image"
+            type="button"
+            data-image-modal-src="${escapeHtml(attachment.url)}"
+            data-image-modal-index="${escapeHtml(String(index))}"
+            aria-label="Открыть фотографию ${escapeHtml(String(index + 1))}"
+          >
+            <img src="${escapeHtml(attachment.url)}" alt="Фотография" loading="lazy">
+          </button>
+        `).join("")}
+      </div>
+    ` : ""}
+    ${fileAttachments.length ? `
+      <div class="message-file-list">
+        ${fileAttachments.map((attachment) => `
+          <a
+            class="message-file"
+            href="${escapeHtml(attachment.url)}"
+            target="_blank"
+            rel="noopener noreferrer"
+            download="${escapeHtml(attachment.file_name || "")}"
+          >
+            <span class="message-file-icon" aria-hidden="true">FILE</span>
+            <span class="message-file-copy">
+              <strong>${escapeHtml(attachment.file_name || "Файл")}</strong>
+              <span>${escapeHtml(formatAttachmentSize(attachment.size) || attachment.mime_type || "Файл")}</span>
+            </span>
+          </a>
+        `).join("")}
+      </div>
+    ` : ""}
   `;
 }
 
@@ -866,6 +907,7 @@ function renderMessageItem(message, currentUserId, chatType) {
   const isForwardedDialog = (message.message_type || "text") === "forwarded_dialog";
   const attachments = getMessageAttachments(message);
   const hasAttachments = attachments.length > 0;
+  const hasOnlyFiles = hasAttachments && attachments.every((attachment) => !isImageAttachment(attachment));
   const hasText = Boolean(String(message?.text || "").trim());
   const own = !isSystem && String(message.sender_id) === String(currentUserId);
   const messageClasses = ["message"];
@@ -880,6 +922,9 @@ function renderMessageItem(message, currentUserId, chatType) {
   }
   if (hasAttachments && !hasText) {
     messageClasses.push("message-attachments-only");
+  }
+  if (hasOnlyFiles && !hasText) {
+    messageClasses.push("message-files-only");
   }
 
   if (isSystem) {
@@ -934,8 +979,9 @@ function renderPendingMessageItem(text, chatType, options = {}) {
     `;
   }
   if (Array.isArray(options.attachments) && options.attachments.length) {
+    const hasOnlyFiles = options.attachments.every((attachment) => !isImageAttachment(attachment));
     return `
-      <article class="message own pending${directClass}" data-pending-message="true" data-own="true">
+      <article class="message own pending${directClass}${!text && hasOnlyFiles ? " message-attachments-only message-files-only" : ""}" data-pending-message="true" data-own="true">
         ${text ? `<p class="message-text">${renderMessageText(text)}</p>` : ""}
         ${renderMessageAttachments(options.attachments)}
         <div class="message-meta">
@@ -1558,9 +1604,26 @@ function renderGroupProfilePanel(info = {}) {
   `;
 }
 
+function renderThreadMembersProfilePanel(info = {}) {
+  const title = info?.title || "Участники";
+  const membersCount = Number(info?.members_count || (Array.isArray(info?.members) ? info.members.length : 0));
+  return `
+    <section class="thread-info-card thread-info-card-profile">
+      <div class="thread-info-hero">
+        <div class="avatar group-avatar thread-info-avatar">${escapeHtml(initials(title))}</div>
+        <h3 class="thread-info-name">${escapeHtml(title)}</h3>
+        <p class="thread-info-handle">Участников: ${escapeHtml(String(membersCount))}</p>
+      </div>
+    </section>
+  `;
+}
+
+let threadInfoMembersQuery = "";
+
 function fillThreadInfoPanel(info, chatType) {
   const profilePanelNode = document.getElementById("threadInfoProfilePanel");
   const chatCardNode = document.getElementById("threadInfoChatCard");
+  const chatInfoContentNode = document.getElementById("threadInfoChatInfoContent");
   const startedAtNode = document.getElementById("threadInfoStartedAt");
   const messagesCountNode = document.getElementById("threadInfoMessagesCount");
   const tagNode = document.getElementById("threadInfoTag");
@@ -1572,6 +1635,9 @@ function fillThreadInfoPanel(info, chatType) {
   const inviteStatusNode = document.getElementById("threadInfoInviteStatus");
   const membersWrapNode = document.getElementById("threadInfoMembersWrap");
   const membersListNode = document.getElementById("threadInfoMembersList");
+  const membersSearchWrapNode = document.getElementById("threadInfoMembersSearchWrap");
+  const membersSearchInputNode = document.getElementById("threadInfoMembersSearchInput");
+  const membersSummaryNode = document.getElementById("threadInfoMembersSummary");
   const memberAddTriggerNode = document.getElementById("threadMemberAddTrigger");
 
   if (!profilePanelNode || !startedAtNode || !messagesCountNode || !tagNode) {
@@ -1580,16 +1646,22 @@ function fillThreadInfoPanel(info, chatType) {
 
   const threadInfoType = chatType || "direct";
   const isEmbeddedUserProfile = threadInfoType === "direct" && document.body.dataset.chatType === "group";
+  const isServerMembersView = Boolean(info?._show_server_members);
   const title = getUserProfileDisplayName(info) || info?.title || info?.username || "Чат";
   const customTag = info?.id != null ? getChatTag(info.id, threadInfoType) : null;
-  profilePanelNode.innerHTML = threadInfoType === "group"
+  profilePanelNode.innerHTML = isServerMembersView
+    ? renderThreadMembersProfilePanel(info)
+    : threadInfoType === "group"
     ? renderGroupProfilePanel(info)
     : renderUserProfilePanel({
         ...info,
         title
       }, { showActions: true });
   if (chatCardNode) {
-    chatCardNode.hidden = isEmbeddedUserProfile;
+    chatCardNode.hidden = isEmbeddedUserProfile || Boolean(info?._show_server_members);
+  }
+  if (chatInfoContentNode) {
+    chatInfoContentNode.hidden = isServerMembersView;
   }
   startedAtNode.textContent = formatThreadInfoDate(info?.started_at);
   messagesCountNode.textContent = formatThreadInfoCount(info?.messages_count);
@@ -1645,21 +1717,58 @@ function fillThreadInfoPanel(info, chatType) {
       const canAddMembers = Boolean(info?.can_add_members);
       const threadInfoEditActionButton = document.querySelector('#threadInfoActionMenu [data-thread-info-action="edit-group"]');
       const isServerChannel = Boolean(getCurrentRouteInfo()?.serverId);
-      membersWrapNode.hidden = isServerChannel;
+      const showServerMembers = isServerMembersView;
+      const roleLabelForMember = (member) => {
+        if (member?.is_owner) return "создатель";
+        if (member?.is_admin) return "админ";
+        const roleKey = String(member?.server_role || "").trim().toLowerCase();
+        if (!roleKey || roleKey === "member") return "участник";
+        return roleKey;
+      };
+      const filteredMembers = showServerMembers
+        ? members.filter((member) => {
+          const query = String(threadInfoMembersQuery || "").trim().toLowerCase();
+          if (!query) {
+            return true;
+          }
+          return [
+            member?.name,
+            member?.username,
+            roleLabelForMember(member)
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+        })
+        : members;
+      membersWrapNode.hidden = isServerChannel ? !showServerMembers : false;
       if (menuTriggerNode) {
-        menuTriggerNode.hidden = !canEditGroup;
+        menuTriggerNode.hidden = showServerMembers || !canEditGroup;
         menuTriggerNode.setAttribute("aria-label", isServerChannel ? "Действия канала" : "Действия группы");
       }
       if (threadInfoEditActionButton) {
         threadInfoEditActionButton.textContent = isServerChannel ? "Настройки канала" : "Редактировать группу";
       }
       if (memberAddTriggerNode) {
-        memberAddTriggerNode.hidden = isServerChannel || !canAddMembers;
+        memberAddTriggerNode.hidden = isServerChannel || showServerMembers || !(canAddMembers || canEditGroup);
       }
-      membersListNode.innerHTML = isServerChannel
+      if (membersSearchWrapNode) {
+        membersSearchWrapNode.hidden = !showServerMembers;
+      }
+      if (membersSearchInputNode && membersSearchInputNode.value !== threadInfoMembersQuery) {
+        membersSearchInputNode.value = threadInfoMembersQuery;
+      }
+      if (membersSummaryNode) {
+        const onlineCount = members.filter((member) => Boolean(member?.is_online)).length;
+        membersSummaryNode.textContent = showServerMembers
+          ? `Показано ${filteredMembers.length} из ${members.length} · Онлайн ${onlineCount}`
+          : "";
+      }
+      membersListNode.innerHTML = isServerChannel && !showServerMembers
         ? ""
-        : members.length
-        ? members.map((member) => `
+        : filteredMembers.length
+        ? filteredMembers.map((member) => `
           <article
             class="member-item"
             data-member-id="${escapeHtml(String(member.id))}"
@@ -1680,7 +1789,9 @@ function fillThreadInfoPanel(info, chatType) {
             ${member.can_manage ? '<button type="button" class="thread-member-menu-hint" data-member-menu-trigger="true" aria-label="Действия с участником"><img class="icon-asset" src="/assets/icons/ui/Meatballs_menu.svg" alt=""></button>' : ""}
           </article>
         `).join("")
-        : '<div class="empty-state">Участников пока нет</div>';
+        : showServerMembers
+          ? '<div class="empty-state">Никого не нашли по этому запросу</div>'
+          : '<div class="empty-state">Участников пока нет</div>';
     } else {
       membersWrapNode.hidden = true;
       if (menuTriggerNode) {
@@ -1688,6 +1799,12 @@ function fillThreadInfoPanel(info, chatType) {
       }
       if (memberAddTriggerNode) {
         memberAddTriggerNode.hidden = true;
+      }
+      if (membersSearchWrapNode) {
+        membersSearchWrapNode.hidden = true;
+      }
+      if (membersSummaryNode) {
+        membersSummaryNode.textContent = "";
       }
       membersListNode.innerHTML = "";
     }
@@ -1852,6 +1969,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadInfoInviteRegenerate = document.getElementById("threadInfoInviteRegenerate");
   const threadInfoInviteStatus = document.getElementById("threadInfoInviteStatus");
   const threadInfoMembersListNode = document.getElementById("threadInfoMembersList");
+  const threadInfoMembersSearchWrap = document.getElementById("threadInfoMembersSearchWrap");
+  const threadInfoMembersSearchInput = document.getElementById("threadInfoMembersSearchInput");
+  const threadInfoMembersSummary = document.getElementById("threadInfoMembersSummary");
   const threadInfoEditActionButton = document.querySelector('#threadInfoActionMenu [data-thread-info-action="edit-group"]');
   const threadInfoSearchAction = document.getElementById("threadInfoSearchAction");
   const threadInfoSearchPanel = document.getElementById("threadInfoSearchPanel");
@@ -1879,6 +1999,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const threadGroupEditDescriptionInput = document.getElementById("threadGroupEditDescriptionInput");
   const threadGroupEditStatus = document.getElementById("threadGroupEditStatus");
   const threadGroupEditSubmit = document.getElementById("threadGroupEditSubmit");
+  const threadMembersTrigger = document.getElementById("threadMembersTrigger");
   const composerWrap = composer?.closest(".composer-wrap");
   const composerModeNode = document.getElementById("composerMode");
   const cancelWideModeButton = document.getElementById("cancelWideMode");
@@ -1921,6 +2042,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let currentThreadInfo = null;
   let activeThreadInfoView = null;
   let activeThreadInfoType = chatType;
+  let isThreadInfoServerMembersMode = false;
   let pendingMessageState = null;
   let isSendingMessage = false;
   let isMarkingRead = false;
@@ -1931,6 +2053,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let composerMode = "normal";
   let forwardMessageState = null;
   let selectedForwardTargetKey = "";
+  let expandedForwardServerIds = new Set();
   let touchMenuPressTimer = null;
   let touchMenuTarget = null;
   let touchMenuPoint = null;
@@ -1956,6 +2079,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     return chatType !== "group"
       || !currentThreadInfo?.server
       || Boolean(currentThreadInfo?.can_send_messages);
+  }
+
+  function canSendFilesInCurrentThread() {
+    return chatType !== "group"
+      || !currentThreadInfo?.server
+      || Boolean(currentThreadInfo?.current_user_permissions?.send_files);
+  }
+
+  function canDeleteMessageForAll(node) {
+    if (!node) {
+      return false;
+    }
+    if (node.dataset.own === "true") {
+      return true;
+    }
+    return Boolean(currentThreadInfo?.current_user_permissions?.manage_messages)
+      || Boolean(currentThreadInfo?.current_user_permissions?.delete_messages);
   }
 
   function setComposerWideMode(nextMode) {
@@ -2329,10 +2469,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       sendButton.disabled = isBusy;
     }
     if (photoMessageButton) {
-      photoMessageButton.disabled = isBusy || Boolean(editingMessageState);
+      photoMessageButton.disabled = isBusy || Boolean(editingMessageState) || !canSendFilesInCurrentThread();
     }
     if (stickerPickerButton) {
-      stickerPickerButton.disabled = isBusy;
+      stickerPickerButton.disabled = isBusy || !canSendNormalMessages();
     }
     updateComposerActionButton();
   }
@@ -2380,12 +2520,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     composerAttachmentsNode.hidden = false;
     composerAttachmentsNode.innerHTML = composerAttachments.map((attachment, index) => `
       <div class="composer-preview-item">
-        <img class="composer-preview" src="${escapeHtml(attachment.previewUrl)}" alt="Предпросмотр фото ${escapeHtml(String(index + 1))}">
+        ${attachment.kind === "image" ? `
+          <img class="composer-preview" src="${escapeHtml(attachment.previewUrl)}" alt="Предпросмотр файла ${escapeHtml(String(index + 1))}">
+        ` : `
+          <div class="composer-file-preview">
+            <span class="composer-file-preview-icon" aria-hidden="true">FILE</span>
+            <span class="composer-file-preview-name">${escapeHtml(attachment.file?.name || "file")}</span>
+          </div>
+        `}
         <button
           class="composer-preview-remove"
           type="button"
           data-remove-composer-attachment="${escapeHtml(String(attachment.id))}"
-          aria-label="Удалить фотографию"
+          aria-label="Удалить файл"
         >×</button>
       </div>
     `).join("");
@@ -2455,7 +2602,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   function getComposerAttachmentPayload() {
     return composerAttachments.map((attachment) => ({
-      url: attachment.previewUrl
+      url: attachment.previewUrl || "#",
+      file_name: attachment.file?.name || "",
+      mime_type: attachment.file?.type || "application/octet-stream",
+      size: Number(attachment.file?.size || 0)
     }));
   }
 
@@ -2466,8 +2616,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!file) {
         continue;
       }
-      if (!isSupportedMessageImageFile(file)) {
-        unsupportedFiles.push(file.name || "Файл");
+      if (isSupportedMessageImageFile(file)) {
+        validFiles.push(file);
+        continue;
+      }
+      if (!String(file?.name || "").trim()) {
+        unsupportedFiles.push("Файл");
         continue;
       }
       validFiles.push(file);
@@ -2477,7 +2631,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       composerAttachments = composerAttachments.concat(validFiles.map((file) => ({
         id: composerAttachmentId += 1,
         file,
-        previewUrl: URL.createObjectURL(file)
+        kind: isSupportedMessageImageFile(file) ? "image" : "file",
+        previewUrl: isSupportedMessageImageFile(file) ? URL.createObjectURL(file) : ""
       })));
       renderComposerAttachments();
       status.textContent = "";
@@ -2485,7 +2640,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (unsupportedFiles.length) {
-      status.textContent = `Поддерживаются только JPG, PNG и WEBP: ${unsupportedFiles.join(", ")}`;
+      status.textContent = `Не удалось обработать файлы: ${unsupportedFiles.join(", ")}`;
       status.className = "status error";
     }
   }
@@ -2728,7 +2883,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (sendButton) {
       const hasText = Boolean(input.value.trim());
       const hasAttachments = composerAttachments.length > 0;
-      const canRecordVoice = canSendNormalMessages() && composerMode !== "wide" && !hasAttachments && !editingMessageState;
+      const canRecordVoice = canSendNormalMessages() && canSendFilesInCurrentThread() && composerMode !== "wide" && !hasAttachments && !editingMessageState;
       const state = isRecordingVoice ? "recording" : (editingMessageState ? "save" : ((hasText || hasAttachments || composerMode === "wide") ? "send" : "idle"));
       const labels = {
         idle: canRecordVoice ? "Записать голосовое сообщение" : "Отправить сообщение",
@@ -2753,7 +2908,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       sendButton.style.setProperty("--voice-record-scale", isRecordingVoice ? "1" : "0");
     }
     if (photoMessageButton) {
-      photoMessageButton.disabled = isSendingMessage || Boolean(input.disabled) || Boolean(editingMessageState) || composerMode === "wide";
+      photoMessageButton.disabled = isSendingMessage || Boolean(input.disabled) || Boolean(editingMessageState) || composerMode === "wide" || !canSendFilesInCurrentThread();
     }
   }
 
@@ -3132,6 +3287,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const isWideSubmit = forceWide || composerMode === "wide" || (isWideCommand && canUseWideComposerMode());
     const text = isWideCommand ? String(wideCommandMatch?.[1] || "").trim() : rawText;
     const hasAttachments = composerAttachments.length > 0;
+    const imageComposerAttachments = composerAttachments.filter((attachment) => attachment.kind === "image");
+    const fileComposerAttachments = composerAttachments.filter((attachment) => attachment.kind !== "image");
 
     if (forceWide && !canUseWideComposerMode()) {
       return;
@@ -3221,7 +3378,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       let requestBody;
       if (hasAttachments) {
         const compressedImages = await Promise.all(
-          composerAttachments.map((attachment) => compressImage(attachment.file))
+          imageComposerAttachments.map((attachment) => compressImage(attachment.file))
         );
         const formData = new FormData();
         formData.append("text", text);
@@ -3230,6 +3387,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
         compressedImages.forEach((file) => {
           formData.append("images[]", file, file.name || "photo.jpg");
+        });
+        fileComposerAttachments.forEach((attachment) => {
+          formData.append("files[]", attachment.file, attachment.file?.name || "file");
         });
         requestBody = formData;
       } else {
@@ -3702,6 +3862,66 @@ document.addEventListener("DOMContentLoaded", async () => {
     activeThreadInfoType = infoType || chatType;
   }
 
+  function getServerDirectoryMembers() {
+    if (Array.isArray(chatState.activeServer?.member_directory)) {
+      return chatState.activeServer.member_directory;
+    }
+    if (Array.isArray(chatState.activeServer?.members)) {
+      return chatState.activeServer.members;
+    }
+    return [];
+  }
+
+  function updateThreadMembersTriggerState() {
+    if (!threadMembersTrigger) {
+      return;
+    }
+    const hasServerMembers = Boolean(serverId && getServerDirectoryMembers().length > 0);
+    const isReady = Boolean(currentThreadInfo || hasServerMembers);
+    threadMembersTrigger.hidden = !isReady;
+    threadMembersTrigger.disabled = !isReady;
+  }
+
+  function buildServerMembersThreadInfo() {
+    const members = getServerDirectoryMembers();
+    return {
+      ...(currentThreadInfo || {}),
+      title: chatState.activeServer?.title || currentThreadInfo?.title || "Сервер",
+      members,
+      members_count: members.length,
+      _show_server_members: true
+    };
+  }
+
+  function buildThreadMembersOnlyInfo() {
+    const baseInfo = currentThreadInfo || {};
+    const members = Array.isArray(baseInfo?.members) ? baseInfo.members : [];
+    return {
+      ...baseInfo,
+      members,
+      members_count: Number(baseInfo?.members_count || members.length || 0),
+      _show_server_members: true
+    };
+  }
+
+  function openServerMembersPanel() {
+    if (!serverId) {
+      return;
+    }
+    const membersInfo = buildServerMembersThreadInfo();
+    isThreadInfoServerMembersMode = true;
+    closeThreadInfoActionMenu();
+    closeThreadMemberAddModal();
+    setThreadInfoHeading("Участники", chatState.activeServer?.title || "Сервер");
+    setActiveThreadInfoView(membersInfo, "group");
+    fillThreadInfoPanel(membersInfo, "group");
+    updateThreadInviteControls();
+    setThreadInfoOpen(true);
+    window.setTimeout(() => {
+      threadInfoMembersSearchInput?.focus();
+    }, 40);
+  }
+
   function setThreadInfoHeading(title, subtitle) {
     const titleNode = document.querySelector(".thread-info-title");
     const subtitleNode = document.querySelector(".thread-info-subtitle");
@@ -4095,6 +4315,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     if (!activeThreadInfoView || activeThreadInfoType === chatType) {
       setActiveThreadInfoView(currentThreadInfo, chatType);
+    } else if (isThreadInfoServerMembersMode) {
+      setActiveThreadInfoView(buildServerMembersThreadInfo(), "group");
     }
     fillThreadInfoPanel(
       activeThreadInfoType === chatType ? currentThreadInfo : activeThreadInfoView,
@@ -4103,6 +4325,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setThreadInviteExpanded(isThreadInviteExpanded);
     updateThreadInviteControls();
     updateThreadBlockNotice();
+    updateThreadMembersTriggerState();
   }
 
   async function copyThreadInviteLink() {
@@ -4444,7 +4667,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const selectedNodes = [...selectedMessageIds].map((messageId) => (
       findThreadMessageNode(messagesNode, messageId)
     )).filter(Boolean);
-    const allOwn = selectedNodes.length > 0 && selectedNodes.every((node) => node.dataset.own === "true");
+    const allDeletableForAll = selectedNodes.length > 0 && selectedNodes.every((node) => canDeleteMessageForAll(node));
 
     document.body.classList.toggle("selection-mode", isSelectionMode);
     selectionToolbar.hidden = !isSelectionMode;
@@ -4458,8 +4681,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (deleteAllButton) {
-      deleteAllButton.disabled = count === 0 || !allOwn;
-      deleteAllButton.hidden = !allOwn;
+      deleteAllButton.disabled = count === 0 || !allDeletableForAll;
+      deleteAllButton.hidden = !allDeletableForAll;
     }
 
     if (forwardDialogButton) {
@@ -4753,8 +4976,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     const normalizedQuery = String(query || "").trim().toLowerCase();
     const currentChatKey = chatId ? `${chatType}:${chatId}` : "";
     const chats = Array.isArray(chatState.allChats) ? chatState.allChats : [];
+    const servers = Array.isArray(chatState.allServers) ? chatState.allServers : [];
 
-    return chats.filter((chat) => {
+    const directTargets = chats.filter((chat) => {
       const targetType = chat.type || "direct";
       const targetKey = `${targetType}:${chat.id}`;
       if (!chat?.id || targetKey === currentChatKey) {
@@ -4770,6 +4994,57 @@ document.addEventListener("DOMContentLoaded", async () => {
       ].join(" ").toLowerCase();
       return haystack.includes(normalizedQuery);
     });
+    const serverTargets = servers.map((server) => {
+      const categories = Array.isArray(server?.categories) ? server.categories : [];
+      const channels = categories.flatMap((category) => {
+        const serverChannels = Array.isArray(category?.channels) ? category.channels : [];
+        return serverChannels.map((channel) => ({
+          ...channel,
+          _categoryTitle: String(category?.title || "").trim()
+        }));
+      }).filter((channel) => {
+        const targetKey = `group:${channel?.id}`;
+        if (!channel?.id || targetKey === currentChatKey) {
+          return false;
+        }
+        if (!normalizedQuery) {
+          return true;
+        }
+        const haystack = [
+          server?.title,
+          channel?.title,
+          channel?._categoryTitle,
+          channel?.description || "",
+          channel?.last_message?.text || ""
+        ].join(" ").toLowerCase();
+        return haystack.includes(normalizedQuery);
+      });
+      if (!channels.length) {
+        return null;
+      }
+      if (!normalizedQuery) {
+        return {
+          ...server,
+          channels
+        };
+      }
+      const serverHaystack = [
+        server?.title,
+        server?.description || ""
+      ].join(" ").toLowerCase();
+      if (serverHaystack.includes(normalizedQuery) || channels.length) {
+        return {
+          ...server,
+          channels
+        };
+      }
+      return null;
+    }).filter(Boolean);
+
+    return {
+      chats: directTargets,
+      servers: serverTargets
+    };
   }
 
   function renderForwardTargetItem(chat) {
@@ -4795,6 +5070,51 @@ document.addEventListener("DOMContentLoaded", async () => {
     `;
   }
 
+  function renderForwardServerTarget(server, query = "") {
+    const serverId = String(server?.id || "");
+    const autoExpanded = Boolean(String(query || "").trim());
+    const isExpanded = autoExpanded || expandedForwardServerIds.has(serverId);
+    const channels = Array.isArray(server?.channels) ? server.channels : [];
+    return `
+      <div class="forward-target-group${isExpanded ? " is-expanded" : ""}">
+        <button
+          type="button"
+          class="forward-target-item forward-target-server"
+          data-forward-server-toggle="${escapeHtml(serverId)}"
+          aria-expanded="${isExpanded ? "true" : "false"}"
+        >
+          <span class="forward-target-avatar">${escapeHtml(initials(server.title || "Сервер"))}</span>
+          <span class="forward-target-copy">
+            <strong>${escapeHtml(server.title || "Сервер")}</strong>
+            <span>${escapeHtml(server.description || `${channels.length} каналов`)}</span>
+          </span>
+          <span class="forward-target-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="forward-target-children"${isExpanded ? "" : " hidden"}>
+          ${channels.map((channel) => {
+            const targetKey = `group:${channel.id}`;
+            const subtitle = channel._categoryTitle || channel.description || "Канал сервера";
+            return `
+              <button
+                type="button"
+                class="forward-target-item forward-target-channel${selectedForwardTargetKey === targetKey ? " is-selected" : ""}"
+                data-forward-target-key="${escapeHtml(targetKey)}"
+                data-forward-target-id="${escapeHtml(String(channel.id))}"
+                data-forward-target-type="group"
+              >
+                <span class="forward-target-avatar forward-target-channel-avatar">#</span>
+                <span class="forward-target-copy">
+                  <strong>${escapeHtml(channel.title || "channel")}</strong>
+                  <span>${escapeHtml(subtitle)}</span>
+                </span>
+              </button>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
+
   function renderForwardTargetList(query = "") {
     const listNode = forwardModal.querySelector("[data-forward-list]");
     const statusNode = forwardModal.querySelector("[data-forward-status]");
@@ -4803,7 +5123,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const targets = getForwardTargets(query);
-    if (!targets.length) {
+    const hasTargets = targets.chats.length || targets.servers.length;
+    if (!hasTargets) {
       listNode.innerHTML = "";
       statusNode.textContent = query ? "Ничего не найдено" : "Нет доступных чатов для пересылки";
       statusNode.className = "status forward-modal-status";
@@ -4816,7 +5137,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         : `Сообщение от ${forwardMessageState.senderName || "пользователя"}`
       : "";
     statusNode.className = "status forward-modal-status";
-    listNode.innerHTML = targets.map(renderForwardTargetItem).join("");
+    listNode.innerHTML = `
+      ${targets.chats.map(renderForwardTargetItem).join("")}
+      ${targets.servers.map((server) => renderForwardServerTarget(server, query)).join("")}
+    `;
   }
 
   function closeForwardModal() {
@@ -4828,6 +5152,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }, 160);
     forwardMessageState = null;
     selectedForwardTargetKey = "";
+    expandedForwardServerIds = new Set();
     const statusNode = forwardModal.querySelector("[data-forward-status]");
     const searchNode = forwardModal.querySelector("[data-forward-search]");
     const listNode = forwardModal.querySelector("[data-forward-list]");
@@ -4850,6 +5175,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     forwardMessageState = nextState;
     selectedForwardTargetKey = "";
+    expandedForwardServerIds = new Set();
     const titleNode = forwardModal.querySelector(".forward-modal-title");
     const subtitleNode = forwardModal.querySelector(".forward-modal-subtitle");
     if (titleNode) {
@@ -5108,13 +5434,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     activeMessageMenuTarget = targetNode;
     const isOwnMessage = targetNode.dataset.own === "true";
     const isTextMessage = (targetNode.dataset.messageType || "text") === "text";
+    const canDeleteAll = canDeleteMessageForAll(targetNode);
 
     messageActionMenu.querySelector('[data-action="edit"]').hidden = !isOwnMessage || !isTextMessage;
-    messageActionMenu.querySelector('[data-action="delete-all"]').hidden = !isOwnMessage;
+    messageActionMenu.querySelector('[data-action="delete-all"]').hidden = !canDeleteAll;
     messageActionMenu.hidden = false;
 
     const menuWidth = 180;
-    const menuHeight = isOwnMessage ? (isTextMessage ? 244 : 204) : 184;
+    const menuHeight = canDeleteAll ? (isTextMessage && isOwnMessage ? 244 : 204) : (isTextMessage && isOwnMessage ? 204 : 184);
     const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
     const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
     messageActionMenu.style.left = `${Math.max(12, left)}px`;
@@ -5224,11 +5551,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       title
     };
     setActiveThreadInfoView(currentThreadInfo, chatType);
+    isThreadInfoServerMembersMode = false;
     setChatTitle(currentThreadInfo);
     renderHeaderStatus();
     fillThreadInfoPanel(currentThreadInfo, chatType);
     updateThreadInviteControls();
     syncComposerAvailability();
+    updateThreadMembersTriggerState();
     const nextMessages = data.messages || [];
     exitSelectionMode();
     renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
@@ -5493,6 +5822,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!currentThreadInfo) {
       return;
     }
+    isThreadInfoServerMembersMode = false;
     closeThreadInfoActionMenu();
     closeThreadMemberAddModal();
     setThreadInfoHeading("Информация", "Панель чата");
@@ -5500,6 +5830,29 @@ document.addEventListener("DOMContentLoaded", async () => {
     fillThreadInfoPanel(activeThreadInfoView, activeThreadInfoType);
     updateThreadInviteControls();
     setThreadInfoOpen(true);
+  }
+
+  function openThreadMembersView() {
+    if (serverId && getServerDirectoryMembers().length > 0) {
+      openServerMembersPanel();
+      return;
+    }
+    if (chatType === "group") {
+      const membersInfo = buildThreadMembersOnlyInfo();
+      isThreadInfoServerMembersMode = true;
+      closeThreadInfoActionMenu();
+      closeThreadMemberAddModal();
+      setThreadInfoHeading("Участники", currentThreadInfo?.title || "Группа");
+      setActiveThreadInfoView(membersInfo, "group");
+      fillThreadInfoPanel(membersInfo, "group");
+      updateThreadInviteControls();
+      setThreadInfoOpen(true);
+      window.setTimeout(() => {
+        threadInfoMembersSearchInput?.focus();
+      }, 40);
+      return;
+    }
+    openThreadInfoPanel();
   }
 
   contentHeaderNode?.addEventListener("click", (event) => {
@@ -5512,6 +5865,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     openThreadInfoPanel();
   });
+  threadMembersTrigger?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openThreadMembersView();
+  });
   threadInfoMenuTrigger?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -5522,6 +5880,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     closeThreadInfoActionMenu();
   });
   threadInfoCloseButton?.addEventListener("click", () => {
+    isThreadInfoServerMembersMode = false;
     closeThreadInfoActionMenu();
     closeThreadMemberAddModal();
     closeThreadGroupEditModal();
@@ -5709,6 +6068,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   threadInfoInviteRegenerate?.addEventListener("click", () => {
     void regenerateThreadInviteLink();
+  });
+
+  threadInfoMembersSearchInput?.addEventListener("input", () => {
+    threadInfoMembersQuery = String(threadInfoMembersSearchInput.value || "");
+    if (isThreadInfoServerMembersMode) {
+      const membersInfo = buildServerMembersThreadInfo();
+      setActiveThreadInfoView(membersInfo, "group");
+      fillThreadInfoPanel(membersInfo, "group");
+    }
+  });
+
+  window.addEventListener("server-members-panel:open", () => {
+    openServerMembersPanel();
   });
 
   threadInfoMembersListNode?.addEventListener("contextmenu", (event) => {
@@ -6411,7 +6783,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         queueDeleteMessage(basePath, "me", messageId);
         return;
       } else if (action === "delete-all") {
-        if (!isOwnMessage) return;
+        if (!canDeleteMessageForAll(targetNode)) return;
         queueDeleteMessage(basePath, "all", messageId);
         return;
       } else {
@@ -6519,6 +6891,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     const closeTrigger = event.target.closest("[data-forward-close]");
     if (closeTrigger) {
       closeForwardModal();
+      return;
+    }
+
+    const serverToggle = event.target.closest("[data-forward-server-toggle]");
+    if (serverToggle) {
+      const serverId = String(serverToggle.dataset.forwardServerToggle || "");
+      if (serverId && !(forwardModal.querySelector("[data-forward-search]")?.value || "").trim()) {
+        if (expandedForwardServerIds.has(serverId)) {
+          expandedForwardServerIds.delete(serverId);
+        } else {
+          expandedForwardServerIds.add(serverId);
+        }
+      }
+      renderForwardTargetList(forwardModal.querySelector("[data-forward-search]")?.value || "");
       return;
     }
 

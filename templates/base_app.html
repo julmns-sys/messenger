@@ -7,9 +7,72 @@
     <link rel="icon" type="image/svg+xml" href="/assets/icons/app/favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/app/favicon32x32.png">
     <link rel="apple-touch-icon" href="/assets/icons/app/apple-touch-icon.png">
+    <script>
+      (function () {
+        var settingsKey = "messenger:settings";
+        var defaults = {
+          theme: "light",
+          accentColor: "#3390ec",
+          transparency: 76,
+          uiRadius: 22,
+          textSize: 16
+        };
+        try {
+          var raw = window.localStorage.getItem(settingsKey);
+          var parsed = raw ? JSON.parse(raw) : {};
+          var settings = Object.assign({}, defaults, parsed && typeof parsed === "object" ? parsed : {});
+          var isDark = settings.theme === "dark";
+          var root = document.documentElement;
+          if (isDark) {
+            root.classList.add("settings-theme-dark");
+            root.style.colorScheme = "dark";
+          } else {
+            root.style.colorScheme = "light";
+          }
+          if (typeof settings.accentColor === "string" && /^#([0-9a-f]{6})$/i.test(settings.accentColor)) {
+            root.style.setProperty("--accent", settings.accentColor);
+          }
+          var transparency = Number(settings.transparency);
+          if (Number.isFinite(transparency)) {
+            root.style.setProperty("--settings-surface-alpha", String(Math.min(92, Math.max(35, transparency)) / 100));
+          }
+          var uiRadius = Number(settings.uiRadius);
+          if (Number.isFinite(uiRadius)) {
+            root.style.setProperty("--radius-lg", uiRadius + "px");
+            root.style.setProperty("--radius-md", Math.max(12, uiRadius - 6) + "px");
+            root.style.setProperty("--radius-sm", Math.max(10, uiRadius - 10) + "px");
+          }
+          var textSize = Number(settings.textSize);
+          if (Number.isFinite(textSize)) {
+            root.style.setProperty("--settings-text-size", Math.min(20, Math.max(14, textSize)) + "px");
+          }
+        } catch (error) {}
+      }());
+    </script>
+    <style>
+      html.settings-theme-dark {
+        background:
+          radial-gradient(circle at top left, rgba(51, 144, 236, 0.12), transparent 22%),
+          radial-gradient(circle at 85% 12%, rgba(92, 160, 255, 0.08), transparent 18%),
+          #101821;
+      }
+
+      html.settings-theme-dark body {
+        background:
+          radial-gradient(circle at top left, rgba(51, 144, 236, 0.12), transparent 22%),
+          radial-gradient(circle at 85% 12%, rgba(92, 160, 255, 0.08), transparent 18%),
+          #101821;
+        color: #e8eef5;
+      }
+    </style>
     <link rel="stylesheet" href="/assets/css/styles.css">
   </head>
   <body class="{{ body_class }}"{% if data_chat_type %} data-chat-type="{{ data_chat_type }}"{% endif %}>
+    <script>
+      if (document.documentElement.classList.contains("settings-theme-dark")) {
+        document.body.classList.add("settings-theme-dark");
+      }
+    </script>
     <main class="app">
       {% include "partials/sidebar.html" %}
       {% block content %}{% endblock %}

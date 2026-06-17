@@ -9,10 +9,12 @@
         <p class="page-subtitle">Ищите пользователя по username в формате `@username`.</p>
       </div>
     </div>
-    <div class="panel stack">
-      <form id="searchForm" class="inline-actions">
-        <input class="search-input" id="searchInput" type="text" placeholder="@username" required>
-        <button class="button" style="width: auto;" type="submit">Найти</button>
+    <div class="panel stack search-page-panel">
+      <form id="searchForm" class="search-page-form">
+        <div class="search-page-input-wrap">
+          <input class="search-input search-page-input" id="searchInput" type="text" placeholder="@username" required>
+          <button class="button search-page-submit" id="searchSubmitButton" type="submit" aria-hidden="true" tabindex="-1">Найти</button>
+        </div>
       </form>
       <div id="searchStatus" class="status"></div>
       <div class="result-list" id="resultList" hidden></div>

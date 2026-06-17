@@ -39,6 +39,10 @@ let sidebarServerHeaderMenuHideTimer = null;
 let serverSettingsModal = null;
 let activeServerSettingsSection = "profile";
 let serverSettingsRolesEditorState = null;
+let serverSettingsMemberActionMenu = null;
+let activeServerSettingsMemberAction = null;
+let serverSettingsMembersQuery = "";
+let sidebarMembersQuery = "";
 let serverInviteModal = null;
 let serverInviteModalState = null;
 let serverSidebarInlineRenameState = null;
@@ -152,7 +156,6 @@ const SERVER_ROLE_DEFAULT_PERMISSIONS = {
 };
 const SERVER_CHANNEL_TYPE_OPTIONS = [
   { id: "text", label: "Текстовый канал" },
-  { id: "voice", label: "Голосовой канал" },
   { id: "announcements", label: "Канал объявлений" },
   { id: "private", label: "Приватный канал" }
 ];
@@ -1253,6 +1256,130 @@ function renderPresenceBadge(info = {}, options = {}) {
       ${dot}${username}<span class="presence-label">${escapeHtml(text)}</span>
     </span>
   `;
+}
+
+function formatSidebarMemberRoleLabel(member = {}) {
+  if (member?.is_owner) {
+    return "Владелец";
+  }
+  const roleKey = String(member?.server_role || "").trim().toLowerCase();
+  if (member?.is_admin || roleKey === "admin") {
+    return "Админ";
+  }
+  if (!roleKey || roleKey === "member") {
+    return "Участник";
+  }
+  return roleKey
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function renderSidebarMembersPanel(server = chatState.activeServer) {
+  const subtitleNode = document.getElementById("sidebarMembersSubtitle");
+  const summaryNode = document.getElementById("sidebarMembersSummary");
+  const listNode = document.getElementById("sidebarMembersList");
+  const searchInput = document.getElementById("sidebarMembersSearch");
+  if (!subtitleNode || !summaryNode || !listNode || !searchInput) {
+    return;
+  }
+
+  const members = Array.isArray(server?.member_directory) ? server.member_directory : [];
+  const query = String(sidebarMembersQuery || "").trim().toLowerCase();
+  const filteredMembers = !query
+    ? members
+    : members.filter((member) => {
+      const roleLabel = formatSidebarMemberRoleLabel(member).toLowerCase();
+      return [
+        member?.name,
+        member?.username,
+        roleLabel
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  const onlineCount = members.filter((member) => Boolean(member?.is_online)).length;
+  const visibleCount = filteredMembers.length;
+
+  subtitleNode.textContent = server?.title
+    ? `${visibleCount} из ${members.length} · ${server.title}`
+    : `${visibleCount} из ${members.length}`;
+  summaryNode.textContent = query
+    ? `Найдено: ${visibleCount} · Онлайн: ${onlineCount}`
+    : `Всего: ${members.length} · Онлайн: ${onlineCount}`;
+
+  if (searchInput.value !== sidebarMembersQuery) {
+    searchInput.value = sidebarMembersQuery;
+  }
+
+  if (!members.length) {
+    listNode.innerHTML = '<div class="empty-state">В этом сервере пока нет участников</div>';
+    return;
+  }
+
+  if (!filteredMembers.length) {
+    listNode.innerHTML = '<div class="empty-state">Никого не нашли по этому запросу</div>';
+    return;
+  }
+
+  listNode.innerHTML = filteredMembers.map((member) => {
+    const displayName = member?.name || member?.username || "Участник";
+    const roleLabel = formatSidebarMemberRoleLabel(member);
+    const presence = renderPresenceBadge(member, { compact: true, showDot: false });
+    return `
+      <article class="member-item">
+        <div class="avatar small">
+          ${escapeHtml(initials(displayName))}
+          ${member?.is_online ? '<span class="presence-dot online" aria-hidden="true"></span>' : ""}
+        </div>
+        <div class="result-meta">
+          <div class="result-topline">
+            <h3 class="result-name">${renderSystemAccountLabel(displayName, member)}</h3>
+          </div>
+          <p class="result-username">${member?.username ? renderSystemAccountLabel(`@${member.username}`, member) : "Без username"}</p>
+        </div>
+        <div class="sidebar-members-meta">
+          <span class="sidebar-members-role">${escapeHtml(roleLabel)}</span>
+          ${presence}
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function initSidebarMembersPanel() {
+  const sidebar = document.querySelector(".sidebar");
+  const backButton = document.getElementById("sidebarMembersBack");
+  const searchInput = document.getElementById("sidebarMembersSearch");
+  if (!sidebar || !backButton || !searchInput || sidebar.dataset.membersPanelBound === "true") {
+    return;
+  }
+
+  sidebar.dataset.membersPanelBound = "true";
+
+  backButton.addEventListener("click", () => {
+    setSidebarMembersOpen(sidebar, false);
+  });
+
+  searchInput.addEventListener("input", () => {
+    sidebarMembersQuery = String(searchInput.value || "");
+    renderSidebarMembersPanel(chatState.activeServer);
+  });
+
+  window.addEventListener("server-members-panel:open", () => {
+    if (chatState.sidebarView !== "server-detail" || !chatState.activeServer) {
+      return;
+    }
+    renderSidebarMembersPanel(chatState.activeServer);
+    setSidebarMembersOpen(sidebar, true);
+    window.setTimeout(() => {
+      searchInput.focus();
+      searchInput.select();
+    }, 40);
+  });
 }
 
 function getUserProfileDisplayName(user = {}) {
@@ -2360,13 +2487,18 @@ function setSidebarProfileOpen(sidebar, isOpen) {
   if (!sidebar) return;
   const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
   const settingsPanel = sidebar.querySelector(".sidebar-panel-settings");
+  const membersPanel = sidebar.querySelector(".sidebar-panel-members");
   sidebar.classList.toggle("profile-open", Boolean(isOpen));
   sidebar.classList.toggle("settings-open", false);
+  sidebar.classList.toggle("members-open", false);
   if (profilePanel) {
     profilePanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
   }
   if (settingsPanel) {
     settingsPanel.setAttribute("aria-hidden", "true");
+  }
+  if (membersPanel) {
+    membersPanel.setAttribute("aria-hidden", "true");
   }
 }
 
@@ -2374,13 +2506,37 @@ function setSidebarSettingsOpen(sidebar, isOpen) {
   if (!sidebar) return;
   const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
   const settingsPanel = sidebar.querySelector(".sidebar-panel-settings");
+  const membersPanel = sidebar.querySelector(".sidebar-panel-members");
   sidebar.classList.toggle("profile-open", Boolean(isOpen));
   sidebar.classList.toggle("settings-open", Boolean(isOpen));
+  sidebar.classList.toggle("members-open", false);
   if (profilePanel) {
     profilePanel.setAttribute("aria-hidden", isOpen ? "true" : "false");
   }
   if (settingsPanel) {
     settingsPanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  }
+  if (membersPanel) {
+    membersPanel.setAttribute("aria-hidden", "true");
+  }
+}
+
+function setSidebarMembersOpen(sidebar, isOpen) {
+  if (!sidebar) return;
+  const profilePanel = sidebar.querySelector(".sidebar-panel-profile");
+  const settingsPanel = sidebar.querySelector(".sidebar-panel-settings");
+  const membersPanel = sidebar.querySelector(".sidebar-panel-members");
+  sidebar.classList.toggle("profile-open", false);
+  sidebar.classList.toggle("settings-open", false);
+  sidebar.classList.toggle("members-open", Boolean(isOpen));
+  if (profilePanel) {
+    profilePanel.setAttribute("aria-hidden", "true");
+  }
+  if (settingsPanel) {
+    settingsPanel.setAttribute("aria-hidden", "true");
+  }
+  if (membersPanel) {
+    membersPanel.setAttribute("aria-hidden", isOpen ? "false" : "true");
   }
 }
 
@@ -2556,7 +2712,7 @@ function buildServerStructureModal() {
   }
 
   function normalizeServerStructureChannelState(channel = null) {
-    const type = ["text", "voice", "announcements", "private"].includes(String(channel?.type || ""))
+    const type = ["text", "announcements", "private"].includes(String(channel?.type || ""))
       ? String(channel.type)
       : "text";
     const roles = getServerStructureChannelRoles();
@@ -2649,8 +2805,9 @@ function buildServerStructureModal() {
     `;
   }
 
-  function renderServerStructureChannelEditor() {
+  function renderServerStructureChannelEditor(mode = "channel-rename") {
     const state = serverStructureEditorState || normalizeServerStructureChannelState();
+    const isCreateMode = mode === "channel";
     const roles = getServerStructureChannelRoles();
     const selectedRolesVisible = state.type === "private" || state.access.view === "selected_roles" || state.access.write === "selected_roles" || state.access.files === "selected_roles" || state.access.links === "selected_roles";
     return `
@@ -2658,7 +2815,7 @@ function buildServerStructureModal() {
         <section class="server-channel-editor-section">
           <div class="server-channel-editor-head">
             <h4>Основное</h4>
-            <p>Название, описание и тип канала.</p>
+            <p>${isCreateMode ? "Укажите название и описание. Остальные настройки можно изменить после создания." : "Название, описание и тип канала."}</p>
           </div>
           <label class="server-settings-field">
             <span class="label">Название канала</span>
@@ -2668,176 +2825,180 @@ function buildServerStructureModal() {
             <span class="label">Описание канала</span>
             <textarea class="thread-group-edit-textarea server-structure-textarea" id="serverStructureDescription" rows="3" placeholder="Кратко опишите, для чего нужен этот канал">${escapeHtml(state.description)}</textarea>
           </label>
-          <div class="server-structure-type-grid">
-            ${SERVER_CHANNEL_TYPE_OPTIONS.map((option) => `
-              <button
-                class="server-structure-type-card ${state.type === option.id ? "is-active" : ""}"
-                type="button"
-                data-channel-type="${escapeHtml(option.id)}"
-              >${escapeHtml(option.label)}</button>
-            `).join("")}
-          </div>
-          ${state.type === "private" ? `
-            <div class="server-settings-role-notice is-muted">
-              <strong>Приватный канал видят только выбранные роли и участники с правом управления сервером.</strong>
+          ${isCreateMode ? "" : `
+            <div class="server-structure-type-grid">
+              ${SERVER_CHANNEL_TYPE_OPTIONS.map((option) => `
+                <button
+                  class="server-structure-type-card ${state.type === option.id ? "is-active" : ""}"
+                  type="button"
+                  data-channel-type="${escapeHtml(option.id)}"
+                >${escapeHtml(option.label)}</button>
+              `).join("")}
             </div>
-          ` : ""}
+            ${state.type === "private" ? `
+              <div class="server-settings-role-notice is-muted">
+                <strong>Приватный канал видят только выбранные роли и участники с правом управления сервером.</strong>
+              </div>
+            ` : ""}
+          `}
         </section>
-        <section class="server-channel-editor-section">
-          <div class="server-channel-editor-head">
-            <h4>Доступ к каналу</h4>
-            <p>Кто видит канал, пишет сообщения и использует вложения.</p>
-          </div>
-          <div class="server-channel-access-grid">
-            <div class="server-structure-choice-group">
-              <span class="label">Кто может видеть канал</span>
-              ${renderServerStructureChoiceChips("view", state.access.view)}
+        ${isCreateMode ? "" : `
+          <section class="server-channel-editor-section">
+            <div class="server-channel-editor-head">
+              <h4>Доступ к каналу</h4>
+              <p>Кто видит канал, пишет сообщения и использует вложения.</p>
             </div>
-            <div class="server-structure-choice-group">
-              <span class="label">Кто может писать в канал</span>
-              ${renderServerStructureChoiceChips("write", state.access.write)}
-            </div>
-            <div class="server-structure-choice-group">
-              <span class="label">Кто может отправлять файлы</span>
-              ${renderServerStructureChoiceChips("files", state.access.files)}
-            </div>
-            <div class="server-structure-choice-group">
-              <span class="label">Кто может отправлять ссылки</span>
-              ${renderServerStructureChoiceChips("links", state.access.links)}
-            </div>
-            <div class="server-structure-choice-group">
-              <span class="label">Кто может упоминать @everyone</span>
-              ${renderServerStructureChoiceChips("everyone_mentions", state.access.everyone_mentions)}
-            </div>
-          </div>
-          ${selectedRolesVisible ? `
-            <div class="server-channel-role-select-box">
-              <span class="label">Роли с доступом</span>
-              <div class="server-channel-role-chip-row">
-                ${roles.map((role) => `
-                  <button
-                    class="server-channel-role-chip ${(state.access.selected_role_ids || []).includes(role.key) ? "is-active" : ""}"
-                    type="button"
-                    data-channel-selected-role="${escapeHtml(role.key)}"
-                    ${role.isOwner ? "disabled" : ""}
-                  >
-                    <span class="server-channel-role-chip-dot" style="background:${escapeHtml(role.color)}"></span>
-                    <span>${escapeHtml(role.name)}</span>
-                  </button>
-                `).join("")}
+            <div class="server-channel-access-grid">
+              <div class="server-structure-choice-group">
+                <span class="label">Кто может видеть канал</span>
+                ${renderServerStructureChoiceChips("view", state.access.view)}
+              </div>
+              <div class="server-structure-choice-group">
+                <span class="label">Кто может писать в канал</span>
+                ${renderServerStructureChoiceChips("write", state.access.write)}
+              </div>
+              <div class="server-structure-choice-group">
+                <span class="label">Кто может отправлять файлы</span>
+                ${renderServerStructureChoiceChips("files", state.access.files)}
+              </div>
+              <div class="server-structure-choice-group">
+                <span class="label">Кто может отправлять ссылки</span>
+                ${renderServerStructureChoiceChips("links", state.access.links)}
+              </div>
+              <div class="server-structure-choice-group">
+                <span class="label">Кто может упоминать @everyone</span>
+                ${renderServerStructureChoiceChips("everyone_mentions", state.access.everyone_mentions)}
               </div>
             </div>
-          ` : ""}
-        </section>
-        <section class="server-channel-editor-section">
-          <div class="server-channel-editor-head">
-            <h4>Роли</h4>
-            <p>Права ролей именно в этом канале.</p>
-          </div>
-          <div class="server-channel-role-editor-list">
-            ${roles.map((role) => `
-              <section class="server-channel-role-card ${state.expandedRoleKey === role.key ? "is-open" : ""}">
-                <button class="server-channel-role-card-head" type="button" data-channel-role-expand="${escapeHtml(role.key)}">
-                  <span class="server-channel-role-card-copy">
-                    <span class="server-channel-role-chip-dot" style="background:${escapeHtml(role.color)}"></span>
-                    <strong>${escapeHtml(role.name)}</strong>
-                  </span>
-                  <span class="server-channel-role-card-action">${state.expandedRoleKey === role.key ? "Скрыть" : "Настроить"}</span>
-                </button>
-                ${state.expandedRoleKey === role.key ? `
-                  <div class="server-channel-role-card-body">
-                    ${SERVER_CHANNEL_ROLE_PERMISSION_DEFINITIONS.map((permission) => `
-                      <label class="server-settings-role-toggle-row">
-                        <span class="server-settings-role-toggle-copy">
-                          <strong>${escapeHtml(permission.label)}</strong>
-                        </span>
-                        <span class="settings-switch">
-                          <input
-                            type="checkbox"
-                            data-channel-role-key="${escapeHtml(role.key)}"
-                            data-channel-role-permission="${escapeHtml(permission.id)}"
-                            ${state.rolePermissions?.[role.key]?.[permission.id] ? "checked" : ""}
-                            ${role.isOwner ? "disabled" : ""}
-                          >
-                          <span class="settings-switch-ui"></span>
-                        </span>
-                      </label>
-                    `).join("")}
-                  </div>
-                ` : ""}
-              </section>
-            `).join("")}
-          </div>
-        </section>
-        <section class="server-channel-editor-section">
-          <div class="server-channel-editor-head">
-            <h4>Правила канала</h4>
-            <p>Локальные правила, которые действуют только в этом канале.</p>
-          </div>
-          <label class="server-settings-role-toggle-row">
-            <span class="server-settings-role-toggle-copy">
-              <strong>Включить правила канала</strong>
-              <span>Показывать отдельный список правил для этого канала.</span>
-            </span>
-            <span class="settings-switch">
-              <input type="checkbox" data-channel-rules-enabled="true" ${state.rulesEnabled ? "checked" : ""}>
-              <span class="settings-switch-ui"></span>
-            </span>
-          </label>
-          ${state.rulesEnabled ? `
-            <div class="server-channel-rule-compose">
-              <input class="search-input" id="serverStructureRuleInput" type="text" placeholder="Добавьте новое правило" value="${escapeHtml(state.newRule || "")}">
-              <button class="button button-secondary" type="button" data-channel-add-rule="true">Добавить правило</button>
-            </div>
-            <div class="server-channel-rule-list">
-              ${state.rules.map((rule, index) => `
-                <div class="server-channel-rule-item">
-                  <input class="search-input" type="text" value="${escapeHtml(rule)}" data-channel-rule-index="${escapeHtml(String(index))}">
-                  <button class="button button-secondary" type="button" data-channel-delete-rule="${escapeHtml(String(index))}">Удалить</button>
+            ${selectedRolesVisible ? `
+              <div class="server-channel-role-select-box">
+                <span class="label">Роли с доступом</span>
+                <div class="server-channel-role-chip-row">
+                  ${roles.map((role) => `
+                    <button
+                      class="server-channel-role-chip ${(state.access.selected_role_ids || []).includes(role.key) ? "is-active" : ""}"
+                      type="button"
+                      data-channel-selected-role="${escapeHtml(role.key)}"
+                      ${role.isOwner ? "disabled" : ""}
+                    >
+                      <span class="server-channel-role-chip-dot" style="background:${escapeHtml(role.color)}"></span>
+                      <span>${escapeHtml(role.name)}</span>
+                    </button>
+                  `).join("")}
                 </div>
+              </div>
+            ` : ""}
+          </section>
+          <section class="server-channel-editor-section">
+            <div class="server-channel-editor-head">
+              <h4>Роли</h4>
+              <p>Права ролей именно в этом канале.</p>
+            </div>
+            <div class="server-channel-role-editor-list">
+              ${roles.map((role) => `
+                <section class="server-channel-role-card ${state.expandedRoleKey === role.key ? "is-open" : ""}">
+                  <button class="server-channel-role-card-head" type="button" data-channel-role-expand="${escapeHtml(role.key)}">
+                    <span class="server-channel-role-card-copy">
+                      <span class="server-channel-role-chip-dot" style="background:${escapeHtml(role.color)}"></span>
+                      <strong>${escapeHtml(role.name)}</strong>
+                    </span>
+                    <span class="server-channel-role-card-action">${state.expandedRoleKey === role.key ? "Скрыть" : "Настроить"}</span>
+                  </button>
+                  ${state.expandedRoleKey === role.key ? `
+                    <div class="server-channel-role-card-body">
+                      ${SERVER_CHANNEL_ROLE_PERMISSION_DEFINITIONS.map((permission) => `
+                        <label class="server-settings-role-toggle-row">
+                          <span class="server-settings-role-toggle-copy">
+                            <strong>${escapeHtml(permission.label)}</strong>
+                          </span>
+                          <span class="settings-switch">
+                            <input
+                              type="checkbox"
+                              data-channel-role-key="${escapeHtml(role.key)}"
+                              data-channel-role-permission="${escapeHtml(permission.id)}"
+                              ${state.rolePermissions?.[role.key]?.[permission.id] ? "checked" : ""}
+                              ${role.isOwner ? "disabled" : ""}
+                            >
+                            <span class="settings-switch-ui"></span>
+                          </span>
+                        </label>
+                      `).join("")}
+                    </div>
+                  ` : ""}
+                </section>
               `).join("")}
             </div>
-          ` : ""}
-        </section>
-        <section class="server-channel-editor-section">
-          <div class="server-channel-editor-head">
-            <h4>Ограничения</h4>
-            <p>Медленный режим, запреты и режим только чтения.</p>
-          </div>
-          <label class="server-settings-field">
-            <span class="label">Медленный режим</span>
-            <select class="search-input" id="serverStructureSlowmode">
-              ${SERVER_CHANNEL_SLOWMODE_OPTIONS.map((option) => `
-                <option value="${escapeHtml(option.id)}" ${state.restrictions.slowmode === option.id ? "selected" : ""}>${escapeHtml(option.label)}</option>
+          </section>
+          <section class="server-channel-editor-section">
+            <div class="server-channel-editor-head">
+              <h4>Правила канала</h4>
+              <p>Локальные правила, которые действуют только в этом канале.</p>
+            </div>
+            <label class="server-settings-role-toggle-row">
+              <span class="server-settings-role-toggle-copy">
+                <strong>Включить правила канала</strong>
+                <span>Показывать отдельный список правил для этого канала.</span>
+              </span>
+              <span class="settings-switch">
+                <input type="checkbox" data-channel-rules-enabled="true" ${state.rulesEnabled ? "checked" : ""}>
+                <span class="settings-switch-ui"></span>
+              </span>
+            </label>
+            ${state.rulesEnabled ? `
+              <div class="server-channel-rule-compose">
+                <input class="search-input" id="serverStructureRuleInput" type="text" placeholder="Добавьте новое правило" value="${escapeHtml(state.newRule || "")}">
+                <button class="button button-secondary" type="button" data-channel-add-rule="true">Добавить правило</button>
+              </div>
+              <div class="server-channel-rule-list">
+                ${state.rules.map((rule, index) => `
+                  <div class="server-channel-rule-item">
+                    <input class="search-input" type="text" value="${escapeHtml(rule)}" data-channel-rule-index="${escapeHtml(String(index))}">
+                    <button class="button button-secondary" type="button" data-channel-delete-rule="${escapeHtml(String(index))}">Удалить</button>
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+          </section>
+          <section class="server-channel-editor-section">
+            <div class="server-channel-editor-head">
+              <h4>Ограничения</h4>
+              <p>Медленный режим, запреты и режим только чтения.</p>
+            </div>
+            <label class="server-settings-field">
+              <span class="label">Медленный режим</span>
+              <select class="search-input" id="serverStructureSlowmode">
+                ${SERVER_CHANNEL_SLOWMODE_OPTIONS.map((option) => `
+                  <option value="${escapeHtml(option.id)}" ${state.restrictions.slowmode === option.id ? "selected" : ""}>${escapeHtml(option.label)}</option>
+                `).join("")}
+              </select>
+            </label>
+            <div class="server-settings-role-switch-list">
+              ${[
+                ["block_links", "Запрет ссылок"],
+                ["block_files", "Запрет файлов"],
+                ["read_only", "Только чтение"],
+                ["block_everyone_mentions", "Запрет упоминания @everyone"],
+                ["block_new_members", "Запрет сообщений от новых участников"]
+              ].map(([key, label]) => `
+                <label class="server-settings-role-toggle-row">
+                  <span class="server-settings-role-toggle-copy">
+                    <strong>${escapeHtml(label)}</strong>
+                  </span>
+                  <span class="settings-switch">
+                    <input type="checkbox" data-channel-restriction="${escapeHtml(key)}" ${state.restrictions[key] ? "checked" : ""}>
+                    <span class="settings-switch-ui"></span>
+                  </span>
+                </label>
               `).join("")}
-            </select>
-          </label>
-          <div class="server-settings-role-switch-list">
-            ${[
-              ["block_links", "Запрет ссылок"],
-              ["block_files", "Запрет файлов"],
-              ["read_only", "Только чтение"],
-              ["block_everyone_mentions", "Запрет упоминания @everyone"],
-              ["block_new_members", "Запрет сообщений от новых участников"]
-            ].map(([key, label]) => `
-              <label class="server-settings-role-toggle-row">
-                <span class="server-settings-role-toggle-copy">
-                  <strong>${escapeHtml(label)}</strong>
-                </span>
-                <span class="settings-switch">
-                  <input type="checkbox" data-channel-restriction="${escapeHtml(key)}" ${state.restrictions[key] ? "checked" : ""}>
-                  <span class="settings-switch-ui"></span>
-                </span>
-              </label>
-            `).join("")}
-          </div>
-        </section>
-        <section class="server-channel-editor-section">
-          <div class="server-channel-editor-head">
-            <h4>Предпросмотр доступа</h4>
-            <p>${escapeHtml(buildServerStructureChannelPreview(state))}</p>
-          </div>
-        </section>
+            </div>
+          </section>
+          <section class="server-channel-editor-section">
+            <div class="server-channel-editor-head">
+              <h4>Предпросмотр доступа</h4>
+              <p>${escapeHtml(buildServerStructureChannelPreview(state))}</p>
+            </div>
+          </section>
+        `}
       </div>
     `;
   }
@@ -2861,7 +3022,7 @@ function buildServerStructureModal() {
       return;
     }
     bodyNode.innerHTML = mode === "channel" || mode === "channel-rename"
-      ? renderServerStructureChannelEditor()
+      ? renderServerStructureChannelEditor(mode)
       : renderServerStructureSimpleForm(mode, options);
   }
 
@@ -3236,14 +3397,18 @@ function openServerStructureModal(mode, options = {}) {
   nameInput?.focus();
 }
 
-function getServerSettingsSections() {
-  return [
+function getServerSettingsSections(server = {}) {
+  const sections = [
     { id: "profile", label: "Профиль сервера" },
     { id: "members", label: "Участники" },
     { id: "roles", label: "Роли" },
     { id: "bans", label: "Баны" },
     { id: "access", label: "Доступ" }
   ];
+  if (server?.can_view_audit_log) {
+    sections.push({ id: "audit", label: "Журнал аудита" });
+  }
+  return sections;
 }
 
 function createServerInviteModalState(server = {}) {
@@ -3595,7 +3760,7 @@ function renderServerInviteModalBody(server = {}) {
               </div>
               <div class="server-invite-active-actions">
                 <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(activeInvite.url || "")}">Скопировать</button>
-                <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(activeInvite.code || "")}">Отозвать</button>
+                ${canInviteMembers ? `<button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(activeInvite.code || "")}">Отозвать</button>` : ""}
               </div>
             </div>
           `).join("") : `<div class="server-settings-placeholder"><strong>Активных приглашений пока нет.</strong><span>Создайте первую ссылку в соседней вкладке.</span></div>`}
@@ -3658,7 +3823,187 @@ function isCurrentUserServerOwner(server = {}) {
   return Boolean(ownerId && currentUserId && ownerId === currentUserId);
 }
 
+function getServerSettingsRoleMeta(server = {}, roleKey = "") {
+  const normalizedRoleKey = String(roleKey || "member").trim().toLowerCase() || "member";
+  const role = (Array.isArray(server?.roles) ? server.roles : []).find((item) => (
+    String(item?.name || "").trim().toLowerCase() === normalizedRoleKey
+  ));
+  const labelMap = {
+    owner: "owner",
+    admin: "admin",
+    member: "member",
+  };
+  return {
+    label: role?.is_system ? (labelMap[normalizedRoleKey] || getServerRoleDisplayName(role)) : (getServerRoleDisplayName(role) || labelMap[normalizedRoleKey] || "Участник"),
+    color: role?.color || (normalizedRoleKey === "owner" ? "#F59E0B" : normalizedRoleKey === "admin" ? "#EF4444" : "#94A3B8"),
+  };
+}
+
+function buildServerSettingsMemberActionMenu() {
+  if (serverSettingsMemberActionMenu) {
+    return serverSettingsMemberActionMenu;
+  }
+  const menu = document.createElement("div");
+  menu.className = "thread-member-action-menu server-settings-member-action-menu";
+  menu.hidden = true;
+  menu.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const memberActionButton = event.target.closest("[data-server-member-action]");
+    if (!memberActionButton || !chatState.activeServer?.id || !activeServerSettingsMemberAction?.userId) {
+      return;
+    }
+    handleServerSettingsMemberAction(memberActionButton);
+  });
+  document.body.appendChild(menu);
+  serverSettingsMemberActionMenu = menu;
+  return menu;
+}
+
+function hideServerSettingsMemberActionMenu() {
+  activeServerSettingsMemberAction = null;
+  if (!serverSettingsMemberActionMenu) {
+    return;
+  }
+  serverSettingsMemberActionMenu.classList.remove("visible");
+  window.setTimeout(() => {
+    if (serverSettingsMemberActionMenu && !serverSettingsMemberActionMenu.classList.contains("visible")) {
+      serverSettingsMemberActionMenu.hidden = true;
+      serverSettingsMemberActionMenu.innerHTML = "";
+      serverSettingsMemberActionMenu.style.left = "";
+      serverSettingsMemberActionMenu.style.top = "";
+    }
+  }, 160);
+}
+
+async function refreshServerSettingsMembersSection() {
+  if (!chatState.activeServer?.id) {
+    return;
+  }
+  const freshServer = await apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}`);
+  chatState.activeServer = freshServer;
+  renderServerSettingsModal(chatState.activeServer);
+}
+
+function renderServerSettingsMemberActionMenu(member = {}, options = {}) {
+  const assignableRoles = Array.isArray(member?.assignable_roles) ? member.assignable_roles : [];
+  const showRoleList = Boolean(options.showRoleList);
+  return `
+    ${assignableRoles.length ? `
+      <button type="button" data-server-member-action="${showRoleList ? "close-role-list" : "open-role-list"}">
+        ${renderActionMenuItemContent("/assets/icons/ui/Lable_fill.svg", showRoleList ? "Скрыть роли" : "Выдать роль")}
+      </button>
+      ${showRoleList ? `
+        <div class="server-settings-member-role-list">
+          ${assignableRoles.map((roleName) => `
+            <button type="button" data-server-member-action="role" data-server-member-role="${escapeHtml(roleName)}">
+              ${renderActionMenuItemContent("/assets/icons/ui/Lable_fill.svg", roleName)}
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
+    ` : ""}
+    ${member?.can_kick ? `
+      <button type="button" data-server-member-action="remove" class="danger">
+        ${renderActionMenuItemContent("/assets/icons/ui/Out.svg", "Удалить с сервера")}
+      </button>
+    ` : ""}
+    ${member?.can_ban ? `
+      <button type="button" data-server-member-action="ban" class="danger">
+        ${renderActionMenuItemContent("/assets/icons/ui/block.svg", "Забанить")}
+      </button>
+    ` : ""}
+  `;
+}
+
+function showServerSettingsMemberActionMenu(trigger, member = {}, options = {}) {
+  const menu = buildServerSettingsMemberActionMenu();
+  const assignableRoles = Array.isArray(member?.assignable_roles) ? member.assignable_roles : [];
+  const showRoleList = Boolean(options.showRoleList);
+  const actionCount = (assignableRoles.length && showRoleList ? assignableRoles.length + 1 : assignableRoles.length ? 1 : 0) + (member?.can_kick ? 1 : 0) + (member?.can_ban ? 1 : 0);
+  menu.innerHTML = renderServerSettingsMemberActionMenu(member, { showRoleList });
+  menu.hidden = false;
+  requestAnimationFrame(() => menu.classList.add("visible"));
+
+  const rect = trigger.getBoundingClientRect();
+  const menuWidth = 244;
+  const menuHeight = Math.max(56, 48 * actionCount + 16);
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const left = Math.min(Math.max(12, rect.right - menuWidth), Math.max(12, viewportWidth - menuWidth - 12));
+  const top = Math.min(Math.max(12, rect.bottom + 8), Math.max(12, viewportHeight - menuHeight - 12));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+
+  activeServerSettingsMemberAction = {
+    userId: String(member?.id || ""),
+    name: member?.name || member?.username || "Участник",
+    member,
+    trigger,
+    showRoleList,
+  };
+}
+
+function handleServerSettingsMemberAction(memberActionButton) {
+  const action = String(memberActionButton.dataset.serverMemberAction || "");
+  const roleName = String(memberActionButton.dataset.serverMemberRole || "").trim();
+  const targetUserId = activeServerSettingsMemberAction?.userId;
+  const targetName = activeServerSettingsMemberAction?.name || "Участник";
+  const member = activeServerSettingsMemberAction?.member || {};
+  const trigger = activeServerSettingsMemberAction?.trigger || null;
+
+  if (action === "open-role-list" && trigger) {
+    showServerSettingsMemberActionMenu(trigger, member, { showRoleList: true });
+    return;
+  }
+  if (action === "close-role-list" && trigger) {
+    showServerSettingsMemberActionMenu(trigger, member, { showRoleList: false });
+    return;
+  }
+
+  hideServerSettingsMemberActionMenu();
+  memberActionButton.disabled = true;
+
+  let requestPath = "";
+  let requestOptions = { method: "POST" };
+  let successMessage = "";
+  if (action === "role" && roleName) {
+    requestPath = `/servers/${encodeURIComponent(chatState.activeServer.id)}/members/${encodeURIComponent(targetUserId)}`;
+    requestOptions = {
+      method: "PATCH",
+      body: JSON.stringify({ role: roleName })
+    };
+    successMessage = `Роль обновлена для ${targetName}`;
+  } else if (action === "remove") {
+    requestPath = `/servers/${encodeURIComponent(chatState.activeServer.id)}/members/${encodeURIComponent(targetUserId)}`;
+    requestOptions = { method: "DELETE" };
+    successMessage = `${targetName} удалён с сервера`;
+  } else if (action === "ban") {
+    requestPath = `/servers/${encodeURIComponent(chatState.activeServer.id)}/members/${encodeURIComponent(targetUserId)}/ban`;
+    requestOptions = { method: "POST" };
+    successMessage = `${targetName} забанен`;
+  }
+
+  if (!requestPath) {
+    return;
+  }
+
+  apiFetch(requestPath, requestOptions).then(async () => {
+    await refreshServerSettingsMembersSection();
+    showAppToast(successMessage);
+  }).catch((error) => {
+    showAppToast(error.message || "Не удалось выполнить действие", { type: "error" });
+  });
+}
+
 function renderServerSettingsMembersSection(server = {}) {
+  const members = Array.isArray(server?.members) ? server.members : [];
+  const query = String(serverSettingsMembersQuery || "").trim().toLowerCase();
+  const filteredMembers = query
+    ? members.filter((member) => (
+      String(member?.name || "").toLowerCase().includes(query)
+      || String(member?.username || "").toLowerCase().includes(query)
+    ))
+    : members;
   return `
     <section class="server-settings-section-card">
       <header class="server-settings-content-head">
@@ -3667,6 +4012,16 @@ function renderServerSettingsMembersSection(server = {}) {
           <p>Список участников сервера и их текущий статус.</p>
         </div>
       </header>
+      <label class="server-settings-field">
+        <span class="label">Поиск участника</span>
+        <input
+          class="search-input"
+          id="serverSettingsMembersSearch"
+          type="search"
+          placeholder="Имя или @username"
+          value="${escapeHtml(serverSettingsMembersQuery || "")}"
+        >
+      </label>
       <div class="server-settings-members-table-wrap">
         <div class="server-settings-members-table">
           <div class="server-settings-members-row is-head">
@@ -3675,10 +4030,42 @@ function renderServerSettingsMembersSection(server = {}) {
             <div>Статус</div>
             <div>Действия</div>
           </div>
-          <div class="server-settings-members-empty">
-            <strong>Здесь будет список участников сервера.</strong>
-            <span>Для таблицы участников нужен отдельный endpoint. Сервер: ${escapeHtml(server?.title || "Сервер")}.</span>
-          </div>
+          ${filteredMembers.length ? filteredMembers.map((member) => {
+            const roleMeta = getServerSettingsRoleMeta(server, member?.server_role);
+            const presence = renderPresenceBadge(member, { compact: true }) || '<span class="server-settings-member-status-muted">не в сети</span>';
+            return `
+              <div class="server-settings-members-row">
+                <div class="server-settings-member-cell">
+                  <div class="avatar small server-settings-member-avatar">${escapeHtml(initials(member?.name || member?.username || "U"))}${member?.is_online ? '<span class="presence-dot online" aria-hidden="true"></span>' : ""}</div>
+                  <div class="server-settings-member-copy">
+                    <strong>${escapeHtml(member?.name || member?.username || "Участник")}</strong>
+                    <span>@${escapeHtml(member?.username || "user")}</span>
+                  </div>
+                </div>
+                <div>
+                  <span class="server-settings-member-role-pill" style="--server-role-accent:${escapeHtml(roleMeta.color)}">${escapeHtml(roleMeta.label)}</span>
+                </div>
+                <div>${presence}</div>
+                <div class="server-settings-member-actions">
+                  ${member?.is_owner ? "Владелец" : member?.can_manage ? `
+                    <button
+                      class="server-settings-member-action-trigger"
+                      type="button"
+                      aria-label="Действия с участником"
+                      data-server-member-actions="${escapeHtml(String(member?.id || ""))}"
+                    >
+                      <img src="/assets/icons/ui/Menu.svg" alt="" aria-hidden="true">
+                    </button>
+                  ` : "—"}
+                </div>
+              </div>
+            `;
+          }).join("") : `
+            <div class="server-settings-members-empty">
+              <strong>${query ? "Ничего не найдено." : "Участников пока нет."}</strong>
+              <span>${query ? "Попробуйте изменить поисковый запрос." : "Когда в сервер вступят пользователи, они появятся в этом списке."}</span>
+            </div>
+          `}
         </div>
       </div>
     </section>
@@ -3714,7 +4101,7 @@ function renderServerSettingsAccessSection(server = {}) {
                 </div>
                 <div class="server-invite-active-actions">
                   <button class="button button-secondary" type="button" data-server-invite-copy-value="${escapeHtml(invite.url || "")}">Скопировать</button>
-                  <button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(invite.code || "")}" ${canInviteMembers ? "" : "disabled"}>Отозвать</button>
+                  ${canInviteMembers ? `<button class="button button-danger" type="button" data-server-invite-revoke="${escapeHtml(invite.code || "")}">Отозвать</button>` : ""}
                 </div>
               </div>
             `).join("") : `
@@ -4140,6 +4527,76 @@ function renderServerSettingsBansSection() {
   `;
 }
 
+function getServerAuditActionLabel(entry = {}) {
+  const labels = {
+    update_server_profile: "Обновлены настройки сервера",
+    create_invite: "Создано приглашение",
+    revoke_invite: "Отозвано приглашение",
+    remove_member: "Участник удалён с сервера",
+    ban_member: "Участник забанен",
+    assign_role: "Изменена роль участника",
+    create_role: "Создана роль",
+    update_role: "Обновлена роль",
+    delete_role: "Удалена роль",
+    create_category: "Создана категория",
+    update_category: "Обновлена категория",
+    delete_category: "Удалена категория",
+    create_channel: "Создан канал",
+    update_channel: "Обновлён канал",
+    delete_channel: "Удалён канал",
+  };
+  return labels[String(entry?.action || "")] || String(entry?.action || "Действие");
+}
+
+function renderServerAuditDetails(entry = {}) {
+  const details = entry?.details && typeof entry.details === "object" ? entry.details : {};
+  const parts = [];
+  if (details.title) {
+    parts.push(`Название: ${details.title}`);
+  }
+  if (details.role) {
+    parts.push(`Роль: ${details.role}`);
+  }
+  if (details.code) {
+    parts.push(`Код: ${details.code}`);
+  }
+  if (entry?.target_name) {
+    parts.push(`Цель: ${entry.target_name}`);
+  }
+  return parts.join(" · ");
+}
+
+function renderServerSettingsAuditSection(server = {}) {
+  const items = Array.isArray(server?.audit_log) ? server.audit_log : [];
+  return `
+    <section class="server-settings-section-card">
+      <header class="server-settings-content-head">
+        <div>
+          <h2>Журнал аудита</h2>
+          <p>Последние административные действия на сервере.</p>
+        </div>
+        ${server?.is_owner ? `<button class="button button-danger" type="button" data-server-audit-clear="true">Очистить журнал</button>` : ""}
+      </header>
+      <div class="server-settings-audit-list">
+        ${items.length ? items.map((entry) => `
+          <article class="server-settings-audit-item">
+            <div class="server-settings-audit-copy">
+              <strong>${escapeHtml(getServerAuditActionLabel(entry))}</strong>
+              <span>${escapeHtml(entry?.actor_name || "Пользователь")} · ${escapeHtml(formatTimestamp(entry?.created_at) || "")}</span>
+              ${renderServerAuditDetails(entry) ? `<p>${escapeHtml(renderServerAuditDetails(entry))}</p>` : ""}
+            </div>
+          </article>
+        `).join("") : `
+          <div class="server-settings-placeholder">
+            <strong>Журнал аудита пока пуст.</strong>
+            <span>Когда на сервере будут административные действия, они появятся здесь.</span>
+          </div>
+        `}
+      </div>
+    </section>
+  `;
+}
+
 function renderServerSettingsContent(server = {}, section = "profile") {
   if (section === "members") {
     return renderServerSettingsMembersSection(server);
@@ -4149,6 +4606,9 @@ function renderServerSettingsContent(server = {}, section = "profile") {
   }
   if (section === "bans") {
     return renderServerSettingsBansSection(server);
+  }
+  if (section === "audit") {
+    return renderServerSettingsAuditSection(server);
   }
   if (section === "access") {
     return renderServerSettingsAccessSection(server);
@@ -4170,7 +4630,7 @@ function renderServerSettingsModal(server = {}) {
   }
 
   if (navNode) {
-    navNode.innerHTML = getServerSettingsSections().map((section) => `
+    navNode.innerHTML = getServerSettingsSections(server).map((section) => `
       <button
         class="server-settings-nav-item ${activeServerSettingsSection === section.id ? "is-active" : ""}"
         type="button"
@@ -4187,6 +4647,7 @@ function renderServerSettingsModal(server = {}) {
 }
 
 function closeServerSettingsModal() {
+  hideServerSettingsMemberActionMenu();
   if (!serverSettingsModal) {
     return;
   }
@@ -4198,13 +4659,16 @@ function closeServerSettingsModal() {
   }, 180);
 }
 
-function openServerSettingsModal(section = "profile") {
+async function openServerSettingsModal(section = "profile") {
   if (!chatState.activeServer) {
     showAppToast("Сначала откройте сервер", { type: "error" });
     return;
   }
   buildServerSettingsModal();
   activeServerSettingsSection = section;
+  if (section !== "members") {
+    serverSettingsMembersQuery = "";
+  }
   if (section === "roles") {
     serverSettingsRolesEditorState = createServerSettingsRolesState(chatState.activeServer);
   }
@@ -4213,6 +4677,18 @@ function openServerSettingsModal(section = "profile") {
   requestAnimationFrame(() => {
     serverSettingsModal?.classList.add("visible");
   });
+  try {
+    if (!chatState.activeServer?.members || section === "members" || section === "access" || section === "audit") {
+      const freshServer = await apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}`);
+      chatState.activeServer = freshServer;
+      if (section === "roles") {
+        serverSettingsRolesEditorState = createServerSettingsRolesState(chatState.activeServer);
+      }
+      renderServerSettingsModal(chatState.activeServer);
+    }
+  } catch {
+    // Keep the modal usable with the current in-memory server state.
+  }
 }
 
 function closeServerInviteModal() {
@@ -4592,6 +5068,7 @@ function buildServerSettingsModal() {
   if (serverSettingsModal) {
     return serverSettingsModal;
   }
+  buildServerSettingsMemberActionMenu();
 
   const modal = document.createElement("div");
   modal.className = "server-settings-modal";
@@ -4617,7 +5094,17 @@ function buildServerSettingsModal() {
   serverSettingsModal = modal;
 
   modal.addEventListener("click", (event) => {
+    if (
+      serverSettingsMemberActionMenu
+      && !serverSettingsMemberActionMenu.hidden
+      && !event.target.closest(".server-settings-member-action-menu")
+      && !event.target.closest("[data-server-member-actions]")
+    ) {
+      hideServerSettingsMemberActionMenu();
+    }
+
     if (event.target.closest("[data-server-settings-close='true']")) {
+      hideServerSettingsMemberActionMenu();
       closeServerSettingsModal();
       return;
     }
@@ -4635,6 +5122,67 @@ function buildServerSettingsModal() {
     const openInviteButton = event.target.closest("[data-server-open-invite-modal='true']");
     if (openInviteButton) {
       openServerInviteModal();
+      return;
+    }
+
+    const copyInviteButton = event.target.closest("[data-server-invite-copy-value]");
+    if (copyInviteButton) {
+      const inviteValue = String(copyInviteButton.dataset.serverInviteCopyValue || "").trim();
+      if (inviteValue) {
+        void navigator.clipboard.writeText(inviteValue).then(() => {
+          showAppToast("Ссылка приглашения скопирована");
+        }).catch(() => {
+          showAppToast("Не удалось скопировать ссылку", { type: "error" });
+        });
+      }
+      return;
+    }
+
+    const revokeInviteButton = event.target.closest("[data-server-invite-revoke]");
+    if (revokeInviteButton && chatState.activeServer?.id) {
+      const code = String(revokeInviteButton.dataset.serverInviteRevoke || "").trim();
+      if (!code) {
+        showAppToast("Некорректная ссылка приглашения", { type: "error" });
+        return;
+      }
+      revokeInviteButton.disabled = true;
+      apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/invites/${encodeURIComponent(code)}`, {
+        method: "DELETE"
+      }).then(async () => {
+        await refreshActiveServerInvites(chatState.activeServer.id);
+        renderServerSettingsModal(chatState.activeServer || {});
+        showAppToast("Приглашение отозвано");
+      }).catch((error) => {
+        revokeInviteButton.disabled = false;
+        showAppToast(error.message || "Не удалось отозвать приглашение", { type: "error" });
+      });
+      return;
+    }
+
+    const clearAuditButton = event.target.closest("[data-server-audit-clear='true']");
+    if (clearAuditButton && chatState.activeServer?.id && chatState.activeServer?.is_owner) {
+      openUserRelationConfirmModal({
+        title: "Очистить журнал аудита?",
+        body: "Это удалит все записи журнала аудита на сервере.",
+        confirmText: "Очистить",
+        danger: true
+      }).then((confirmed) => {
+        if (!confirmed) {
+          return;
+        }
+        clearAuditButton.disabled = true;
+        apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}/audit-log`, {
+          method: "DELETE"
+        }).then(async () => {
+          const freshServer = await apiFetch(`/servers/${encodeURIComponent(chatState.activeServer.id)}`);
+          chatState.activeServer = freshServer;
+          renderServerSettingsModal(chatState.activeServer || {});
+          showAppToast("Журнал аудита очищен");
+        }).catch((error) => {
+          clearAuditButton.disabled = false;
+          showAppToast(error.message || "Не удалось очистить журнал аудита", { type: "error" });
+        });
+      });
       return;
     }
 
@@ -4696,6 +5244,28 @@ function buildServerSettingsModal() {
         triggerButton: leaveServerButton,
         origin: "server-settings"
       });
+      return;
+    }
+
+    const memberActionTrigger = event.target.closest("[data-server-member-actions]");
+    if (memberActionTrigger && chatState.activeServer?.id) {
+      const memberId = String(memberActionTrigger.dataset.serverMemberActions || "");
+      const member = (Array.isArray(chatState.activeServer?.members) ? chatState.activeServer.members : []).find(
+        (item) => String(item?.id || "") === memberId
+      );
+      if (!member?.can_manage) {
+        hideServerSettingsMemberActionMenu();
+        return;
+      }
+      if (
+        activeServerSettingsMemberAction?.userId === memberId
+        && serverSettingsMemberActionMenu
+        && !serverSettingsMemberActionMenu.hidden
+      ) {
+        hideServerSettingsMemberActionMenu();
+        return;
+      }
+      showServerSettingsMemberActionMenu(memberActionTrigger, member);
       return;
     }
 
@@ -4955,6 +5525,37 @@ function buildServerSettingsModal() {
     }
   });
 
+  modal.addEventListener("input", (event) => {
+    const membersSearchInput = event.target.closest("#serverSettingsMembersSearch");
+    if (!membersSearchInput || activeServerSettingsSection !== "members") {
+      return;
+    }
+    serverSettingsMembersQuery = String(membersSearchInput.value || "");
+    renderServerSettingsModal(chatState.activeServer || {});
+    const nextInput = serverSettingsModal?.querySelector("#serverSettingsMembersSearch");
+    if (nextInput) {
+      nextInput.focus();
+      nextInput.setSelectionRange(serverSettingsMembersQuery.length, serverSettingsMembersQuery.length);
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (
+      serverSettingsMemberActionMenu
+      && !serverSettingsMemberActionMenu.hidden
+      && !event.target.closest(".server-settings-member-action-menu")
+      && !event.target.closest("[data-server-member-actions]")
+    ) {
+      hideServerSettingsMemberActionMenu();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideServerSettingsMemberActionMenu();
+    }
+  });
+
   return modal;
 }
 
@@ -5153,6 +5754,23 @@ function showServerSidebarActionMenu(anchor, mode, payload = {}) {
 
   requestAnimationFrame(() => {
     menu.classList.add("visible");
+  });
+}
+
+function bindSidebarServerMembersTrigger() {
+  const trigger = document.getElementById("sidebarServerMembersTrigger");
+  if (!trigger || trigger.dataset.serverMembersBound === "true") {
+    return;
+  }
+
+  trigger.dataset.serverMembersBound = "true";
+  trigger.addEventListener("click", (event) => {
+    if (chatState.sidebarView !== "server-detail" || trigger.hidden) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    window.dispatchEvent(new CustomEvent("server-members-panel:open"));
   });
 }
 
@@ -5691,6 +6309,10 @@ function initSidebarProfile() {
     }
     if (event.key === "Escape" && profileLogoutModal && !profileLogoutModal.hidden) {
       closeProfileLogoutModal();
+      return;
+    }
+    if (event.key === "Escape" && sidebar.classList.contains("members-open")) {
+      setSidebarMembersOpen(sidebar, false);
       return;
     }
     if (event.key === "Escape" && sidebar.classList.contains("settings-open")) {
@@ -6391,6 +7013,7 @@ function renderServerSidebar(list, server) {
 
 function renderServerDetail(list, server) {
   renderServerSidebar(list, server);
+  renderSidebarMembersPanel(server);
   if (serverSidebarInlineRenameState) {
     focusServerChannelInlineRenameInput();
   }
@@ -6505,6 +7128,7 @@ function bindSidebarServerNavigation(listId = "chatList") {
   const list = document.getElementById(listId);
   const backButton = document.getElementById("sidebarServerBack");
   bindSidebarServerHeaderMenu();
+  bindSidebarServerMembersTrigger();
 
   if (backButton && backButton.dataset.serverBackBound !== "true") {
     backButton.dataset.serverBackBound = "true";
@@ -7481,6 +8105,7 @@ function setSidebarMode(mode = "chats", server = null) {
   const actionsNode = document.getElementById("sidebarActions");
   const backButton = document.getElementById("sidebarServerBack");
   const brandTrigger = document.getElementById("sidebarServerMenuTrigger");
+  const membersTrigger = document.getElementById("sidebarServerMembersTrigger");
   const normalizedMode = mode === "servers" ? "servers" : mode === "server-detail" ? "server-detail" : "chats";
   const isChatsMode = normalizedMode === "chats";
   const isServerListMode = normalizedMode === "servers";
@@ -7528,6 +8153,16 @@ function setSidebarMode(mode = "chats", server = null) {
   if (backButton) {
     backButton.hidden = !isServerDetailMode;
     backButton.style.display = isServerDetailMode ? "inline-flex" : "none";
+  }
+  if (membersTrigger) {
+    const hasMemberDirectory = Array.isArray(server?.member_directory) && server.member_directory.length > 0;
+    membersTrigger.hidden = !isServerDetailMode || !hasMemberDirectory;
+    if (membersTrigger.hidden && sidebar?.classList.contains("members-open")) {
+      setSidebarMembersOpen(sidebar, false);
+    }
+  }
+  if (!isServerDetailMode && sidebar?.classList.contains("members-open")) {
+    setSidebarMembersOpen(sidebar, false);
   }
 }
 
