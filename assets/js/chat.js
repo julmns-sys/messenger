@@ -305,6 +305,7 @@ function renderMessageAttachments(attachments = []) {
             type="button"
             data-image-modal-src="${escapeHtml(attachment.url)}"
             data-image-modal-index="${escapeHtml(String(index))}"
+            data-image-modal-created-at="${escapeHtml(String(attachment.created_at || ""))}"
             aria-label="Открыть фотографию ${escapeHtml(String(index + 1))}"
           >
             <img src="${escapeHtml(attachment.url)}" alt="Фотография" loading="lazy">
@@ -361,9 +362,10 @@ function renderPhotoMessageBody(message = {}, pending = false) {
   const attachment = getMessageAttachments(message)[0] || getMessageImageData(message) || {};
   const imageUrl = escapeHtml(attachment?.url || "");
   const imageType = escapeHtml(attachment?.mime_type || "image/jpeg");
+  const createdAt = escapeHtml(String(attachment?.created_at || message?.created_at || ""));
   return `
     <div class="photo-message${pending ? " pending" : ""}">
-      <img class="photo-message-image" src="${imageUrl}" alt="Фотография" loading="lazy" ${pending ? "" : `data-image-modal-src="${imageUrl}" data-photo-type="${imageType}"`}>
+      <img class="photo-message-image" src="${imageUrl}" alt="Фотография" loading="lazy" ${pending ? "" : `data-image-modal-src="${imageUrl}" data-image-modal-created-at="${createdAt}" data-photo-type="${imageType}"`}>
       ${pending ? '<span class="photo-message-status">Отправляем фото...</span>' : ""}
     </div>
   `;
@@ -894,6 +896,7 @@ function renderWideMessage(message, currentUserId) {
       </div>
       <div class="wide-message-text">${renderMessageText(message?.text || "")}</div>
       <div class="wide-message-footer">
+        ${renderEditedIndicator(message)}
         <span class="message-time">${escapeHtml(formatTime(message?.created_at || ""))}</span>
       </div>
     </article>
@@ -1288,6 +1291,7 @@ function buildMessageActionMenu() {
   menu.innerHTML = `
     <button type="button" data-action="reply">${renderActionMenuItemContent("/assets/icons/ui/Refund_back.svg", "Ответить")}</button>
     <button type="button" data-action="forward">${renderActionMenuItemContent("/assets/icons/ui/Refund_Forward.svg", "Переслать")}</button>
+    <button type="button" data-action="copy">${renderActionMenuItemContent("/assets/icons/ui/Copy.svg", "Копировать")}</button>
     <button type="button" data-action="select">${renderActionMenuItemContent("/assets/icons/ui/Check_round_fill.svg", "Выбрать")}</button>
     <button type="button" data-action="edit">${renderActionMenuItemContent("/assets/icons/ui/Edit_fill.svg", "Редактировать")}</button>
     <button type="button" data-action="delete-me">${renderActionMenuItemContent("/assets/icons/ui/Trash_line.svg", "Удалить у меня")}</button>
@@ -1295,6 +1299,60 @@ function buildMessageActionMenu() {
   `;
   document.body.appendChild(menu);
   return menu;
+}
+
+function getMessageClipboardText(messageNode) {
+  if (!messageNode) {
+    return "";
+  }
+
+  return [
+    messageNode.querySelector(".message-text")?.textContent,
+    messageNode.querySelector(".wide-message-text")?.textContent,
+    messageNode.querySelector(".message-forwarded-meta")?.textContent
+  ].map((value) => String(value || "").trim()).find(Boolean) || "";
+}
+
+function canCopyMessageContent(messageNode) {
+  if (!messageNode) {
+    return false;
+  }
+
+  const messageType = String(messageNode.dataset.messageType || "text").trim().toLowerCase();
+  if (["voice", "photo", "sticker", "forwarded_dialog", "system"].includes(messageType)) {
+    return false;
+  }
+
+  const hasPlainText = Boolean(
+    messageNode.querySelector(".message-text")?.textContent?.trim()
+    || messageNode.querySelector(".wide-message-text")?.textContent?.trim()
+  );
+  if (!hasPlainText) {
+    return false;
+  }
+
+  if (
+    messageNode.classList.contains("message-has-attachments")
+    || messageNode.classList.contains("message-attachments-only")
+    || messageNode.classList.contains("message-files-only")
+    || messageNode.querySelector(".message-attachments")
+    || messageNode.querySelector(".photo-message")
+    || messageNode.querySelector(".voice-message")
+    || messageNode.querySelector(".sticker-message")
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function canEditMessageContent(messageNode) {
+  if (!messageNode || messageNode.dataset.own !== "true") {
+    return false;
+  }
+
+  const messageType = String(messageNode.dataset.messageType || "text").trim().toLowerCase();
+  return ["text", "wide", "special"].includes(messageType);
 }
 
 function buildSelectionToolbar() {
@@ -1412,6 +1470,30 @@ function buildImageModal() {
           <img class="icon-asset" src="/assets/icons/ui/Arrow_right.svg" alt="">
         </button>
       </div>
+      <div class="image-modal-meta" data-image-modal-meta="true"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  return modal;
+}
+
+function buildThreadInfoMediaBrowserModal() {
+  const modal = document.createElement("div");
+  modal.className = "thread-info-media-browser-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="thread-info-media-browser-backdrop" data-thread-info-media-browser-close="true"></div>
+    <div class="thread-info-media-browser-dialog" role="dialog" aria-modal="true" aria-label="Все фотографии">
+      <div class="thread-info-media-browser-header">
+        <div class="thread-info-media-browser-copy">
+          <h3>Все фото</h3>
+          <p data-thread-info-media-browser-count="true"></p>
+        </div>
+        <button type="button" class="icon-button" data-thread-info-media-browser-close="true" aria-label="Закрыть">
+          <img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt="">
+        </button>
+      </div>
+      <div class="thread-info-media-browser-grid" data-thread-info-media-browser-grid="true"></div>
     </div>
   `;
   document.body.appendChild(modal);
@@ -1618,9 +1700,49 @@ function renderThreadMembersProfilePanel(info = {}) {
   `;
 }
 
+const threadInfoAssetsCache = new Map();
+let activeThreadInfoAssetsKey = "";
+let threadInfoLibrarySection = "";
+let threadInfoFileQuery = "";
+let threadInfoMediaBrowserItems = [];
+
+function hideThreadInfoLibrarySections() {
+  document.getElementById("threadInfoPanel")?.classList.remove("library-open");
+  document.querySelector(".thread-info-shortcuts")?.removeAttribute("hidden");
+  document.getElementById("threadInfoLibrary")?.setAttribute("hidden", "hidden");
+  document.getElementById("threadInfoMediaSection")?.setAttribute("hidden", "hidden");
+  document.getElementById("threadInfoFilesSection")?.setAttribute("hidden", "hidden");
+  threadInfoLibrarySection = "";
+}
+
+function applyThreadInfoAssetCounts(mediaItems = [], fileItems = []) {
+  const mediaCountNode = document.getElementById("threadInfoMediaCount");
+  const filesCountNode = document.getElementById("threadInfoFilesCount");
+  const mediaSectionCountNode = document.getElementById("threadInfoMediaSectionCount");
+  const filesSectionCountNode = document.getElementById("threadInfoFilesSectionCount");
+  const mediaViewAllButton = document.getElementById("threadInfoMediaViewAll");
+
+  if (mediaCountNode) {
+    mediaCountNode.textContent = mediaItems.length ? `${mediaItems.length} фото` : "Нет медиа";
+  }
+  if (filesCountNode) {
+    filesCountNode.textContent = fileItems.length ? `${fileItems.length} файлов` : "Нет файлов";
+  }
+  if (mediaSectionCountNode) {
+    mediaSectionCountNode.textContent = mediaItems.length ? `${mediaItems.length}` : "";
+  }
+  if (filesSectionCountNode) {
+    filesSectionCountNode.textContent = fileItems.length ? `${fileItems.length}` : "";
+  }
+  if (mediaViewAllButton) {
+    mediaViewAllButton.hidden = !mediaItems.length;
+  }
+}
+
 let threadInfoMembersQuery = "";
 
 function fillThreadInfoPanel(info, chatType) {
+  const threadInfoPanelNode = document.getElementById("threadInfoPanel");
   const profilePanelNode = document.getElementById("threadInfoProfilePanel");
   const chatCardNode = document.getElementById("threadInfoChatCard");
   const chatInfoContentNode = document.getElementById("threadInfoChatInfoContent");
@@ -1649,6 +1771,10 @@ function fillThreadInfoPanel(info, chatType) {
   const isServerMembersView = Boolean(info?._show_server_members);
   const title = getUserProfileDisplayName(info) || info?.title || info?.username || "Чат";
   const customTag = info?.id != null ? getChatTag(info.id, threadInfoType) : null;
+  if (threadInfoPanelNode) {
+    threadInfoPanelNode.classList.toggle("members-only", isServerMembersView);
+  }
+
   profilePanelNode.innerHTML = isServerMembersView
     ? renderThreadMembersProfilePanel(info)
     : threadInfoType === "group"
@@ -1663,6 +1789,9 @@ function fillThreadInfoPanel(info, chatType) {
   if (chatInfoContentNode) {
     chatInfoContentNode.hidden = isServerMembersView;
   }
+  if (profilePanelNode) {
+    profilePanelNode.hidden = isServerMembersView;
+  }
   startedAtNode.textContent = formatThreadInfoDate(info?.started_at);
   messagesCountNode.textContent = formatThreadInfoCount(info?.messages_count);
 
@@ -1676,6 +1805,15 @@ function fillThreadInfoPanel(info, chatType) {
     `;
   } else {
     tagNode.innerHTML = "";
+  }
+
+  if (isEmbeddedUserProfile || isServerMembersView) {
+    hideThreadInfoLibrarySections();
+  } else {
+    const cachedAssets = activeThreadInfoAssetsKey
+      ? threadInfoAssetsCache.get(activeThreadInfoAssetsKey)
+      : null;
+    applyThreadInfoAssetCounts(cachedAssets?.mediaItems || [], cachedAssets?.fileItems || []);
   }
 
   if (inviteFactNode && inviteLinkNode && inviteCopyNode && inviteRegenerateNode && inviteStatusNode) {
@@ -2010,6 +2148,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const photoMessageButton = document.getElementById("photoMessageButton");
   const photoMessageInput = document.getElementById("photoMessageInput");
   const composerAttachmentsNode = document.getElementById("composerAttachments");
+  const threadInfoMediaShortcut = document.getElementById("threadInfoMediaShortcut");
+  const threadInfoFilesShortcut = document.getElementById("threadInfoFilesShortcut");
+  const threadInfoMediaViewAll = document.getElementById("threadInfoMediaViewAll");
+  const threadInfoFilesSearchInput = document.getElementById("threadInfoFilesSearchInput");
+  const threadInfoMediaList = document.getElementById("threadInfoMediaList");
   const stickerPickerButton = document.getElementById("stickerPickerButton");
   const stickerPickerPopup = document.getElementById("stickerPickerPopup");
   const stickerPackTabs = document.getElementById("stickerPackTabs");
@@ -2025,6 +2168,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const forwardModal = buildForwardModal();
   const deleteUndoToast = buildDeleteUndoToast();
   const imageModal = buildImageModal();
+  const threadInfoMediaBrowserModal = buildThreadInfoMediaBrowserModal();
   const selectionToolbar = buildSelectionToolbar();
   const threadMemberActionMenu = buildThreadMemberActionMenu();
   const threadBlockNotice = (() => {
@@ -2063,6 +2207,242 @@ document.addEventListener("DOMContentLoaded", async () => {
   let threadMemberTouchTimer = null;
   let activeThreadMemberItem = null;
   let stickerLibraryState = null;
+  function getThreadInfoAssetsCacheKey() {
+    if (!chatId) {
+      return "";
+    }
+    return `${chatType}:${chatId}`;
+  }
+
+  function collectThreadInfoAssetItems(messages = []) {
+    const mediaItems = [];
+    const fileItems = [];
+    const seenKeys = new Set();
+
+    messages.forEach((message) => {
+      const messageId = Number(message?.id || 0);
+      const createdAt = String(message?.created_at || "");
+      const normalizedAttachments = getMessageAttachments(message);
+
+      if ((message?.message_type || "text") === "photo" && message?.image?.url) {
+        const key = `photo:${messageId}:${message.image.url}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          mediaItems.push({
+            key,
+            url: String(message.image.url || ""),
+            title: "Фотография",
+            createdAt,
+            messageId
+          });
+        }
+      }
+
+      normalizedAttachments.forEach((attachment, index) => {
+        const attachmentKey = `${messageId}:${attachment.id ?? index}:${attachment.url}`;
+        if (!attachment.url || seenKeys.has(attachmentKey)) {
+          return;
+        }
+        seenKeys.add(attachmentKey);
+
+        if (isImageAttachment(attachment)) {
+          mediaItems.push({
+            key: attachmentKey,
+            url: attachment.url,
+            title: attachment.file_name || "Изображение",
+            createdAt: attachment.created_at || createdAt,
+            messageId
+          });
+          return;
+        }
+
+        fileItems.push({
+          key: attachmentKey,
+          url: attachment.url,
+          title: attachment.file_name || "Файл",
+          mimeType: attachment.mime_type || "",
+          size: Number(attachment.size || 0),
+          createdAt: attachment.created_at || createdAt,
+          messageId
+        });
+      });
+    });
+
+    mediaItems.sort((left, right) => Number(right.messageId || 0) - Number(left.messageId || 0));
+    fileItems.sort((left, right) => Number(right.messageId || 0) - Number(left.messageId || 0));
+    return { mediaItems, fileItems };
+  }
+
+  async function fetchThreadInfoAssetItems(force = false) {
+    const cacheKey = getThreadInfoAssetsCacheKey();
+    if (!cacheKey) {
+      return { mediaItems: [], fileItems: [] };
+    }
+    if (!force && threadInfoAssetsCache.has(cacheKey)) {
+      return threadInfoAssetsCache.get(cacheKey);
+    }
+
+    let beforeMessageId = null;
+    let hasMoreMessages = true;
+    const allMessages = [];
+
+    while (hasMoreMessages) {
+      const page = await fetchMessagesPage(beforeMessageId);
+      const pageMessages = Array.isArray(page?.messages) ? page.messages : [];
+      if (!pageMessages.length) {
+        break;
+      }
+      allMessages.push(...pageMessages);
+      hasMoreMessages = Boolean(page?.has_more_messages);
+      beforeMessageId = pageMessages[0]?.id ?? null;
+    }
+
+    const result = collectThreadInfoAssetItems(allMessages);
+    threadInfoAssetsCache.set(cacheKey, result);
+    return result;
+  }
+
+  async function preloadThreadInfoAssetCounts() {
+    const cacheKey = getThreadInfoAssetsCacheKey();
+    if (!cacheKey || threadInfoAssetsCache.has(cacheKey)) {
+      return;
+    }
+
+    try {
+      const { mediaItems, fileItems } = await fetchThreadInfoAssetItems();
+      if (activeThreadInfoAssetsKey !== cacheKey) {
+        return;
+      }
+      applyThreadInfoAssetCounts(mediaItems, fileItems);
+    } catch {
+      // Ignore asset index preload failures; the explicit section open can retry.
+    }
+  }
+
+  function renderThreadInfoMediaItems(items = []) {
+    if (!items.length) {
+      return '<div class="thread-info-library-empty">Изображений пока нет</div>';
+    }
+
+    return items.map((item, index) => `
+      <button
+        class="thread-info-media-item"
+        type="button"
+        data-thread-info-media-index="${escapeHtml(String(index))}"
+        aria-label="${escapeHtml(item.title || "Изображение")}"
+      >
+        <img class="thread-info-media-thumb" src="${escapeHtml(item.url)}" alt="${escapeHtml(item.title || "Медиа")}" loading="lazy">
+      </button>
+    `).join("");
+  }
+
+  function renderThreadInfoFileItems(items = []) {
+    if (!items.length) {
+      return '<div class="thread-info-library-empty">Файлов пока нет</div>';
+    }
+
+    return items.map((item) => `
+      <a class="thread-info-file-item" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" download="${escapeHtml(item.title || "")}">
+        <span class="thread-info-file-icon">FILE</span>
+        <span class="thread-info-file-copy">
+          <span class="thread-info-file-title">${escapeHtml(item.title || "Файл")}</span>
+          <span class="thread-info-file-meta">${escapeHtml([formatAttachmentSize(item.size), item.mimeType].filter(Boolean).join(" · ") || "Файл")}</span>
+        </span>
+      </a>
+    `).join("");
+  }
+
+  function closeThreadInfoMediaBrowserModal() {
+    if (!threadInfoMediaBrowserModal || threadInfoMediaBrowserModal.hidden) {
+      return;
+    }
+    threadInfoMediaBrowserModal.hidden = true;
+    threadInfoMediaBrowserItems = [];
+    document.body.classList.remove("modal-open");
+  }
+
+  function openThreadInfoMediaBrowserModal(items = []) {
+    const gridNode = threadInfoMediaBrowserModal?.querySelector('[data-thread-info-media-browser-grid="true"]');
+    const countNode = threadInfoMediaBrowserModal?.querySelector('[data-thread-info-media-browser-count="true"]');
+    if (!threadInfoMediaBrowserModal || !gridNode || !countNode) {
+      return;
+    }
+
+    threadInfoMediaBrowserItems = Array.isArray(items)
+      ? items.filter((item) => String(item?.url || item?.src || "").trim())
+      : [];
+    if (!threadInfoMediaBrowserItems.length) {
+      return;
+    }
+
+    countNode.textContent = `${threadInfoMediaBrowserItems.length} фото`;
+    gridNode.innerHTML = threadInfoMediaBrowserItems.map((item, index) => `
+      <button
+        class="thread-info-media-browser-item"
+        type="button"
+        data-thread-info-media-browser-index="${escapeHtml(String(index))}"
+        aria-label="Открыть фото ${escapeHtml(String(index + 1))}"
+      >
+        <img class="thread-info-media-browser-thumb" src="${escapeHtml(item.url)}" alt="${escapeHtml(item.title || "Фото")}" loading="lazy">
+      </button>
+    `).join("");
+
+    threadInfoMediaBrowserModal.hidden = false;
+    document.body.classList.add("modal-open");
+  }
+
+  async function openThreadInfoLibrarySection(section, options = {}) {
+    const panelNode = document.getElementById("threadInfoPanel");
+    const shortcutsNode = document.querySelector(".thread-info-shortcuts");
+    const libraryNode = document.getElementById("threadInfoLibrary");
+    const mediaSectionNode = document.getElementById("threadInfoMediaSection");
+    const filesSectionNode = document.getElementById("threadInfoFilesSection");
+    const mediaListNode = document.getElementById("threadInfoMediaList");
+    const filesListNode = document.getElementById("threadInfoFilesList");
+    if (!panelNode || !shortcutsNode || !libraryNode || !mediaSectionNode || !filesSectionNode || !mediaListNode || !filesListNode) {
+      return;
+    }
+
+    const nextSection = section === "files" ? "files" : "media";
+    if (threadInfoLibrarySection === nextSection && !libraryNode.hidden && !options.keepOpen) {
+      hideThreadInfoLibrarySections();
+      return;
+    }
+
+    const { mediaItems, fileItems } = await fetchThreadInfoAssetItems();
+    applyThreadInfoAssetCounts(mediaItems, fileItems);
+
+    panelNode.classList.add("library-open");
+    shortcutsNode.setAttribute("hidden", "hidden");
+    libraryNode.hidden = false;
+    mediaSectionNode.hidden = nextSection !== "media";
+    filesSectionNode.hidden = nextSection !== "files";
+    threadInfoLibrarySection = nextSection;
+
+    if (nextSection === "media") {
+      if (threadInfoMediaViewAll) {
+        threadInfoMediaViewAll.hidden = !mediaItems.length;
+      }
+      mediaListNode.innerHTML = renderThreadInfoMediaItems(mediaItems);
+      return;
+    }
+
+    const filteredFiles = fileItems.filter((item) => {
+      const query = String(threadInfoFileQuery || "").trim().toLowerCase();
+      if (!query) {
+        return true;
+      }
+      return [item.title, item.mimeType]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+    filesListNode.innerHTML = renderThreadInfoFileItems(filteredFiles);
+    if (threadInfoFilesSearchInput && threadInfoFilesSearchInput.value !== threadInfoFileQuery) {
+      threadInfoFilesSearchInput.value = threadInfoFileQuery;
+    }
+  }
   let activeStickerPackId = "";
 
   function getComposerPlaceholder() {
@@ -2648,6 +3028,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function syncImageModal() {
     const trackNode = imageModal?.querySelector('[data-image-modal-track="true"]');
     const counterNode = imageModal?.querySelector('[data-image-modal-counter="true"]');
+    const metaNode = imageModal?.querySelector('[data-image-modal-meta="true"]');
     const prevButton = imageModal?.querySelector('[data-image-modal-nav="prev"]');
     const nextButton = imageModal?.querySelector('[data-image-modal-nav="next"]');
     if (!imageModal || !trackNode || !activeImageGallery.length) {
@@ -2655,11 +3036,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     const safeIndex = Math.min(Math.max(activeImageIndex, 0), activeImageGallery.length - 1);
     activeImageIndex = safeIndex;
-    if (trackNode.dataset.gallerySignature !== activeImageGallery.join("|")) {
-      trackNode.dataset.gallerySignature = activeImageGallery.join("|");
-      trackNode.innerHTML = activeImageGallery.map((src, index) => `
+    const gallerySignature = activeImageGallery.map((item) => item.src).join("|");
+    if (trackNode.dataset.gallerySignature !== gallerySignature) {
+      trackNode.dataset.gallerySignature = gallerySignature;
+      trackNode.innerHTML = activeImageGallery.map((item, index) => `
         <div class="image-modal-slide" data-image-modal-slide="${escapeHtml(String(index))}">
-          <img class="image-modal-image" src="${escapeHtml(src)}" alt="Просмотр изображения ${escapeHtml(String(index + 1))}">
+          <img class="image-modal-image" src="${escapeHtml(item.src)}" alt="Просмотр изображения ${escapeHtml(String(index + 1))}">
         </div>
       `).join("");
     }
@@ -2668,6 +3050,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     trackNode.style.transform = `translateX(-${safeIndex * 100}%)`;
     if (counterNode) {
       counterNode.textContent = `${safeIndex + 1} / ${activeImageGallery.length}`;
+    }
+    if (metaNode) {
+      const createdAt = String(activeImageGallery[safeIndex]?.createdAt || "").trim();
+      metaNode.textContent = createdAt ? `Отправлено ${formatDate(createdAt)}, ${formatTime(createdAt)}` : "";
+      metaNode.hidden = !createdAt;
     }
     if (prevButton) {
       prevButton.disabled = activeImageGallery.length <= 1;
@@ -2718,12 +3105,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     syncImageModal();
   }
 
+  function normalizeImageModalGalleryItem(item = {}) {
+    if (typeof item === "string") {
+      return { src: item, createdAt: "" };
+    }
+    return {
+      src: String(item?.src || item?.url || "").trim(),
+      createdAt: String(item?.createdAt || item?.created_at || "").trim()
+    };
+  }
+
   function openImageModal(src = "", gallery = [], startIndex = 0) {
     if (!imageModal || !src) {
       return;
     }
-    activeImageGallery = Array.isArray(gallery) && gallery.length ? gallery : [src];
-    const fallbackIndex = activeImageGallery.indexOf(src);
+    activeImageGallery = (Array.isArray(gallery) && gallery.length ? gallery : [src])
+      .map((item) => normalizeImageModalGalleryItem(item))
+      .filter((item) => item.src);
+    const fallbackIndex = activeImageGallery.findIndex((item) => item.src === src);
     activeImageIndex = startIndex >= 0 ? startIndex : (fallbackIndex >= 0 ? fallbackIndex : 0);
     syncImageModal();
     imageModal.hidden = false;
@@ -2876,7 +3275,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+    const nextHeight = Math.min(input.scrollHeight, COMPOSER_MAX_HEIGHT);
+    input.style.height = `${nextHeight}px`;
+
+    const computedStyle = window.getComputedStyle(input);
+    const lineHeight = Number.parseFloat(computedStyle.lineHeight || "0") || 22;
+    const paddingTop = Number.parseFloat(computedStyle.paddingTop || "0") || 0;
+    const paddingBottom = Number.parseFloat(computedStyle.paddingBottom || "0") || 0;
+    const singleLineHeight = lineHeight + paddingTop + paddingBottom + 2;
+    composer.classList.toggle("is-multiline", nextHeight > singleLineHeight);
   }
 
   function updateComposerActionButton() {
@@ -4916,6 +5323,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   function setEditingMessageState(nextState) {
+    const previousState = editingMessageState;
+    if (nextState) {
+      const targetComposerMode = nextState.composerMode === "wide" ? "wide" : "normal";
+      if (composerMode !== targetComposerMode) {
+        setComposerWideMode(targetComposerMode);
+      }
+    }
+
     editingMessageState = nextState;
     if (nextState) {
       setReplyMessageState(null);
@@ -4929,6 +5344,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       input.placeholder = "Редактирование сообщения";
     } else {
       input.placeholder = getComposerPlaceholder();
+      const restoreComposerMode = previousState?.restoreComposerMode;
+      if (restoreComposerMode && composerMode !== restoreComposerMode) {
+        setComposerWideMode(restoreComposerMode);
+      }
     }
 
     resizeComposerInput();
@@ -5432,16 +5851,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     activeMessageMenuTarget = targetNode;
-    const isOwnMessage = targetNode.dataset.own === "true";
-    const isTextMessage = (targetNode.dataset.messageType || "text") === "text";
+    const canEditMessage = canEditMessageContent(targetNode);
     const canDeleteAll = canDeleteMessageForAll(targetNode);
+    const canCopyMessage = canCopyMessageContent(targetNode);
 
-    messageActionMenu.querySelector('[data-action="edit"]').hidden = !isOwnMessage || !isTextMessage;
+    messageActionMenu.querySelector('[data-action="copy"]').toggleAttribute("hidden", !canCopyMessage);
+    messageActionMenu.querySelector('[data-action="edit"]').toggleAttribute("hidden", !canEditMessage);
     messageActionMenu.querySelector('[data-action="delete-all"]').hidden = !canDeleteAll;
     messageActionMenu.hidden = false;
 
     const menuWidth = 180;
-    const menuHeight = canDeleteAll ? (isTextMessage && isOwnMessage ? 244 : 204) : (isTextMessage && isOwnMessage ? 204 : 184);
+    const visibleActions = messageActionMenu.querySelectorAll('button:not([hidden])').length;
+    const menuHeight = (visibleActions * 40) + 4;
     const left = Math.min(clientX, window.innerWidth - menuWidth - 12);
     const top = Math.min(clientY, window.innerHeight - menuHeight - 12);
     messageActionMenu.style.left = `${Math.max(12, left)}px`;
@@ -5540,6 +5961,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function loadThread(options = {}) {
     const path = chatType === "group" ? `/groups/${chatId}` : `/chats/${chatId}`;
+    closeThreadInfoMediaBrowserModal();
+    activeThreadInfoAssetsKey = getThreadInfoAssetsCacheKey();
+    if (activeThreadInfoAssetsKey) {
+      threadInfoAssetsCache.delete(activeThreadInfoAssetsKey);
+    }
+    hideThreadInfoLibrarySections();
+    threadInfoFileQuery = "";
     const data = await apiFetch(`${path}?limit=${PAGE_SIZE}`);
     const currentChat = Array.isArray(chatState.allChats)
       ? chatState.allChats.find((chat) => String(chat.id) === String(chatId) && (chat.type || "direct") === chatType)
@@ -5563,6 +5991,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderMessages(messagesNode, nextMessages, currentUser.id, chatType);
     updatePaginationState(nextMessages, data.has_more_messages);
     isShowingSearchContext = false;
+    void preloadThreadInfoAssetCounts();
     if (!options.preserveScroll) {
       scrollMessagesToBottom(messagesNode);
     }
@@ -6079,6 +6508,55 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
+  threadInfoMediaShortcut?.addEventListener("click", () => {
+    void openThreadInfoLibrarySection("media");
+  });
+
+  threadInfoFilesShortcut?.addEventListener("click", () => {
+    void openThreadInfoLibrarySection("files");
+  });
+
+  threadInfoMediaViewAll?.addEventListener("click", async () => {
+    const { mediaItems } = await fetchThreadInfoAssetItems();
+    openThreadInfoMediaBrowserModal(mediaItems);
+  });
+
+  threadInfoFilesSearchInput?.addEventListener("input", () => {
+    threadInfoFileQuery = String(threadInfoFilesSearchInput.value || "");
+    if (threadInfoLibrarySection === "files") {
+      void openThreadInfoLibrarySection("files", { keepOpen: true });
+    }
+  });
+
+  threadInfoMediaList?.addEventListener("click", async (event) => {
+    const trigger = event.target.closest("[data-thread-info-media-index]");
+    const mediaIndex = Number(trigger?.dataset.threadInfoMediaIndex || "0");
+    if (!Number.isFinite(mediaIndex)) {
+      return;
+    }
+
+    const { mediaItems } = await fetchThreadInfoAssetItems();
+    if (!mediaItems.length || !mediaItems[mediaIndex]) {
+      return;
+    }
+    openImageModal(
+      mediaItems[mediaIndex].url,
+      mediaItems.map((item) => ({
+        src: item.url,
+        createdAt: item.createdAt
+      })),
+      mediaIndex
+    );
+  });
+
+  document.getElementById("threadInfoLibrary")?.addEventListener("click", (event) => {
+    const closeButton = event.target.closest("[data-thread-info-library-close]");
+    if (!closeButton) {
+      return;
+    }
+    hideThreadInfoLibrarySections();
+  });
+
   window.addEventListener("server-members-panel:open", () => {
     openServerMembersPanel();
   });
@@ -6438,8 +6916,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (imageTrigger) {
       const attachmentsNode = imageTrigger.closest(".message-attachments");
       const gallery = attachmentsNode
-        ? [...attachmentsNode.querySelectorAll("[data-image-modal-src]")].map((node) => String(node.dataset.imageModalSrc || "").trim()).filter(Boolean)
-        : [String(imageTrigger.dataset.imageModalSrc || "").trim()].filter(Boolean);
+        ? [...attachmentsNode.querySelectorAll("[data-image-modal-src]")].map((node) => ({
+          src: String(node.dataset.imageModalSrc || "").trim(),
+          createdAt: String(node.dataset.imageModalCreatedAt || "").trim()
+        })).filter((item) => item.src)
+        : [{
+          src: String(imageTrigger.dataset.imageModalSrc || "").trim(),
+          createdAt: String(imageTrigger.dataset.imageModalCreatedAt || "").trim()
+        }].filter((item) => item.src);
       const startIndex = Number(imageTrigger.dataset.imageModalIndex || "0");
       openImageModal(String(imageTrigger.dataset.imageModalSrc || "").trim(), gallery, startIndex);
       return;
@@ -6498,6 +6982,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (navButton) {
       stepImageModal(navButton.dataset.imageModalNav === "prev" ? -1 : 1);
     }
+  });
+
+  threadInfoMediaBrowserModal?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-thread-info-media-browser-close]")) {
+      closeThreadInfoMediaBrowserModal();
+      return;
+    }
+
+    const mediaTrigger = event.target.closest("[data-thread-info-media-browser-index]");
+    const mediaIndex = Number(mediaTrigger?.dataset.threadInfoMediaBrowserIndex || "-1");
+    if (!Number.isInteger(mediaIndex) || mediaIndex < 0 || !threadInfoMediaBrowserItems[mediaIndex]) {
+      return;
+    }
+
+    const gallery = threadInfoMediaBrowserItems.map((item) => ({
+      src: item.url,
+      createdAt: item.createdAt
+    }));
+    closeThreadInfoMediaBrowserModal();
+    openImageModal(threadInfoMediaBrowserItems[mediaIndex].url, gallery, mediaIndex);
   });
 
   imageModal?.addEventListener("touchstart", (event) => {
@@ -6767,16 +7271,36 @@ document.addEventListener("DOMContentLoaded", async () => {
           openForwardModal(forwardState);
         }
         return;
+      } else if (action === "copy") {
+        const textToCopy = getMessageClipboardText(targetNode);
+        if (!textToCopy) {
+          status.textContent = "В сообщении нет текста для копирования";
+          status.className = "status error";
+          return;
+        }
+        if (!navigator.clipboard?.writeText) {
+          status.textContent = "Буфер обмена недоступен в этом браузере";
+          status.className = "status error";
+          return;
+        }
+        await navigator.clipboard.writeText(textToCopy);
+        showAppToast("Сообщение скопировано");
+        return;
       } else if (action === "select") {
         enterSelectionMode(targetNode);
         return;
       } else if (action === "edit") {
-        if (!isOwnMessage) return;
-        const currentText = targetNode?.querySelector(".message-text")?.textContent || "";
+        if (!canEditMessageContent(targetNode)) return;
+        const messageType = String(targetNode?.dataset.messageType || "text").trim().toLowerCase();
+        const currentText = targetNode?.querySelector(".message-text")?.textContent
+          || targetNode?.querySelector(".wide-message-text")?.textContent
+          || "";
         setEditingMessageState({
           messageId,
           text: currentText,
-          basePath
+          basePath,
+          composerMode: ["wide", "special"].includes(messageType) ? "wide" : "normal",
+          restoreComposerMode: composerMode
         });
         return;
       } else if (action === "delete-me") {
@@ -6854,6 +7378,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       hideComposerSendMenu();
       if (!forwardModal.hidden) {
         closeForwardModal();
+        return;
+      }
+      if (threadInfoMediaBrowserModal && !threadInfoMediaBrowserModal.hidden) {
+        closeThreadInfoMediaBrowserModal();
         return;
       }
       if (!threadMemberAddModal?.hidden) {

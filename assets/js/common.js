@@ -504,7 +504,7 @@ function normalizeAppSettings(rawSettings = {}) {
     textSize: clampSetting(rawSettings.textSize, 14, 20, defaultAppSettings.textSize),
     surfaceMode: rawSettings.surfaceMode === "compact" ? "compact" : "glass",
     animations: rawSettings.animations !== false,
-    chatWallpaper: ["none", "grid", "aurora", "paper"].includes(rawSettings.chatWallpaper) ? rawSettings.chatWallpaper : "none",
+    chatWallpaper: ["none", "grid", "aurora", "paper", "dark-wallpaper", "light-background", "cats", "cats-dark"].includes(rawSettings.chatWallpaper) ? rawSettings.chatWallpaper : "none",
     transparency: clampSetting(rawSettings.transparency, 35, 92, defaultAppSettings.transparency),
     uiRadius: clampSetting(rawSettings.uiRadius, 12, 34, defaultAppSettings.uiRadius),
     enterToSend: rawSettings.enterToSend !== false,

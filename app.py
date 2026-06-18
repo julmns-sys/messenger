@@ -10029,9 +10029,9 @@ def update_chat_message(chat_id, message_id):
         conn.close()
         return jsonify({"message": "Сообщение не найдено"}), 404
 
-    if (message["message_type"] or "text") != "text":
+    if (message["message_type"] or "text") not in {"text", "wide", "special"}:
         conn.close()
-        return jsonify({"message": "Редактировать можно только текстовые сообщения"}), 403
+        return jsonify({"message": "Редактировать можно только текстовые и суперсообщения"}), 403
 
     if message["sender_id"] != user_id:
         conn.close()
@@ -10094,7 +10094,7 @@ def delete_chat_message(chat_id, message_id):
         return jsonify({"message": "Сообщение не найдено"}), 404
 
     if scope == "all":
-        if not can_delete_group_message_for_all(conn, group_id, user_id, message):
+        if message["sender_id"] != user_id:
             conn.close()
             return jsonify({"message": "У вас нет права удалять это сообщение у всех"}), 403
 
@@ -10160,7 +10160,7 @@ def bulk_delete_chat_messages(chat_id):
         return jsonify({"message": "Некоторые сообщения не найдены"}), 404
 
     if scope == "all":
-        foreign_ids = [row["id"] for row in message_rows if not can_delete_group_message_for_all(conn, group_id, user_id, row)]
+        foreign_ids = [row["id"] for row in message_rows if row["sender_id"] != user_id]
         if foreign_ids:
             conn.close()
             return jsonify({"message": "У вас нет права удалять некоторые сообщения у всех"}), 403
@@ -11617,9 +11617,9 @@ def update_group_message(group_id, message_id):
         conn.close()
         return jsonify({"message": "Сообщение не найдено"}), 404
 
-    if (message["message_type"] or "text") != "text":
+    if (message["message_type"] or "text") not in {"text", "wide", "special"}:
         conn.close()
-        return jsonify({"message": "Редактировать можно только текстовые сообщения"}), 403
+        return jsonify({"message": "Редактировать можно только текстовые и суперсообщения"}), 403
 
     if message["sender_id"] != user_id:
         conn.close()

@@ -63,7 +63,7 @@
             </div>
           </div>
           <div class="thread-info-shortcuts" aria-label="Разделы чата">
-            <button class="thread-info-shortcut" type="button">
+            <button class="thread-info-shortcut" id="threadInfoMediaShortcut" data-thread-info-section="media" type="button">
               <span class="thread-info-shortcut-icon" aria-hidden="true">
                 <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Img_box_fill.svg" alt="">
               </span>
@@ -73,7 +73,7 @@
               </span>
               <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
             </button>
-            <button class="thread-info-shortcut" type="button">
+            <button class="thread-info-shortcut" id="threadInfoFilesShortcut" data-thread-info-section="files" type="button">
               <span class="thread-info-shortcut-icon" aria-hidden="true">
                 <img class="menu-item-icon icon-asset" src="/assets/icons/ui/Folder.svg" alt="">
               </span>
@@ -83,6 +83,36 @@
               </span>
               <img class="thread-info-shortcut-chevron icon-asset" src="/assets/icons/ui/Expand_right.svg" alt="">
             </button>
+          </div>
+          <div class="thread-info-library" id="threadInfoLibrary" hidden>
+            <section class="thread-info-library-section" id="threadInfoMediaSection" hidden>
+              <div class="thread-info-library-head">
+                <div class="thread-info-library-heading">
+                  <h4>Медиа</h4>
+                  <span class="thread-info-library-count" id="threadInfoMediaSectionCount"></span>
+                </div>
+                <div class="thread-info-library-actions">
+                  <button class="button button-secondary thread-info-library-view-all" id="threadInfoMediaViewAll" type="button" hidden>Смотреть все</button>
+                  <button class="thread-info-library-close" type="button" data-thread-info-library-close="true" aria-label="Закрыть раздел">
+                    <img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt="">
+                  </button>
+                </div>
+              </div>
+              <div class="thread-info-media-list" id="threadInfoMediaList"></div>
+            </section>
+            <section class="thread-info-library-section" id="threadInfoFilesSection" hidden>
+              <div class="thread-info-library-head">
+                <div class="thread-info-library-heading">
+                  <h4>Файлы</h4>
+                  <span class="thread-info-library-count" id="threadInfoFilesSectionCount"></span>
+                </div>
+                <button class="thread-info-library-close" type="button" data-thread-info-library-close="true" aria-label="Закрыть раздел">
+                  <img class="icon-asset" src="/assets/icons/ui/Close_round.svg" alt="">
+                </button>
+              </div>
+              <input class="search-input thread-info-files-search-input" id="threadInfoFilesSearchInput" type="search" placeholder="Поиск по файлам">
+              <div class="thread-info-files-list" id="threadInfoFilesList"></div>
+            </section>
           </div>
           {% if is_group_chat %}
             <div class="thread-info-fact thread-info-invite-fact" id="threadInfoInviteFact" hidden>
